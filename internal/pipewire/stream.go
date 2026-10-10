@@ -28,6 +28,9 @@ extern void stream_process_trampoline(void *data);
 extern void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
                                 struct pw_stream_events *ev, uintptr_t handle);
 
+extern struct spa_pod **make_connect_params(int rate, int channels,
+                                            struct spa_pod **storage);
+
 
 extern struct pw_properties *make_stream_props(const char *node_name,
                                               const char *target,
@@ -111,6 +114,10 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	s := &Stream{ctx: ctx, ring: ring, cfg: cfg}
 	s.handle = cgo.NewHandle(s)
 
+	// Every stream operation must hold the loop lock; see Context.lock.
+	ctx.lock()
+	defer ctx.unlock()
+
 	props := buildStreamProps(cfg)
 	defer C.pw_properties_free(props)
 
@@ -129,6 +136,7 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 		process:       (*[0]byte)(unsafe.Pointer(C.stream_process_trampoline)),
 	}
 	C.add_stream_listener(s.stream, &s.hook, &events, C.uintptr_t(s.handle))
+	s.negotiated.Store(int64(cfg.SampleRate))
 	return s, nil
 }
 
@@ -157,8 +165,17 @@ func (s *Stream) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return nil // idempotent
 	}
+	// A stream must declare the formats it accepts or the graph has nothing
+	// to negotiate against and connect fails on a half-built object.
+	storage := make([]*C.struct_spa_pod, 1)
+	params := C.make_connect_params(C.int(s.cfg.SampleRate), C.int(s.cfg.Channels),
+		(**C.struct_spa_pod)(unsafe.Pointer(&storage[0])))
+
 	// PW_DIRECTION_OUTPUT: a playback stream PRODUCES audio into the graph.
-	if rc := C.pw_stream_connect(s.stream, C.PW_DIRECTION_OUTPUT, C.PW_ID_ANY, 0, nil, 0); rc != 0 {
+	s.ctx.lock()
+	defer s.ctx.unlock()
+	if rc := C.pw_stream_connect(s.stream, C.PW_DIRECTION_OUTPUT, C.PW_ID_ANY,
+		0, (**C.struct_spa_pod)(unsafe.Pointer(params)), 1); rc != 0 {
 		return fmt.Errorf("pipewire: pw_stream_connect failed with code %d", int(rc))
 	}
 	s.stopped.Store(false)
@@ -173,6 +190,8 @@ func (s *Stream) Stop() error {
 	if !s.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
+	s.ctx.lock()
+	defer s.ctx.unlock()
 	C.pw_stream_disconnect(s.stream)
 	return nil
 }
@@ -183,6 +202,8 @@ func (s *Stream) Destroy() error {
 	if s == nil {
 		return nil
 	}
+	s.ctx.lock()
+	defer s.ctx.unlock()
 	if s.stream != nil {
 		C.pw_stream_destroy(s.stream)
 		s.stream = nil

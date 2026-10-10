@@ -37,30 +37,34 @@ import (
 // exactly once from our own side is cheaper to reason about than being right
 // about theirs.
 var pkgInit struct {
-	once sync.Once
 	mu   sync.Mutex
 	refs int
 }
 
-// ensureInit calls pw_init once for the process.
-func ensureInit() {
-	pkgInit.once.Do(func() {
-		C.pw_init(nil, nil)
-	})
-}
-
+// acquirePkg calls pw_init on the first reference and returns.
+//
+// pw_init and pw_deinit are paired by REFERENCE COUNT, not by a sync.Once.
+// An earlier version initialised once and deinitialised whenever the count
+// reached zero, which left the library deinitialised but never
+// reinitialised: every call after the first context closed got a dead
+// libpipewire, and pw_thread_loop_new began returning NULL. That only
+// surfaced once a daemon was actually reachable.
 func acquirePkg() {
 	pkgInit.mu.Lock()
+	defer pkgInit.mu.Unlock()
+	if pkgInit.refs == 0 {
+		C.pw_init(nil, nil)
+	}
 	pkgInit.refs++
-	pkgInit.mu.Unlock()
 }
 
+// releasePkg drops a reference, calling pw_deinit when the last one goes.
 func releasePkg() {
 	pkgInit.mu.Lock()
+	defer pkgInit.mu.Unlock()
 	pkgInit.refs--
-	atZero := pkgInit.refs <= 0
-	pkgInit.mu.Unlock()
-	if atZero {
+	if pkgInit.refs <= 0 {
+		pkgInit.refs = 0
 		C.pw_deinit()
 	}
 }
@@ -85,7 +89,6 @@ type Context struct {
 // reached the caller decides what to show the user, which per spec §8 is the
 // idle art screen with a diagnostic — never a silent TUI.
 func NewContext(name string) (*Context, error) {
-	ensureInit()
 	acquirePkg()
 
 	cname := C.CString(name)
@@ -133,6 +136,28 @@ func NewContext(name string) (*Context, error) {
 
 // pwctx exposes the context pointer for stream construction inside this
 // package, without leaking a C type into the exported API.
+// lock and unlock guard object construction and state changes.
+//
+// libpipewire requires pw_stream_new, pw_stream_connect and their kin to run
+// with the thread loop's lock held. Calling them from an arbitrary goroutine
+// is rejected with "called from wrong context", and the resulting half-built
+// object segfaults on first use. Since our loop is driven by a thread
+// PipeWire owns, locking from Go is how we enter that thread's world
+// synchronously.
+func (c *Context) lock() {
+	if c == nil || c.loop == nil {
+		return
+	}
+	C.pw_thread_loop_lock(c.loop)
+}
+
+func (c *Context) unlock() {
+	if c == nil || c.loop == nil {
+		return
+	}
+	C.pw_thread_loop_unlock(c.loop)
+}
+
 func (c *Context) pwcore() *C.struct_pw_core {
 	if c == nil {
 		return nil
@@ -194,7 +219,6 @@ func (c *Context) Close() error {
 // The result is never cached: a daemon can appear or vanish between calls, and
 // a stale answer would turn a recoverable situation into a hard failure.
 func Available() bool {
-	ensureInit()
 	acquirePkg()
 	defer releasePkg()
 

@@ -110,7 +110,6 @@ const rateProbeTimeout = 250 * time.Millisecond
 // and change the graph's rate, and a stale answer would leave the engine
 // resampling against a rate the device no longer uses.
 func DefaultRate() (int, bool) {
-	ensureInit()
 	acquirePkg()
 	defer releasePkg()
 

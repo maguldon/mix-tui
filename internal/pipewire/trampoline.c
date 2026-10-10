@@ -15,6 +15,9 @@
 #include <pipewire/pipewire.h>
 #include <pipewire/extensions/metadata.h>
 #include <spa/utils/dict.h>
+#include <spa/pod/builder.h>
+#include <spa/param/format.h>
+#include <spa/param/audio/raw.h>
 #include <stdint.h>
 
 /* The exported Go entry point, emitted by cgo into _cgo_export.c from the
@@ -123,4 +126,42 @@ void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
                          struct pw_stream_events *ev, uintptr_t handle)
 {
 	pw_stream_add_listener(stream, hook, ev, (void *)handle);
+}
+
+/* --- connect parameters --------------------------------------------------- */
+
+/* Build the EnumFormat parameter a playback stream connects with.
+ *
+ * A stream with no format parameter cannot negotiate, and pw_stream_connect
+ * then segfaults on the half-built object. Setting "audio.format" as a
+ * property is not enough: spa wants an EnumFormat pod listing the formats the
+ * stream will accept.
+ *
+ * The caller owns the returned spa_pod and must free it with
+ * free_connect_params. */
+struct spa_pod **make_connect_params(int rate, int channels,
+                                      struct spa_pod **storage)
+{
+	static uint8_t buf[1024];
+	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
+	struct spa_pod_frame f[1];
+
+	spa_pod_builder_add_object(&b,
+		SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+		SPA_FORMAT_mediaType,    SPA_POD_Id(SPA_MEDIA_TYPE_audio),
+		SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+		SPA_FORMAT_AUDIO_format, SPA_POD_Id(SPA_AUDIO_FORMAT_F32P));
+
+	/* This spa's pop takes a frame to pop INTO, unlike older versions where
+	 * the signature is pop(builder). */
+	storage[0] = (struct spa_pod *)spa_pod_builder_pop(&b, f);
+	return storage;
+}
+
+void free_connect_params(struct spa_pod **params)
+{
+	/* The pod lives in the builder's static buffer, so there is nothing to
+	 * free; the array itself is the caller's. Kept as a symbol so the
+	 * lifetime is stated in one place rather than implied. */
+	(void)params;
 }
