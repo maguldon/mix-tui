@@ -16,14 +16,19 @@ It is driven by MIDI controllers (primary target: **Allen & Heath Xone K2**, a
 class-compliant device exposing its own 4-channel soundcard), by keyboard, and by both
 at once. Every control is remappable through per-device configuration files.
 
-Success for the MVP is: **a user can load two tracks, beatmatch them by ear and by eye,
-and mix them out to a live PipeWire stream using a MIDI controller**, with no mouse and
-no GUI.
+Tracks come from a **local library**: scanned directories, saved crates, tag metadata,
+and automatically detected beatgrid and Camelot key (§6.5).
+
+Success for the MVP is: **a user can browse a library, load two tracks, beatmatch them by
+ear and by eye, and mix them out to a live PipeWire stream using a MIDI controller**, with
+no mouse and no GUI.
 
 Out of scope for the MVP, deliberately:
 
 - Loops, samplers, effects, recording, and streaming
 - Multi-deck beyond 2 (the data model supports N; the MVP ships 2)
+- Rule-based / smart crates (static lists only — see §6.5)
+- 4-channel device routing (the streams are independent; routing is config — see §12)
 - MIDI clock / DJLink sync to external tables
 - Sysex, program change, and MIDI clock messages (counted and ignored, see §7)
 
@@ -79,11 +84,19 @@ internal/
     mixer.go          N channel strips, crossfader over 2 selected decks, master
     engine.go         owns all state; Apply(Action); Snapshot()
     sync.go           tempo match + beat quantize
-    beatgrid/         offline onset → tempo → beat tracking
+  analyze/
+    fft.go            shared STFT — feeds both beatgrid and key detection
+    beatgrid.go       onset → tempo → beat tracking
+    key.go            chroma → Camelot key + confidence
+    cache.go          analysis cache keyed by path + size + mtime
+  library/
+    library.go        scan roots, build track index
+    crate.go          static crate lists
+    scan.go           background scanner with progress
   pipewire/
     output.go         stream + render goroutine + ring buffers
   midi/               device discovery, mapping → Action
-  config/             YAML app config + per-device mappings
+  config/             YAML app config, library config, per-device mappings
   tui/                bubbletea model, lipgloss views, braille waveforms, ASCII art
 ```
 
@@ -96,9 +109,11 @@ Snapshot out. Snapshot returns a value type — deck positions, BPM, levels, cue
 flags, ring-buffer underrun counters. Cheap to copy, safe to render from any goroutine,
 never holds a reference into mutable engine state.
 
-**`engine` imports nothing from `pipewire`, `midi`, or `tui`.**
+**`engine` imports nothing from `pipewire`, `midi`, `tui`, `library`, or `analyze`.**
 
-The engine takes PCM in and emits PCM out. It knows nothing about devices or terminals.
+The engine takes PCM in and emits PCM out. It knows nothing about devices, terminals, or
+the file system. Beatgrid and key data reach it as already-computed values on the Deck,
+not as a dependency on the code that computed them.
 This is what makes offline rendering to WAV possible: the identical code path that
 plays to the speaker plays to a file.
 
@@ -109,7 +124,7 @@ plays to the speaker plays to a file.
 ### 4.1 Load time (offline, unconstrained)
 
 ```
-file → decode → PCM in memory → [beatgrid analysis] → waveform peaks → Deck.loaded
+file → decode → PCM in memory → [shared FFT analysis] → waveform peaks → Deck.loaded
 ```
 
 Decoders are pure Go (module paths in §11.3): `go-mp3`, `mewkiz/flac`,
@@ -117,13 +132,33 @@ Decoders are pure Go (module paths in §11.3): `go-mp3`, `mewkiz/flac`,
 A 60-minute track at 44.1kHz is roughly 200MB, which is acceptable and buys instant
 seeking and waveform rendering.
 
-Beatgrid analysis runs on the same buffer: spectral-flux onsets → autocorrelation tempo
-estimate → dynamic-programming beat tracker (Ellis-style). This takes seconds for a full
-track, so it runs on a goroutine reporting progress, and the deck moves through
-`analyzing → ready`. A track is playable before analysis completes.
+**One FFT pass serves both analyses.** A single STFT over the decoded buffer yields:
+
+- **Beatgrid** — spectral-flux onset detection → autocorrelation tempo estimate →
+  dynamic-programming beat tracking (Ellis-style)
+- **Key detection** — chroma vectors from the same spectrogram, correlated against key
+  profiles (§6.5)
+
+Computing the spectrogram once is what makes key detection nearly free: it adds no
+second pass over the audio. The FFT window size and hop are chosen to serve both — fine
+enough for chroma resolution, coarse enough for onset timing.
+
+Analysis takes seconds for a full track, so it runs on a goroutine reporting progress,
+and the deck moves through `analyzing → ready`. **A track is playable before analysis
+completes**, and the key and grid fill in when they land.
 
 Waveform peaks are computed once at load and cached per (track, resolution) so the TUI
 never rescans PCM on a resize or zoom change.
+
+#### Analysis cache
+
+Analysis results persist across restarts under `~/.config/mix-tui/analyze/`, keyed by
+**file path hash + size + mtime**. Moving or renaming a track keeps its grid and key;
+replacing a track's audio invalidates them. This avoids hashing file contents, which
+would mean reading every file in the library on every launch.
+
+A path-only key would be faster still, but a replaced file would silently keep a wrong
+beatgrid — a failure that surfaces as mysteriously bad sync, long after the cause.
 
 ### 4.2 Realtime path (per 512-frame block, ~11.6ms at 44.1kHz)
 
@@ -340,6 +375,58 @@ layout does not reflow when a track is loaded mid-set.
 - **While playing** — small VU-style art accents in the deck footer. Deliberately
   restrained: a large animated block in peripheral vision is a distraction while mixing.
 
+### 6.5 Track library
+
+Two navigation modes, because browsing and mid-set loading have opposite requirements.
+
+**Full-screen library** — three panes: crates, tracks, detail. `ENTER` loads to the
+focused deck, `SHIFT+ENTER` to the other. `TAB` cycles pane focus.
+
+**Quick overlay** — floats over the deck view, which stays visible and playing behind it.
+Type to filter, `↑↓` to select, `ENTER` to load. No mode change and no lost position,
+because during a set the deck view must not disappear.
+
+The library view **requires ~120 columns** and shows a resize hint below that rather than
+permanently truncating artist names. This is wider than the mixer layouts need; the two
+requirements differ and pretending otherwise just produces clipped text.
+
+#### Sort
+
+Sortable by BPM, key, artist, title, or date added, ascending or descending. The sort
+control occupies the detail pane rather than adding a fourth pane — at 120 columns there
+is no room, and only one of the two is useful at a time.
+
+**Sorting changes the view only and never rewrites the crate file.** A crate is a curated
+running order; a stray keypress while browsing must not reorder a set. Sort state resets
+when the view is left.
+
+#### Crates
+
+Crates are **static lists of track references** in the MVP. Adding a file to a watched
+directory does not add it to any crate; tracks are added explicitly. The crate file format
+is designed so that rule-based crates (§12) can be added later without migrating
+existing files.
+
+#### Key detection
+
+Camelot keys are detected automatically and displayed **Camelot-only in the track list**
+(`8A`); the musical name (`C minor`) appears in the detail pane. Detection always carries
+a **confidence** marker rather than a bare value:
+
+| Marker | Meaning |
+|---|---|
+| `✓` | High confidence |
+| `~` | Low confidence — shown, but flagged |
+| `?` | Below threshold; reported as undetected |
+
+The threshold exists because key detection on percussive or atonal material — drum and
+bass breaks, noise, unstrung instruments — yields confident nonsense. **A wrong key
+displayed confidently is worse than no key**, because the user would crate-match against
+it. Below threshold we report nothing rather than guessing.
+
+Key detection shares a single FFT pass with beatgrid analysis (§4.1), so it adds
+negligible cost once analysis exists.
+
 ---
 
 ## 7. MIDI Message Scope
@@ -368,7 +455,10 @@ diagnosable rather than mysterious.
 | Ring buffer underrun | Emit silence for that block, increment the counter, surface in the debug overlay. Never block the audio thread. |
 | Malformed mapping YAML | Log the parse error with file and line, keep the last valid table. A typo must not kill a live performance. |
 | No MIDI devices | Run keyboard-only; print available devices and the mapping directory path. |
-| Terminal too small | Switch to the narrowest viable view (B at ~70 cols); below that, show a "terminal too small" message with the required size. |
+| Library root missing or unreadable | Skip the root, list it as unreachable with the reason, keep scanning the others. One bad path does not empty the library. |
+| Track file deleted since last scan | Drop from the library and remove its cached analysis, hotcues, and crate entries. |
+| Key detection below confidence threshold | Display `?` (undetected). Never display a low-confidence key as though it were certain (§6.5). |
+| Terminal too small for library view (<120 cols) | Show a resize hint naming the required width; do not render truncated columns. Mixer layouts are unaffected and remain usable at their own narrower widths. |
 
 The governing rule: **an error degrades a feature, never the session.**
 
@@ -396,6 +486,14 @@ possible.
   relative-encoder accumulation, including the null-point case at 64.
 - **Decoder coverage** — a committed sample per supported format, asserting duration and
   peak level.
+- **Key detection fixtures** — committed clips in known keys, asserting the detected
+  Camelot value *and* that the confidence marker is correct. The confidence behaviour is
+  the part that matters: a test that only checks the key of tonal material would pass even
+  if the threshold were removed and atonal clips returned confident nonsense.
+- **Analysis cache invalidation** — asserting that changing mtime or size invalidates a
+  cached grid, and that renaming does not.
+- **Sort semantics** — asserting that sorting a crate changes the view ordering while
+  leaving the crate file byte-identical.
 
 ---
 
@@ -404,14 +502,34 @@ possible.
 ```
 ~/.config/mix-tui/
   config.yaml          audio device, buffer size, keybindings, default view
+  library.yaml         library roots and crate definitions
   mappings/
     xone-k2.yaml
     generic-2deck.yaml
-  hotcues/             per-track hotcue persistence, keyed by file path hash
+  analyze/             cached beatgrids and detected keys (see §4.1)
+  hotcues/             per-track hotcue persistence
 ```
 
 A repo-local `.devconfig/` provides the same structure for manual testing without
 touching the real configuration.
+
+`library.yaml` declares the scanned roots and the crates:
+
+```yaml
+roots:
+  - ~/Music/techno
+  - ~/Music/house
+
+crates:
+  - name: Warmed Up
+    tracks: [~/Music/techno/inner-speaker.mp3, ...]   # explicit references
+  - name: Deep Cuts
+    tracks: [...]
+```
+
+Crates hold explicit track references rather than query rules, matching §6.5. The schema
+is versioned so that rule-based crates (§12) can be added without rewriting existing
+crate files.
 
 ---
 
@@ -459,6 +577,10 @@ Build dependency: `libasound2-dev`. **Verified present on the development machin
 | WAV decode/encode | `github.com/go-audio/wav` | v1.1.0 |
 | FLAC decode | `github.com/mewkiz/flac` | v1.0.14 |
 | Vorbis decode | `github.com/jfreymuth/oggvorbis` | v1.0.5 |
+| FFT (shared analysis pass) | `gonum.org/v1/gonum/fft` | v0.17.0 |
+
+`gonum` is used only for the FFT in the offline analysis path (§4.1), not in the
+realtime thread.
 
 All module paths above were resolved against the Go module proxy during design.
 
@@ -478,6 +600,9 @@ Noted so the architecture is not accidentally hostile to them:
 - **Effects** — an insert chain per deck. The mixer strip boundary is the natural
   insertion point.
 - **Additional decks** — data model already supports N.
+- **Rule-based crates** — smart playlists backed by a query (folder, BPM range,
+  added-this-week). The crate schema is versioned so these can be added without
+  migrating existing static crates.
 - **4-channel output routing** — the MAIN and CUE streams are already independent, so
   pointing them at an Xone K2's dedicated main and headphone ports is a routing
   configuration change, not an audio architecture change.
