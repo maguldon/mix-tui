@@ -542,6 +542,13 @@ it. Below threshold we report nothing rather than guessing.
 Key detection shares a single FFT pass with beatgrid analysis (§4.1), so it adds
 negligible cost once analysis exists.
 
+**Camelot convention:** `A` denotes minor and `B` denotes major, with `8B` = C major,
+`8A` = A minor, `7A` = D minor. The wheel follows the circle of fifths, not chromatic
+semitones, so the mapping is a lookup table rather than arithmetic — any closed form
+gets the enharmonic keys (C♯/D♭, F♯/G♭, D♯/E♭) wrong. An earlier draft of this spec
+listed A minor as `7A`, which is D minor; the table in `internal/analyze/key.go` is
+authoritative.
+
 ---
 
 ## 7. MIDI Message Scope

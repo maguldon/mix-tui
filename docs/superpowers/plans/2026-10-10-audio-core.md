@@ -1412,7 +1412,7 @@ func TestAnalyzeKeyOnMinorChord(t *testing.T) {
     pcm := mixSines(10, []float64{220.0, 261.6, 329.6})
     k, _ := AnalyzeKey(pcm)
     if k.Confidence < KeyConfidenceThreshold { t.Skip("too quiet") }
-    if k.Camelot != "7A" { t.Errorf("A minor = %q, want 7A", k.Camelot) }
+    if k.Camelot != "8A" { t.Errorf("A minor = %q, want 8A", k.Camelot) }
 }
 
 func TestAnalyzeKeyOnNoiseIsUndetected(t *testing.T) {

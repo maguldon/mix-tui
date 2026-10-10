@@ -11,6 +11,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/dsp"
 )
@@ -44,9 +45,10 @@ type Deck struct {
 	inBuf  dsp.Stereo
 	outBuf dsp.Stereo
 
-	// Beatgrid and loop state arrive in later tasks; the fields exist so the
-	// struct shape does not change underneath Task 8.
-	beatgrid any
+	// beatgrid is optional. A deck with no grid still plays: beat-dependent
+	// features report analyze.ErrNoBeatGrid and are disabled, while playback,
+	// pitch, EQ, and filters keep working (spec §8).
+	beatgrid *analyze.BeatGrid
 	loopOn   bool
 }
 
@@ -98,6 +100,20 @@ func (d *Deck) Pos() time.Duration {
 // PosFrames returns the playhead as an exact fractional sample frame, which
 // is the precision-true form of Pos and the unit seeks use internally.
 func (d *Deck) PosFrames() float64 { return d.pos }
+
+// AttachBeatGrid installs an analysed grid. A nil grid leaves the deck
+// playable with beatgrid-dependent features unavailable (spec §8).
+func (d *Deck) AttachBeatGrid(g *analyze.BeatGrid) { d.beatgrid = g }
+
+// BeatGrid returns the deck's grid, or nil when it has none.
+func (d *Deck) BeatGrid() *analyze.BeatGrid { return d.beatgrid }
+
+// HasBeatGrid reports whether beat-dependent features are available. Tasks 8
+// and 9 gate loops, quantize, and sync on this rather than on a nil check at
+// each call site.
+func (d *Deck) HasBeatGrid() bool {
+	return d.beatgrid != nil && d.beatgrid.Confidence > 0
+}
 
 // Play starts or resumes the deck.
 func (d *Deck) Play() {
