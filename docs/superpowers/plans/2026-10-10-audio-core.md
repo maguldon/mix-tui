@@ -2424,7 +2424,7 @@ git commit -m "feat(engine): tempo sync, beat quantize, and delta-beat readout"
   func FuncTarget(fn func(dsp.Stereo)) RenderTarget
   ```
 
-- [ ] **Step 1: Write the failing acceptance test**
+- [x] **Step 1: Write the failing acceptance test**
 
 Create `internal/engine/acceptance_test.go`:
 
@@ -2512,12 +2512,12 @@ func TestAcceptanceLoopRollSyncSequence(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/engine/ -run Acceptance -v`
 Expected: FAIL — `undefined: RingTarget`.
 
-- [ ] **Step 3: Implement `internal/engine/render_target.go`**
+- [x] **Step 3: Implement `internal/engine/render_target.go`**
 
 ```go
 type RenderTarget interface { Consume(out dsp.Stereo) bool }
@@ -2534,13 +2534,13 @@ func (t funcTarget) Consume(out dsp.Stereo) bool { t.fn(out); return true }
 Document the interface contract: **implementations must not block or allocate**, since
 milestone 2 will call `Consume` from the PipeWire audio thread.
 
-- [ ] **Step 4: Extend `mixrender` with the full performance flags**
+- [x] **Step 4: Extend `mixrender` with the full performance flags**
 
 Add to `cmd/mixrender/main.go`: `-loop-a`, `-loop-b` (beat counts), `-sync` (engage sync
 from B to A), `-quantize`, `-roll` seconds, `-xf` (already present). Print a summary of
 the final snapshot including `Underruns`.
 
-- [ ] **Step 5: Write `cmd/mixrender/README.md`**
+- [x] **Step 5: Write `cmd/mixrender/README.md`**
 
 Document each flag with a one-line example, and include the canonical acceptance command:
 
@@ -2553,7 +2553,7 @@ go run ./cmd/mixrender -out /tmp/demo.wav \
 Explain that this is the spec's §9 verification harness: the engine code path is identical
 to live playback, and the output is inspectable with any audio tool.
 
-- [ ] **Step 6: Run the full test suite**
+- [x] **Step 6: Run the full test suite**
 
 Run: `go test ./... -race -count=1`
 Expected: PASS — every package.
@@ -2564,13 +2564,13 @@ Expected: no output.
 Run: `gofmt -l .`
 Expected: no output. Fix anything listed before committing.
 
-- [ ] **Step 7: Verify the realtime budget one final time**
+- [x] **Step 7: Verify the realtime budget one final time**
 
 Run: `go test ./internal/engine/ -bench=. -benchtime=1000x -benchmem`
 Expected: `0 allocs/op` on `BenchmarkDeckRender`. This is the §4.3 contract and the one
 invariant that cannot be verified by listening to the output.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A

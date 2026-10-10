@@ -70,6 +70,10 @@ func run() error {
 		doSync   = flag.Bool("sync", false, "lock deck 1 to deck 0's tempo (analyses both)")
 		bpmA     = flag.Float64("bpm-a", 0, "assume deck 0's track is this BPM")
 		bpmB     = flag.Float64("bpm-b", 0, "assume deck 1's track is this BPM")
+		loopA    = flag.Float64("loop-a", 0, "arm a beat loop on deck 0 of this many beats")
+		loopB    = flag.Float64("loop-b", 0, "arm a beat loop on deck 1 of this many beats")
+		doQuant  = flag.Bool("quantize", false, "quantize both decks to their nearest beat")
+		roll     = flag.Float64("roll", 0, "roll both decks by this many beats")
 	)
 	flag.Var(&play, "play", "deck index to play (repeatable)")
 	flag.Parse()
@@ -113,6 +117,33 @@ func run() error {
 	if *doSync {
 		if err := eng.SyncPair(1, 0); err != nil {
 			return fmt.Errorf("-sync needs a beatgrid on both decks (use -bpm-a and -bpm-b): %w", err)
+		}
+	}
+
+	// Beat-dependent controls, applied before playback starts so the whole
+	// render exercises them.
+	if *loopA > 0 {
+		if err := eng.Deck(0).SetLoopBeat(*loopA); err != nil {
+			return fmt.Errorf("-loop-a needs a beatgrid on deck 0: %w", err)
+		}
+	}
+	if *loopB > 0 {
+		if err := eng.Deck(1).SetLoopBeat(*loopB); err != nil {
+			return fmt.Errorf("-loop-b needs a beatgrid on deck 1: %w", err)
+		}
+	}
+	if *doQuant {
+		for i := 0; i < eng.DeckCount(); i++ {
+			if err := eng.Deck(i).QuantizeToNearestBeat(); err != nil {
+				return fmt.Errorf("-quantize: deck %d: %w", i, err)
+			}
+		}
+	}
+	if *roll > 0 {
+		for i := 0; i < eng.DeckCount(); i++ {
+			if err := eng.Deck(i).PushRoll(*roll); err != nil {
+				return fmt.Errorf("-roll: deck %d: %w", i, err)
+			}
 		}
 	}
 
@@ -185,15 +216,46 @@ func run() error {
 	fmt.Fprintf(os.Stderr, "wrote %s (%d frames, %.1fs)\n", *out, written, float64(written)/float64(dsp.SampleRate))
 
 	if *showStat {
-		printSnapshot(eng.Snapshot())
+		printSnapshot(eng, eng.Snapshot())
 	}
 	return nil
 }
 
-func printSnapshot(s engine.Snapshot) {
+// loopSummary renders each deck's tempo and loop length for the stats output.
+// "4 beats" or "1.9s" depending on how the loop was armed.
+func loopSummary(e *engine.Engine, s engine.Snapshot) string {
+	parts := make([]string, 0, len(s.Decks))
+	for _, d := range s.Decks {
+		if !d.Loaded {
+			continue
+		}
+		if !d.HasBeatGrid {
+			parts = append(parts, fmt.Sprintf("deck%d:no-grid", d.Index))
+			continue
+		}
+		ls := e.Deck(d.Index).Loop()
+		if !ls.Active {
+			parts = append(parts, fmt.Sprintf("deck%d:%.1fbpm", d.Index, d.BPM))
+			continue
+		}
+		if ls.BeatCount > 0 {
+			parts = append(parts, fmt.Sprintf("deck%d:%.1fbpm %g-beat", d.Index, d.BPM, ls.BeatCount))
+		} else {
+			parts = append(parts, fmt.Sprintf("deck%d:%.1fbpm %.0fms", d.Index, d.BPM,
+				float64((ls.End-ls.Start).Microseconds())/1000))
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, " ")
+}
+
+func printSnapshot(e *engine.Engine, s engine.Snapshot) {
 	fmt.Println("Snapshot:")
 	fmt.Printf("  crossfader  %+.2f\n", s.Crossfader)
 	fmt.Printf("  master      rms=%.4f peak=%.4f\n", s.MasterLevel, s.MasterPeak)
+	fmt.Printf("  loops       %s\n", loopSummary(e, s))
 	fmt.Printf("  cue         rms=%.4f peak=%.4f\n", s.CueLevel, s.CuePeak)
 	fmt.Printf("  overruns    %d\n", s.Overruns)
 	for _, d := range s.Decks {
