@@ -260,17 +260,22 @@ func BenchmarkResamplerProcess(b *testing.B) {
 }
 
 // BenchmarkResamplerProcessCold measures a freshly-primed resampler, which is
-// the loop-wrap and hotcue-jump path.
+// the loop-wrap and hotcue-jump path: a seek primes from the destination's
+// history and then processes a block.
 func BenchmarkResamplerProcessCold(b *testing.B) {
 	const block = 512
 	stream := Sine(1000, 30.0)
 	scratch := make(Stereo, block*2)
+	// Vary the jump target so the benchmark does not benefit from caching one
+	// position, and wrap before running off the end.
+	maxJump := len(stream)/2 - block*4
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
+		at := (i * 977) % maxJump
 		r := NewResampler(SampleRate, SampleRate)
-		r.SetRatio(1.08)
-		r.Prime(stream, i*block, r.HistorySamples())
-		r.Process(stream[i*block:], scratch)
+		r.SetRatio(1.05)
+		r.Prime(stream, at, r.HistorySamples())
+		r.Process(stream[at*2:], scratch)
 	}
 }
