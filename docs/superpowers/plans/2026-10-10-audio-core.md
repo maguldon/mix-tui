@@ -748,9 +748,19 @@ func TestProbeDoesNotDecodeFully(t *testing.T) {
 Run: `MIXTUI_GEN=1 go test -tags mixtuigen ./internal/testdata/`
 Expected: writes `internal/testdata/fixtures/{sine440.wav,sine440.flac,sine440.ogg,lr.wav,garbage.bin}`
 
-For FLAC and OGG fixtures, shell out to `flac` and `oggenc` if present; if either is
-missing, **skip generating that fixture and skip its test** with `t.Skip`. Do not fail the
-build for a missing optional encoder — note it in the commit message instead.
+Encode fixtures by shelling out, trying each encoder in order and stopping at the first
+that exists. **A skipped decoder test is a decoder nobody has verified**, so prefer a
+fallback over skipping:
+
+| Format | First choice | Fallback |
+|---|---|---|
+| FLAC | `flac` | `ffmpeg -i in.wav -c:a flac out.flac` |
+| OGG Vorbis | `oggenc` | `ffmpeg -i in.wav -c:a libvorbis out.ogg` |
+
+If neither path is available for a format, skip generating that fixture and let its test
+`t.Skip` — but **print a loud warning**, because a silently-skipped decoder test is the
+failure mode that lets a broken ogg path ship. Verify encoder availability in the generator
+rather than assuming it.
 
 - [ ] **Step 3: Run tests to verify they fail**
 
