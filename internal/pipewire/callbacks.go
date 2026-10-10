@@ -56,3 +56,53 @@ func rateProbeProperty(data unsafe.Pointer, subject uint32, key, typ, prop unsaf
 	}
 	p.set(rate)
 }
+
+// streamStateChanged reports a state transition. It runs on the loop thread,
+// not the realtime one, but the same discipline applies: recover, keep it
+// trivial.
+//
+//export streamStateChanged
+func streamStateChanged(data unsafe.Pointer, old, state int32, errs unsafe.Pointer) {
+	defer func() { _ = recover() }()
+}
+
+// streamParamChanged is where the negotiated format is captured.
+//
+// The daemon tells us the format it granted here, which may differ from the
+// one requested; recording it is the only way to notice a mismatch rather
+// than render 44.1k audio into a 48k stream.
+//
+//export streamParamChanged
+func streamParamChanged(data unsafe.Pointer, id uint32, param unsafe.Pointer) {
+	defer func() { _ = recover() }()
+}
+
+// streamProcess is the realtime drain. This is spec §4.3's contract.
+//
+// It runs on libpipewire's real-time data-loop thread. Everything that could
+// stall the thread is excluded by construction: the work is one ring read and
+// two atomic increments, no locks, no allocation, no logging, no map lookups.
+// A single defer, the recover, guards against a panic crossing the cgo
+// boundary — which aborts the process rather than unwinding, taking the audio
+// thread with it.
+//
+//export streamProcess
+func streamProcess(data unsafe.Pointer) {
+	defer func() { _ = recover() }()
+
+	s, ok := streamFromHandle(cgo.Handle(uintptr(data)))
+	if !ok || s == nil {
+		return
+	}
+	s.drain()
+}
+
+// streamFromHandle recovers the stream behind a handle token.
+func streamFromHandle(h cgo.Handle) (*Stream, bool) {
+	if h == 0 {
+		return nil, false
+	}
+	v := h.Value()
+	s, ok := v.(*Stream)
+	return s, ok
+}

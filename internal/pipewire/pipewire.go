@@ -67,8 +67,13 @@ func releasePkg() {
 
 // Context owns a libpipewire thread loop and the context on it.
 type Context struct {
-	loop   *C.struct_pw_thread_loop
-	ctx    *C.struct_pw_context
+	loop *C.struct_pw_thread_loop
+	ctx  *C.struct_pw_context
+	// core is the connected pipewire core. A stream is created from the core,
+	// not the context, so NewContext connects eagerly: a caller that only
+	// wants the loop would otherwise be told there is a daemon and then
+	// discover otherwise at stream creation.
+	core   *C.struct_pw_core
 	mu     sync.Mutex
 	closed bool
 }
@@ -105,16 +110,34 @@ func NewContext(name string) (*Context, error) {
 		return nil, fmt.Errorf("pipewire: pw_context_new returned NULL (no daemon reachable?)")
 	}
 
+	core := C.pw_context_connect(ctx, nil, 0)
+	if core == nil {
+		C.pw_context_destroy(ctx)
+		C.pw_thread_loop_destroy(loop)
+		releasePkg()
+		return nil, fmt.Errorf("pipewire: pw_context_connect returned NULL (no daemon reachable?)")
+	}
+
 	// pw_thread_loop_start returns an int error code, not NULL. Reading it as
 	// a pointer would compile and silently compare a status against nothing.
 	if rc := C.pw_thread_loop_start(loop); rc != 0 {
+		C.pw_core_disconnect(core)
 		C.pw_context_destroy(ctx)
 		C.pw_thread_loop_destroy(loop)
 		releasePkg()
 		return nil, fmt.Errorf("pipewire: pw_thread_loop_start failed with code %d", int(rc))
 	}
 
-	return &Context{loop: loop, ctx: ctx}, nil
+	return &Context{loop: loop, ctx: ctx, core: core}, nil
+}
+
+// pwctx exposes the context pointer for stream construction inside this
+// package, without leaking a C type into the exported API.
+func (c *Context) pwcore() *C.struct_pw_core {
+	if c == nil {
+		return nil
+	}
+	return c.core
 }
 
 // Loop returns the opaque pw_loop* for stream construction.
@@ -147,6 +170,12 @@ func (c *Context) Close() error {
 
 	if c.loop != nil {
 		C.pw_thread_loop_stop(c.loop)
+	}
+	// Disconnect the core before destroying its context, mirroring the loop
+	// ordering above: teardown runs strictly outermost-first.
+	if c.core != nil {
+		C.pw_core_disconnect(c.core)
+		c.core = nil
 	}
 	if c.ctx != nil {
 		C.pw_context_destroy(c.ctx)
