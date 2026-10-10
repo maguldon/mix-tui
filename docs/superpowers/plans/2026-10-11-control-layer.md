@@ -6,7 +6,7 @@
 
 **Architecture:** Every piece of input logic is a **pure function from an input event to zero or more Actions**, sitting above a thin hardware layer. Nothing that decides anything imports `gitlab.com/gomidi`. That is what makes this plan's tests runnable in CI: the resolver, the value modes, the modifier state machine, and the encoder accumulator are all exercisable from tables of literal messages, with no device, no daemon, and no display.
 
-**Tech Stack:** Go 1.27, `gitlab.com/gomidi/midi/v2` v2.3.24 + `drivers/rtmididrv` (cgo, ALSA), `gopkg.in/yaml.v3` v3.0.1, `github.com/dukedelaet/mix-tui/internal/engine` from milestone 1
+**Tech Stack:** Go 1.27, `gitlab.com/gomidi/midi/v2` v2.3.24 + `drivers/rtmididrv` (cgo, ALSA), `gopkg.in/yaml.v3` v3.0.1, `github.com/maguldon/mix-tui/internal/engine` from milestone 1
 
 **Spec:** `docs/superpowers/specs/2026-10-10-mix-tui-design.md` — read §5 (the whole action layer), §7 (MIDI scope), §8, §10 alongside this plan.
 **Prior plans:** `2026-10-10-audio-core.md` (Action/Snapshot), `2026-10-11-device-output.md` (context for this milestone).
@@ -167,7 +167,7 @@ package midi
 import (
     "testing"
 
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func TestActionKindRoundTrip(t *testing.T) {
@@ -777,7 +777,7 @@ import (
     "math"
     "testing"
 
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func TestAbsoluteMapsFullRange(t *testing.T) {
@@ -1377,7 +1377,7 @@ import (
     "strings"
     "testing"
 
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func writeCfg(t *testing.T, body string) string {
@@ -1534,11 +1534,11 @@ package midi_test
 import (
     "testing"
 
-    "github.com/dukedelaet/mix-tui/internal/audio"
-    "github.com/dukedelaet/mix-tui/internal/config"
-    "github.com/dukedelaet/mix-tui/internal/dsp"
-    "github.com/dukedelaet/mix-tui/internal/engine"
-    "github.com/dukedelaet/mix-tui/internal/midi"
+    "github.com/maguldon/mix-tui/internal/audio"
+    "github.com/maguldon/mix-tui/internal/config"
+    "github.com/maguldon/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/midi"
 )
 
 // TestSyntheticControllerDrivesEngine plays a "performance" with no hardware:

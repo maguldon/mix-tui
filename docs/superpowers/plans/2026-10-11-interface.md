@@ -173,7 +173,7 @@ import (
     "testing"
     "time"
 
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 type fakeEngine struct {
@@ -394,7 +394,7 @@ import (
     "testing"
 
     "github.com/lipgloss/lipgloss"
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func snapTwoDecks() engine.Snapshot {
@@ -705,7 +705,7 @@ import (
     "testing"
 
     "github.com/lipgloss/lipgloss"
-    "github.com/dukedelaet/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/dsp"
 )
 
 func testPeaks(w int, v float32) Peaks {
@@ -1041,8 +1041,8 @@ import (
     "testing"
     "time"
 
-    "github.com/dukedelaet/mix-tui/internal/dsp"
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func TestWindowLengthIsFourBars(t *testing.T) {
@@ -1428,7 +1428,7 @@ import (
     "testing"
 
     "github.com/lipgloss/lipgloss"
-    "github.com/dukedelaet/mix-tui/internal/tui/library"
+    "github.com/maguldon/mix-tui/internal/tui/library"
 )
 
 func testIndex() *library.Index {

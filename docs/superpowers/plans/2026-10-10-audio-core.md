@@ -30,7 +30,7 @@ milestone 2 and 3 need so nothing has to be retrofitted.
 
 ## Global Constraints
 
-- **Go 1.27**, module `github.com/dukedelaet/mix-tui`, all code under `internal/`.
+- **Go 1.27**, module `github.com/maguldon/mix-tui`, all code under `internal/`.
 - **No cgo in this milestone.** If any dependency requires cgo, it is the wrong dependency.
 - **The realtime path must not allocate, lock, or touch the filesystem.** The render loop
   preallocates every buffer it needs. `go test -race` must pass.

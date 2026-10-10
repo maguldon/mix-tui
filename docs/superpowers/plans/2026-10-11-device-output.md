@@ -6,7 +6,7 @@
 
 **Architecture:** `internal/pipewire` is the **only** cgo package in the repo. It wraps libpipewire just far enough to run two playback streams and expose each one's drain as a `RenderTarget`. The engine, DSP, and analysis packages stay pure Go and remain testable with no audio device present. The producer is an ordinary Go goroutine, not an RT thread; a 200ms ring makes that safe.
 
-**Tech Stack:** Go 1.27, cgo, `libpipewire-0.3-dev` (verified present, 1.6.8), `github.com/dukedelaet/mix-tui/internal/engine` from milestone 1
+**Tech Stack:** Go 1.27, cgo, `libpipewire-0.3-dev` (verified present, 1.6.8), `github.com/maguldon/mix-tui/internal/engine` from milestone 1
 
 **Spec:** `docs/superpowers/specs/2026-10-10-mix-tui-design.md` — read §3.2, §4.2, §4.3, §8, §11.1 alongside this plan.
 **Prior plan:** `docs/superpowers/plans/2026-10-10-audio-core.md` — this plan consumes its `Engine`, `RenderInto`, `RenderTarget`, and `audio.Ring`.
@@ -26,7 +26,7 @@ terminal for flags and nothing else.
 - **`internal/pipewire` is the only package that may `import "C"`.** `go build ./...`
   must succeed for every other package on a machine without libpipewire-dev. Verify with:
   `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$'`
-  → must print only `github.com/dukedelaet/mix-tui/internal/pipewire`.
+  → must print only `github.com/maguldon/mix-tui/internal/pipewire`.
 - **The audio thread must never block, allocate, or take a Go lock.** The drain callback
   does exactly one thing: copy from a ring buffer. This is the spec's §4.3 contract and it
   is the reason rings exist.
@@ -244,7 +244,7 @@ Run:
 ```bash
 go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$'
 ```
-Expected: exactly one line, `github.com/dukedelaet/mix-tui/internal/pipewire`.
+Expected: exactly one line, `github.com/maguldon/mix-tui/internal/pipewire`.
 
 - [ ] **Step 7: Commit**
 
@@ -310,8 +310,8 @@ import (
     "testing"
     "time"
 
-    "github.com/dukedelaet/mix-tui/internal/audio"
-    "github.com/dukedelaet/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/audio"
+    "github.com/maguldon/mix-tui/internal/dsp"
 )
 
 func newTestStream(t *testing.T, ring *audio.Ring) *Stream {
@@ -552,8 +552,8 @@ import (
     "testing"
     "time"
 
-    "github.com/dukedelaet/mix-tui/internal/audio"
-    "github.com/dukedelaet/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/audio"
+    "github.com/maguldon/mix-tui/internal/dsp"
 )
 
 func TestOutputStartsBothStreams(t *testing.T) {
@@ -729,8 +729,8 @@ import (
     "testing"
     "time"
 
-    "github.com/dukedelaet/mix-tui/internal/dsp"
-    "github.com/dukedelaet/mix-tui/internal/engine"
+    "github.com/maguldon/mix-tui/internal/dsp"
+    "github.com/maguldon/mix-tui/internal/engine"
 )
 
 func TestPumperStopsCleanlyOnCancel(t *testing.T) {
@@ -956,7 +956,7 @@ Expected: all pass; `gofmt -l` prints nothing.
 - [ ] **Step 6: Verify the cgo boundary held**
 
 Run: `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$'`
-Expected: exactly `github.com/dukedelaet/mix-tui/internal/pipewire`.
+Expected: exactly `github.com/maguldon/mix-tui/internal/pipewire`.
 
 - [ ] **Step 7: Listen to the output**
 
