@@ -88,3 +88,11 @@ func (e *EQ) Process(in, out Stereo) {
 		out[i] = 0
 	}
 }
+
+// Prime settles the EQ's state from the samples immediately before a
+// discontinuity. See biquad.prime.
+func (e *EQ) Prime(history Stereo) {
+	for i := range e.bands {
+		e.bands[i].prime(history)
+	}
+}

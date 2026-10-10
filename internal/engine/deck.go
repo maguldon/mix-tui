@@ -45,11 +45,22 @@ type Deck struct {
 	inBuf  dsp.Stereo
 	outBuf dsp.Stereo
 
+	// settleResampler renders the short pre-roll used to prime the EQ and
+	// filter at a seek, and primeBuf holds that pre-roll. Preallocated so
+	// seeking does not allocate.
+	settleResampler *dsp.Resampler
+	primeBuf        dsp.Stereo
+
 	// beatgrid is optional. A deck with no grid still plays: beat-dependent
 	// features report analyze.ErrNoBeatGrid and are disabled, while playback,
 	// pitch, EQ, and filters keep working (spec §8).
 	beatgrid *analyze.BeatGrid
 	loopOn   bool
+
+	// loop is the active loop, in source frames. A wrap is a seek.
+	loop      loopCore
+	savedLoop map[int]SavedLoop
+	rollStack []rollFrame
 
 	// hotcues holds exact fractional frame positions, parallel to pos, so a
 	// hotcue jump lands with the same precision as any other seek.
@@ -65,12 +76,18 @@ type Deck struct {
 // NewDeck returns a stopped, empty deck.
 func NewDeck(index int) *Deck {
 	d := &Deck{
-		index:     index,
-		resampler: dsp.NewResampler(dsp.SampleRate, dsp.SampleRate),
-		eq:        dsp.NewEQ(),
-		filter:    dsp.NewFilter(),
-		inBuf:     make(dsp.Stereo, BlockFrames*2),
-		outBuf:    make(dsp.Stereo, BlockFrames*2),
+		index: index,
+		// Initialised eagerly: SaveLoop and PushRoll must never write to a nil
+		// map or slice, both of which panic rather than fail cleanly.
+		savedLoop:       make(map[int]SavedLoop),
+		rollStack:       make([]rollFrame, 0, 8),
+		resampler:       dsp.NewResampler(dsp.SampleRate, dsp.SampleRate),
+		eq:              dsp.NewEQ(),
+		filter:          dsp.NewFilter(),
+		settleResampler: dsp.NewResampler(dsp.SampleRate, dsp.SampleRate),
+		primeBuf:        make(dsp.Stereo, dsp.BiquadHistorySamples*2),
+		inBuf:           make(dsp.Stereo, BlockFrames*2),
+		outBuf:          make(dsp.Stereo, BlockFrames*2),
 	}
 	return d
 }
@@ -335,11 +352,13 @@ func (d *Deck) seekFrames(frame float64) {
 	// line that makes seeks, hotcues, and loop wraps silent.
 	d.resampler.Prime(d.track.PCM, int(frame), d.resampler.HistorySamples())
 
-	// Filters carry a two-sample delay line whose discontinuity is filtered
-	// away rather than clicked, so resetting is sufficient and cheaper than
-	// priming.
-	d.eq.Reset()
-	d.filter.Reset()
+	// Settle the EQ and filter rather than zeroing them.
+	//
+	// Their input is the RESAMPLER'S OUTPUT, not the raw track, so they must
+	// be primed from the same signal they will actually see. Priming from raw
+	// PCM leaves the delay line holding the wrong history, which shows up as a
+	// ringing transient at the loop point — an audible click on every wrap.
+	d.primeFilters(int(frame))
 }
 
 // Seek is the exported entry point for moving the playhead. It is not an
@@ -416,12 +435,44 @@ func (d *Deck) Render(out dsp.Stereo) int {
 		}
 		return produced
 	}
+
+	// Stop the block at the loop end.
+	//
+	// renderBlock would otherwise render a full block past the loop point and
+	// wrap only afterwards, discarding the overshoot. That truncation is an
+	// audible seam: the tail of the last block plays, then playback restarts
+	// from the loop's beginning, and the two do not line up. Shortening the
+	// block puts the wrap exactly on the loop boundary.
+	//
+	// The remaining length is rounded UP. Truncating would round a 0.5-frame
+	// remainder to zero, which skips the shortening entirely and lets the
+	// block run past the loop end.
+	if d.loop.active && d.loop.end > d.loop.start {
+		if remaining := d.loop.end - d.pos; remaining > 0 {
+			limit := int(math.Ceil(remaining))
+			if limit < want {
+				want = limit
+				out = out[:want*2]
+			}
+		}
+	}
+
 	return d.renderBlock(out)
 }
 
 // renderBlock produces exactly one block. out must be no longer than
 // BlockFrames.
 func (d *Deck) renderBlock(out dsp.Stereo) int {
+	// Apply a wrap left pending by the previous block, BEFORE reading source.
+	//
+	// The wrap cannot happen after the resampler: it primes the resampler and
+	// the filters for the destination, and the EQ/filter stage below would
+	// then run over this block's pre-wrap audio, overwriting the very state the
+	// wrap just established. Doing it here means every block is read,
+	// filtered, and left consistent, and the next block starts already
+	// rewound (spec §4.4.1).
+	d.wrapLoop()
+
 	for i := range out {
 		out[i] = 0
 	}
@@ -443,11 +494,60 @@ func (d *Deck) renderBlock(out dsp.Stereo) int {
 	d.filter.Process(out, d.outBuf[:len(out)])
 	copy(out, d.outBuf[:len(out)])
 
-	// Stop at the end rather than running off the buffer.
+	// Stop at the end rather than running off the buffer. A deck inside an
+	// active loop must not stop here even at the track's end: wrapLoop on the
+	// next block will bring it back (spec §4.4.1).
 	total := float64(d.track.PCM.Frames())
 	if d.pos >= total {
 		d.pos = total
-		d.playing = false
+		if !d.loop.active {
+			d.playing = false
+		}
 	}
 	return n
+}
+
+// primeFilters settles the EQ and filter delay lines from the signal the deck
+// will actually present at frame.
+//
+// The filters sit AFTER the resampler, so their input is resampled audio.
+// Their history must therefore be produced by the resampler rather than taken
+// from the raw track: a filter primed with pre-resampling samples converges to
+// the wrong state and rings audibly at the seam.
+//
+// scratch buffers are used, so this must run on the render goroutine and must
+// not be called concurrently with renderBlock.
+func (d *Deck) primeFilters(frame int) {
+	if d.track == nil || frame < 1 {
+		d.eq.Reset()
+		d.filter.Reset()
+		return
+	}
+
+	// Produce enough resampler output to settle the delay lines. The filter's
+	// own history is two frames, but a resonant filter needs more input than
+	// that to approach its steady state, so feed generously.
+	n := dsp.BiquadHistorySamples
+	if frame < n {
+		n = frame
+	}
+	hist := d.primeBuf[:n*2]
+	for i := range hist {
+		hist[i] = 0
+	}
+
+	// Render n frames of resampler output ending at `frame` using a scratch
+	// resampler, so the deck's own state (already primed at frame) is
+	// untouched. The scratch resampler is allocated once in NewDeck: seeking
+	// must not allocate (spec §4.3).
+	d.settleResampler.SetRatio(d.PitchRatio())
+	d.settleResampler.Prime(d.track.PCM, frame-n, d.settleResampler.HistorySamples())
+	if got := d.settleResampler.ProcessFrom(d.track.PCM, frame-n, hist); got != n {
+		for i := got * 2; i < len(hist); i++ {
+			hist[i] = 0
+		}
+	}
+
+	d.eq.Prime(hist)
+	d.filter.Prime(hist)
 }

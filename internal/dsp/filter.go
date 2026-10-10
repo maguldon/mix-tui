@@ -127,3 +127,8 @@ func (f *Filter) Process(in, out Stereo) {
 		out[i] = 0
 	}
 }
+
+// Prime settles the filter's state from the samples immediately before a
+// discontinuity, so resuming playback there is as smooth as uninterrupted
+// playback. See biquad.prime.
+func (f *Filter) Prime(history Stereo) { f.b.prime(history) }

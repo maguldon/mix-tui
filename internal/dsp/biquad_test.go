@@ -127,3 +127,39 @@ func TestFilterIsStableAcrossParameterSweep(t *testing.T) {
 		}
 	}
 }
+
+// Resonance is the hard case for priming; assert convergence directly by
+// comparing a primed filter against one left running.
+func TestFilterPrimeMatchesRunningState(t *testing.T) {
+	params := func(f *Filter) { f.SetParams(2000, 8) }
+
+	tone := Sine(200, 10.0)
+
+	running := NewFilter()
+	params(running)
+	fresh := NewFilter()
+	params(fresh)
+
+	const warm = 8192
+	blk := make(Stereo, 512*2)
+	for off := 0; off < warm; off += 512 {
+		running.Process(tone[off*2:off*2+512*2], blk)
+	}
+
+	// Prime the fresh filter with the 64 frames preceding `warm`.
+	fresh.Prime(tone[(warm-64)*2 : warm*2])
+
+	// The next 64 frames: running continues, fresh starts from primed state.
+	nextBlk := make(Stereo, 64*2)
+	running.Process(tone[warm*2:warm*2+64*2], nextBlk)
+
+	got := make(Stereo, 64*2)
+	fresh.Process(tone[warm*2:warm*2+64*2], got)
+
+	diff := MaxSampleDelta(got)
+	// The filter output for a 200Hz tone through a 2kHz highpass is small; what
+	// matters is that priming does not inject a large transient.
+	if diff > 0.05 {
+		t.Errorf("primed filter differs from running by %v; priming left a transient", diff)
+	}
+}

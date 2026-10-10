@@ -1900,7 +1900,7 @@ git commit -m "feat(engine): N-deck mixer, engine action loop, snapshot, and mix
   func (d *Deck) PopRoll() error
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/engine/loop_test.go`:
 
@@ -2108,12 +2108,12 @@ func maxSlope(freq float64) float64 { return 2 * math.Pi * freq / dsp.SampleRate
 func detectWraps(all dsp.Stereo, rate int, start, end time.Duration) float64
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/engine/ -run Loop -v`
 Expected: FAIL — `undefined: SetLoopBeat`, `undefined: PushRoll`.
 
-- [ ] **Step 3: Implement `internal/engine/loop.go`**
+- [x] **Step 3: Implement `internal/engine/loop.go`**
 
 ```go
 type rollFrame struct {
@@ -2160,22 +2160,24 @@ extending past the track end wraps rather than stopping. Test
 1-beat (or `beats`) loop. `PopRoll` pops and restores via `d.seek`. **On an empty stack,
 return an error and do not touch the playhead.**
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/engine/ -run Loop -v -race`
 Expected: PASS — all loop and roll tests.
 
 **If `TestBeatLoopWrapsAndIsClickFree` fails on discontinuity, the bug is in `seek`
-priming, not in the loop code.** Go back to Task 4's `TestPrimeEliminatesSeekDiscontinuity`
+priming, not in the loop code.** (It was — see the commit message for Task 8: three
+separate defects, the largest being a frame/sample confusion in `Resampler.ProcessFrom`
+that put a discontinuity at EVERY block boundary, not just loop points.) Go back to Task 4's `TestPrimeEliminatesSeekDiscontinuity`
 and fix it there. This is the single most important failure to diagnose correctly, because
 an audible loop seam is otherwise unfixable after the fact.
 
-- [ ] **Step 5: Verify no allocation crept into the looped render path**
+- [x] **Step 5: Verify no allocation crept into the looped render path**
 
 Run: `go test ./internal/engine/ -bench=DeckRender -benchtime=500x -benchmem`
 Expected: still `0 allocs/op` with loops active. The wrap check must not allocate.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/engine/

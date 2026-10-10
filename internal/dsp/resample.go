@@ -168,23 +168,41 @@ func (r *Resampler) ProcessFrom(src Stereo, pos int, dst Stereo) int {
 	}
 	outFrames := dst.Frames()
 
-	// A seek primes the resampler onto a specific position; if the caller asks
-	// for a different one, re-prime so the two cannot disagree.
-	if r.primed && r.primedAt != pos {
-		r.Prime(src, pos, r.HistorySamples())
-	}
+	// Re-prime onto pos on EVERY call.
+	//
+	// ProcessFrom is given a window that begins at the absolute position pos,
+	// so the resampler's running state (rp, compacted buffer) is relative to
+	// whatever window it last saw. Tracking whether that still lines up with
+	// pos across calls is exactly the bug this replaces: the read position and
+	// the caller's position drifted apart, and each block boundary became a
+	// discontinuity. Priming costs one copy of resamplerHalf frames, which is
+	// negligible next to the block, and it makes the absolute position the
+	// single source of truth.
+	r.Prime(src, pos, r.HistorySamples())
 
 	// Feed only what this block can consume.
+	//
+	// pos is a FRAME index; src is interleaved stereo, so it must be scaled by
+	// the channel count to become a sample index. Slicing with the raw frame
+	// index reads from half the requested position in a stereo stream, which
+	// shifted every block by 256 frames at 44.1kHz and put a discontinuity at
+	// every block boundary.
 	need := int(float64(outFrames)*r.ratio) + resamplerHalf + 2
-	start := pos
-	if start < 0 {
-		start = 0
+	firstSample := pos * 2
+	if firstSample < 0 {
+		firstSample = 0
 	}
-	end := start + need*2
-	if end > len(src) {
-		end = len(src)
+	lastSample := firstSample + need*2
+	if lastSample > len(src) {
+		lastSample = len(src)
 	}
-	return r.process(src[start:end], dst, outFrames)
+	if firstSample >= lastSample {
+		for i := range dst {
+			dst[i] = 0
+		}
+		return 0
+	}
+	return r.process(src[firstSample:lastSample], dst, outFrames)
 }
 
 // Process converts src into dst, advancing filter state, and returns the
@@ -217,20 +235,38 @@ func (r *Resampler) process(src, dst Stereo, outFrames int) int {
 
 	// Unity is an exact passthrough: faster, and perfectly transparent, which
 	// is what makes the unity-rate test exact rather than approximate.
+	//
+	// The output is taken from the resampler's own buffer at its read
+	// position rp, NOT from the head of src. By the time this runs, src has
+	// already been pushed onto the buffer, and rp is where playback actually
+	// is. Copying src[0] instead replayed the start of the incoming window
+	// while rp advanced normally, so the two drifted apart by one block every
+	// call and produced a discontinuity at every block boundary.
 	if r.ratio == 1.0 {
-		n := outFrames * 2
-		if n > len(src) {
-			n = len(src)
+		// The incoming window must be on the buffer before rp can index it.
+		r.push(src)
+
+		read := int(r.rp)
+		if read < 0 {
+			read = 0
 		}
-		copy(dst, src[:n])
-		for i := n; i < len(dst); i++ {
+		available := (r.len - read*2) / 2
+		n := outFrames
+		if n > available {
+			n = available
+		}
+		if n < 0 {
+			n = 0
+		}
+		copy(dst[:n*2], r.buf[read*2:read*2+n*2])
+		for i := n * 2; i < len(dst); i++ {
 			dst[i] = 0
 		}
-		r.push(src)
-		r.rp += float64(outFrames)
+		r.rp += float64(n)
 		r.compact()
-		r.consumed += int64(outFrames)
-		return n / 2
+		r.consumed += int64(n)
+		r.primedAt += n
+		return n
 	}
 
 	r.push(src)

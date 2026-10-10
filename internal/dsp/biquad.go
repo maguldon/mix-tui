@@ -129,3 +129,41 @@ func (b *biquad) highpassRBJ(fs, f0, q float64) {
 	b.a1 = a1 / a0
 	b.a2 = a2 / a0
 }
+
+// prime sets the delay line to the state the filter would already be in had
+// it been running through the samples immediately before the current one.
+//
+// Reset zeroes the delay line, which is correct for silence and wrong for a
+// live signal: an EQ or filter resuming from zero state on a signal with
+// energy produces a transient, and that transient is an audible click at
+// every loop point. Running the samples through first settles z1 and z2 to
+// their steady-state values, so the discontinuity is inaudible — the same
+// reasoning behind the resampler's Prime.
+//
+// history must be ordered oldest-first and end immediately before the
+// position that will next be processed.
+func (b *biquad) prime(history Stereo) {
+	frames := len(history) / 2
+	if frames < 2 {
+		return
+	}
+	// Run the whole history through the filter. Discarding all but the last
+	// couple of frames converges far too slowly for a resonant design: the
+	// delay line still holds a transient, and that transient is audible at the
+	// seam. Feeding every frame leaves z1 and z2 at their steady-state values,
+	// which is the entire point.
+	for i := 0; i < frames; i++ {
+		b.process(float64(history[i*2]), float64(history[i*2+1]))
+	}
+}
+
+// BiquadHistorySamples is how many frames of signal Prime consumes to settle a
+// biquad's delay line.
+//
+// Four frames is the minimum that gives the delay line something to work
+// with, but a resonant filter needs considerably more input before its state
+// approaches steady state: priming from four frames leaves a residual an order
+// of magnitude larger than a seek discontinuity budget allows. 64 frames
+// (1.5ms) converges every filter in this package, and seeking is rare enough
+// that the cost does not matter.
+const BiquadHistorySamples = 64

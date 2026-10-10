@@ -279,3 +279,80 @@ func BenchmarkResamplerProcessCold(b *testing.B) {
 		r.Process(stream[at*2:], scratch)
 	}
 }
+
+// ProcessFrom takes an absolute FRAME position and an interleaved stereo
+// source. Slicing the window with the raw frame index reads from half the
+// requested position, shifting every block by 256 frames at 44.1kHz and
+// putting a discontinuity at every block boundary.
+//
+// This test renders consecutive blocks through ProcessFrom and requires the
+// output to be sample-identical to the source. A frame/sample confusion cannot
+// pass it.
+func TestProcessFromIsSampleExactAcrossBlocks(t *testing.T) {
+	const blocks = 64
+	src := Sine(440, 2.0)
+	r := NewResampler(SampleRate, SampleRate)
+	r.SetRatio(1.0)
+
+	out := make(Stereo, 512*2)
+	pos := 0
+	for b := 0; b < blocks; b++ {
+		n := r.ProcessFrom(src, pos, out)
+		if n != 512 {
+			t.Fatalf("block %d: n = %d, want 512", b, n)
+		}
+		for f := 0; f < n; f++ {
+			want := src[(pos+f)*2]
+			if got := out[f*2]; got != want {
+				t.Fatalf("block %d frame %d: got %v, want %v (source frame %d)",
+					b, f, got, want, pos+f)
+			}
+		}
+		pos += n
+	}
+}
+
+// A looping render must not develop a discontinuity at the wrap. The loop is
+// chosen so the tone's period divides it exactly, which makes any step at the
+// wrap attributable to state, not to phase.
+func TestProcessFromLoopWrapIsContinuous(t *testing.T) {
+	// 4 beats at 128 BPM, in frames.
+	loopFrames := float64(4 * 60 * SampleRate / 128)
+	// Choose a frequency whose period divides the loop exactly, so any step at
+	// the wrap is attributable to state rather than to phase.
+	const periods = 825.0
+	freq := periods * SampleRate / loopFrames
+	src := Sine(freq, 10.0)
+
+	r := NewResampler(SampleRate, SampleRate)
+	r.SetRatio(1.0)
+
+	end := int(math.Round(loopFrames))
+	out := make(Stereo, 512*2)
+	acc := make(Stereo, 0, 900*512*2)
+
+	pos := 0.0
+	for i := 0; i < 900; i++ {
+		want := 512
+		if rem := float64(end) - pos; rem > 0 {
+			if limit := int(math.Ceil(rem)); limit < want {
+				want = limit
+			}
+		}
+		n := r.ProcessFrom(src, int(pos), out[:want*2])
+		if n == 0 {
+			break
+		}
+		acc = append(acc, out[:n*2]...)
+		pos += float64(n)
+		if pos >= float64(end) {
+			r.Prime(src, 0, r.HistorySamples())
+			pos = 0
+		}
+	}
+
+	slope := 2 * math.Pi * freq / SampleRate
+	if jump := MaxSampleDelta(acc); jump > slope*1.5 {
+		t.Errorf("loop wrap discontinuity %v exceeds tone slope %v", jump, slope)
+	}
+}
