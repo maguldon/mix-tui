@@ -1317,7 +1317,7 @@ var ErrNoBeatGrid = errors.New("no beatgrid for this track")
 
 **One STFT feeds both.** This is the spec's §4.1 claim and it must hold in the code:
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/analyze/beatgrid_test.go`:
 
@@ -1466,17 +1466,17 @@ func mixSines(seconds float64, freqs []float64) dsp.Stereo {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/analyze/ -v`
 Expected: FAIL — `undefined: AnalyzeBeatGrid`.
 
-- [ ] **Step 3: Add the FFT dependency**
+- [x] **Step 3: Add the FFT dependency** (deviation: `gonum.org/v1/gonum/fft` does not exist in v0.17.0 — the package was split out and is not resolvable. A ~30-line radix-2 transform is used instead, avoiding a dependency for one offline kernel.)
 
 Run: `go get gonum.org/v1/gonum/fft@v0.17.0`
 Expected: `go: added gonum.org/v1/gonum v0.17.0`
 
-- [ ] **Step 4: Implement `internal/analyze/fft.go`**
+- [x] **Step 4: Implement `internal/analyze/fft.go`**
 
 ```go
 package analyze
@@ -1497,7 +1497,7 @@ Window: Hann, `windowLen = 2048`, `hop = 512` at 44100 Hz. This gives ~86 fps of
 and 21.5 Hz bin spacing — fine enough for chroma, coarse enough for onset timing.
 Downmix to mono before the transform.
 
-- [ ] **Step 5: Implement `internal/analyze/beatgrid.go`**
+- [x] **Step 5: Implement `internal/analyze/beatgrid.go`**
 
 Pipeline:
 
@@ -1519,7 +1519,7 @@ Pipeline:
 
 `Beats` are `time.Duration` offsets. Never return `nil` grid for a decodable signal.
 
-- [ ] **Step 6: Implement `internal/analyze/key.go`**
+- [x] **Step 6: Implement `internal/analyze/key.go`**
 
 1. From the **same** `Spectrogram`, build a 12-element chroma vector per frame: map each
    bin to a pitch class via frequency, weight by magnitude, sum over frames with
@@ -1536,7 +1536,7 @@ Implement `camelotToName`/`nameToCamelot` as exact inverses (test `TestCamelotRo
 enumerates all 24 codes). Camelot: B = major, A = minor; number = (pitchClass + 11) mod 12
 + 1 with C=8B.
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [x] **Step 7: Run tests to verify they pass**
 
 Run: `go test ./internal/analyze/ -v -race`
 Expected: PASS — tempo, spacing, confidence, and key detection.
@@ -1545,7 +1545,7 @@ If tempo or key tests fail on detection accuracy, tune the algorithm parameters 
 than loosening the assertions: the tolerances in the tests (2 BPM, exact Camelot codes)
 are the spec's requirement, not arbitrary.
 
-- [ ] **Step 8: Wire BeatGrid onto Deck**
+- [x] **Step 8: Wire BeatGrid onto Deck**
 
 Add to `engine/deck.go`:
 
@@ -1560,7 +1560,7 @@ func (d *Deck) HasBeatGrid() bool
 This introduces an `engine → analyze` import for types only. If that creates an import
 cycle, move `BeatGrid` into a small `internal/analyze/types.go` with no dependencies.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add internal/analyze/ internal/engine/
