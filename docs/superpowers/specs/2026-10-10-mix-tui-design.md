@@ -25,12 +25,16 @@ no mouse and no GUI.
 
 Out of scope for the MVP, deliberately:
 
-- Loops, samplers, effects, recording, and streaming
+- Samplers, effects, recording, and streaming
 - Multi-deck beyond 2 (the data model supports N; the MVP ships 2)
 - Rule-based / smart crates (static lists only — see §6.5)
 - 4-channel device routing (the streams are independent; routing is config — see §12)
 - MIDI clock / DJLink sync to external tables
 - Sysex, program change, and MIDI clock messages (counted and ignored, see §7)
+
+Loops **are** in the MVP (§4.4) — beat-quantised, saved, and loop roll. The work is mostly
+the seek primitive they share with hotcues and sync, so scoping them later would not have
+saved any effort.
 
 ---
 
@@ -81,6 +85,8 @@ internal/
     ring/             lock-free SPSC ring buffer
   engine/
     deck.go           per-deck: position, pitch, EQ, filter, hotcues, beatgrid
+    loop.go           loop state, beat loops, saved loops, loop roll
+    seek.go           playhead seek — primes resampler/filter state (see §4.4)
     mixer.go          N channel strips, crossfader over 2 selected decks, master
     engine.go         owns all state; Apply(Action); Snapshot()
     sync.go           tempo match + beat quantize
@@ -211,6 +217,60 @@ This is the project's single largest technical risk, and it is architected for f
 start. An underrun counter is exported in the Snapshot and surfaced in the TUI debug
 overlay, so a glitch always has exactly one observable cause: a ring went empty.
 
+### 4.4 Loops
+
+Three loop behaviours share one mechanism.
+
+#### 4.4.1 A loop wrap is a seek
+
+This is the framing that makes loops tractable. Playing from `posA`, jumping to `posB`,
+and wrapping a loop all reduce to the same primitive: **advance the read position, with
+correct resampler and filter state at the destination.**
+
+Getting the state right at a discontinuity is the whole problem. The resampler carries
+filter history from the samples immediately *before* the old position; after a jump that
+history describes audio that is no longer adjacent, and resuming on top of it produces an
+audible click. So the deck's playback head exposes a single `seek(target)` that:
+
+1. Reads the resampler's history window back from the decoded buffer *at the destination*.
+2. Runs that window through the filter without emitting output, priming the state.
+3. Resumes emitting from the target sample.
+
+Because `seek` is correct for jumps, hotcues, nudges, and sync corrections alike, loops
+need no seam logic of their own — a loop wrap is `seek(loopStart)` at the moment the read
+head reaches `loopEnd`. **One primitive, correctly implemented, gives loop-seamless
+behaviour for free.** This is why loops belong in the MVP rather than being deferred: the
+hard part is the seek primitive, which the MVP needs regardless.
+
+#### 4.4.2 Beat-quantised loops
+
+Triggered by a rotary encoder (or keys): set a loop of ¼, ½, 1, 2, 4, 8, 16, or 32 beats,
+starting from the next beat boundary and snapped to the beatgrid. Length in **beats**, not
+seconds, so the loop tracks the pitch fader — the musical property that makes a beat loop
+usable while mixing.
+
+Requires an analysed beatgrid. If the deck has none, beat loops are unavailable for it and
+the encoder is inert rather than snapping to a grid that does not exist.
+
+#### 4.4.3 Saved loops
+
+Free in/out points at any position, not quantised to the beat. Set `loop in` and `loop
+out`, save with a slot number, and recall later. Persisted per track alongside hotcues
+(§10), so a loop set on a particular track returns on the next load.
+
+This is the same shape as hotcues (§5) and reuses their slot model and storage.
+
+#### 4.4.4 Loop roll
+
+A **momentary** loop: hold the button and the deck plays a short loop (1 beat by default,
+adjustable); release and it returns to exactly where it was.
+
+Loop roll is the one feature with real state-management risk. Releasing must restore the
+position captured at press, and it must do so whether or not the deck was already looping.
+The deck therefore keeps a small stack: pressing pushes the current play state (position,
+loop state, sync state), and releasing pops it and `seek`s back. If the stack is empty on
+release, the roll is a no-op rather than a jump to zero.
+
 ---
 
 ## 5. Input: the Action Layer
@@ -223,8 +283,11 @@ type Action struct {
     Kind   ActionKind // DeckPitch, DeckEQHigh, HotcueSet, CueAssign, Sync, Zoom, ...
     Target int        // deck index / strip index
     Value  float64    // -1..1 normalized, or 0/1 for toggles
+    Slot   int        // hotcue/loop slot, where the action takes one
 }
 ```
+
+Loop and hotcue actions carry a `Slot`, since both are recalled by number.
 
 ### 5.1 Producers
 
@@ -314,6 +377,37 @@ The mapping directory is watched. On change the table is swapped atomically — 
 restart, no dropped audio. **The config file is the app's extension surface**: adding a
 feature means adding an `ActionKind`, and it becomes mappable for free.
 
+### 5.5 Loop actions
+
+Loops are ordinary Actions, so they work from the encoder, the keyboard, and the TUI
+alike:
+
+| Action | Value | Notes |
+|---|---|---|
+| `LoopBeat` | 0..1 → ¼…32 beats | Relative encoder; most knobs do not reach 32 |
+| `LoopIn` / `LoopOut` | — | Set free loop points at the current position |
+| `LoopSave` | `Slot` | Persist the current loop to a slot |
+| `LoopRecall` | `Slot` | Re-enter a saved loop |
+| `LoopRelease` | — | Exit the loop, continue from the loop end |
+| `LoopRoll` | momentary | 1 beat by default; release restores prior state |
+
+Because `LoopBeat` is a relative encoder control, the loop size is a **MIDI-mappable
+performance control**, not a menu setting — which is how it works on hardware.
+
+### 5.6 Loops and sync
+
+Sync and loops interact, and the interaction needs a stated rule rather than whatever
+falls out of the implementation:
+
+- A loop's length is defined **in beats**, so tempo changes scale it. A 4-beat loop stays
+  4 beats at any pitch. This is what makes beat loops usable while mixing.
+- Sync may adjust the looped deck's pitch to match the master. It must **not** re-quantise
+  or re-lay the loop itself — the loop keeps its beat-length and moves with the pitch.
+- Quantise may nudge the loop *start* to the beatgrid when the loop is created, but never
+  while it is playing. Moving a loop under the playhead would be a seam every bar.
+- A saved (free) loop keeps its **absolute sample positions**. It is anchored to the audio,
+  not to the beatgrid, so it does not move when tempo changes.
+
 ---
 
 ## 6. TUI
@@ -341,8 +435,24 @@ layout — see §6.3.
 
 Waveforms render as **Unicode braille**. Each cell is a 2×4 dot grid, so a 4-row block
 resolves 16 amplitude levels per column pair versus the 8 that block characters (▁▂▃▄▅▆▇█)
-provide. Played audio renders in one color, unplayed in another, with hotcues and
-beatgrid overlaid.
+provide. Played audio renders in one color, unplayed in another, with hotcues, **loop
+regions**, and beatgrid overlaid.
+
+#### 6.2.1 Showing loops on the waveform
+
+An active loop is drawn as a shaded region between its in and out points, with the
+playhead visibly cycling inside it. This matters more than it sounds: **a looping deck
+playing past the track's end would otherwise look like a stall**, and the waveform is the
+only place the user can confirm the loop is doing what they think.
+
+Saved loop slots appear as small numbered markers in the same row as hotcues, so both are
+visible in one glance rather than in separate UI.
+
+#### 6.2.2 Loop state in the transport row
+
+The transport row shows the current loop size when one is active (`LOOP 4`), and the loop
+indicator is lit while looping. The beat-loop encoder position is always visible, so
+turning it has visible effect — an encoder with no readout feels broken.
 
 ### 6.3 Zoom tracking (CDJ-style)
 
@@ -458,6 +568,9 @@ diagnosable rather than mysterious.
 | Library root missing or unreadable | Skip the root, list it as unreachable with the reason, keep scanning the others. One bad path does not empty the library. |
 | Track file deleted since last scan | Drop from the library and remove its cached analysis, hotcues, and crate entries. |
 | Key detection below confidence threshold | Display `?` (undetected). Never display a low-confidence key as though it were certain (§6.5). |
+| Beat loop requested on a deck with no beatgrid | Reject and leave the encoder inert. Snapping to a grid that does not exist would silently produce a loop on the wrong beats. |
+| Loop roll released with no saved state | No-op. Never seek to position zero — a stray release must not move the playhead. |
+| Loop wrap at track end | Wrap to the loop start, not to the track end. A loop near the end of a track is normal and must not fall out of bounds. |
 | Terminal too small for library view (<120 cols) | Show a resize hint naming the required width; do not render truncated columns. Mixer layouts are unaffected and remain usable at their own narrower widths. |
 
 The governing rule: **an error degrades a feature, never the session.**
@@ -494,6 +607,18 @@ possible.
   cached grid, and that renaming does not.
 - **Sort semantics** — asserting that sorting a crate changes the view ordering while
   leaving the crate file byte-identical.
+- **Seek correctness** — the load-bearing primitive for loops (§4.4.1). After a seek
+  mid-signal, assert the output is continuous (no sample-to-sample discontinuity larger
+  than the signal's own maximum slope) and that a steady tone resumes at the expected
+  phase and amplitude. **This is the test that would catch an audible loop seam**, and it
+  is written before any loop code exists.
+- **Loop wrap continuity** — render a looping deck and assert the sample-level
+  discontinuity at the wrap point is within the same bound as elsewhere in the loop.
+- **Beat loop tracks pitch** — assert a 4-beat loop contains exactly 4 detected beats at
+  pitch +8%, 0%, and −8%.
+- **Loop roll restoration** — press and release a roll from various states (idle, playing,
+  already looping, already rolling) and assert the deck returns to exactly its prior
+  position and state, and that a release with an empty stack is a no-op.
 
 ---
 
@@ -508,7 +633,11 @@ possible.
     generic-2deck.yaml
   analyze/             cached beatgrids and detected keys (see §4.1)
   hotcues/             per-track hotcue persistence
+  loops/               per-track saved loop persistence
 ```
+
+Hotcues and saved loops are stored in parallel per-track directories keyed by the same
+path identity, so both are invalidated together when a file is replaced or moved (§4.1).
 
 A repo-local `.devconfig/` provides the same structure for manual testing without
 touching the real configuration.
@@ -595,8 +724,6 @@ the DSP core or the engine boundary.
 
 Noted so the architecture is not accidentally hostile to them:
 
-- **Loops** — a separate feature from hotcues, modelled on Mixxx: loop points with
-  lengths, saved per track, triggered from hotcues.
 - **Effects** — an insert chain per deck. The mixer strip boundary is the natural
   insertion point.
 - **Additional decks** — data model already supports N.
