@@ -15,7 +15,9 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/dsp"
 	"github.com/maguldon/mix-tui/internal/engine"
@@ -65,6 +67,9 @@ func run() error {
 		xf       = flag.Float64("xf", 0, "crossfader position, -1..1")
 		seconds  = flag.Float64("seconds", 4, "duration to render")
 		showStat = flag.Bool("stats", false, "print the final Snapshot")
+		doSync   = flag.Bool("sync", false, "lock deck 1 to deck 0's tempo (analyses both)")
+		bpmA     = flag.Float64("bpm-a", 0, "assume deck 0's track is this BPM")
+		bpmB     = flag.Float64("bpm-b", 0, "assume deck 1's track is this BPM")
 	)
 	flag.Var(&play, "play", "deck index to play (repeatable)")
 	flag.Parse()
@@ -94,6 +99,21 @@ func run() error {
 			return fmt.Errorf("deck %d: %w", deck, err)
 		}
 		eng.Deck(deck).Load(track)
+	}
+
+	// Beatgrids are needed before sync or any loop can be armed. mixrender
+	// trusts -bpm-a/-bpm-b rather than analysing: the tracks are fixtures, and
+	// a full analysis would take seconds per run for no extra signal.
+	if *bpmA > 0 {
+		eng.Deck(0).AttachBeatGrid(syntheticGrid(*bpmA, eng.Deck(0).Duration()))
+	}
+	if *bpmB > 0 {
+		eng.Deck(1).AttachBeatGrid(syntheticGrid(*bpmB, eng.Deck(1).Duration()))
+	}
+	if *doSync {
+		if err := eng.SyncPair(1, 0); err != nil {
+			return fmt.Errorf("-sync needs a beatgrid on both decks (use -bpm-a and -bpm-b): %w", err)
+		}
 	}
 
 	eng.Apply(engine.Action{Kind: engine.MixerCrossfader, Value: *xf})
@@ -184,6 +204,23 @@ func printSnapshot(s engine.Snapshot) {
 			fmt.Printf("          %s - %s\n", d.Artist, d.Title)
 		}
 	}
+}
+
+// syntheticGrid builds a uniform beatgrid of the given tempo covering dur.
+//
+// The tracks rendered by this tool are test fixtures, so a grid is supplied
+// rather than detected: analysis takes seconds per run and would add nothing
+// the fixture's tempo does not already state exactly.
+func syntheticGrid(bpm float64, dur time.Duration) *analyze.BeatGrid {
+	g := &analyze.BeatGrid{BPM: bpm, Confidence: 0.9}
+	if bpm <= 0 || dur <= 0 {
+		return g
+	}
+	per := time.Duration(float64(time.Second) * 60 / bpm)
+	for at := time.Duration(0); at < dur; at += per {
+		g.Beats = append(g.Beats, at)
+	}
+	return g
 }
 
 // wavWriter streams 16-bit PCM stereo WAV.

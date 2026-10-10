@@ -57,6 +57,10 @@ type Deck struct {
 	beatgrid *analyze.BeatGrid
 	loopOn   bool
 
+	// syncedTo is the deck this one is tempo-locked to, or nil. Written and
+	// read on the render goroutine like the rest of the deck's state.
+	syncedTo *Deck
+
 	// loop is the active loop, in source frames. A wrap is a seek.
 	loop      loopCore
 	savedLoop map[int]SavedLoop

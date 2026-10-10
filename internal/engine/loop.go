@@ -353,3 +353,26 @@ func (d *Deck) wrapLoop() {
 		d.seekFrames(d.loop.start)
 	}
 }
+
+// loopBeatSizes are the loop lengths a beat-loop button cycles through. The
+// doubling sequence is what a DJ expects: a 4-beat loop rolls into 8, not
+// into 3.
+var loopBeatSizes = []float64{0.25, 0.5, 1, 2, 4, 8, 16, 32}
+
+// loopBeatsFromNormalized maps a 0..1 knob or button position onto the beat
+// sizes above. The mapping is by index rather than by value, because the
+// sizes double and a linear interpolation between them would make every size
+// unreachable.
+func loopBeatsFromNormalized(v float64) float64 {
+	if math.IsNaN(v) || v <= 0 {
+		return loopBeatSizes[0]
+	}
+	if v >= 1 {
+		return loopBeatSizes[len(loopBeatSizes)-1]
+	}
+	idx := int(v * float64(len(loopBeatSizes)))
+	if idx >= len(loopBeatSizes) {
+		idx = len(loopBeatSizes) - 1
+	}
+	return loopBeatSizes[idx]
+}

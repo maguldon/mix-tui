@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/dsp"
 )
@@ -152,7 +153,76 @@ func (e *Engine) Apply(a Action) {
 		}
 	case MixerCrossfader:
 		e.mixer.xfader = clampUnit(a.Value)
+
+	// Sync, quantize, and nudge are beat-dependent and go through the same
+	// command queue as everything else, so they cannot mutate a deck while
+	// the render goroutine is reading it.
+	// Sync and SyncToggle both engage/disengage on a press. A momentary button
+	// sends a zero Value, so requiring a non-zero Value to engage would make a
+	// plain keypress disable instead — the opposite of what the control means.
+	case Sync:
+		if d.SyncActive() {
+			d.DisableSync()
+		} else {
+			_ = e.SyncPairLocked(a.Target, e.masterForLocked(a.Target))
+		}
+	case SyncToggle:
+		if d.SyncActive() {
+			d.DisableSync()
+		} else {
+			_ = e.SyncPairLocked(a.Target, e.masterForLocked(a.Target))
+		}
+	case Quantize:
+		_ = d.QuantizeToNearestBeat()
+	case NudgeBeats:
+		_ = d.NudgeBeats(a.Value)
+	case LoopBeat:
+		_ = d.SetLoopBeat(loopBeatsFromNormalized(a.Value))
+	case LoopIn:
+		_ = d.SetLoopIn()
+	case LoopOut:
+		_ = d.SetLoopOut()
+	case LoopRelease:
+		d.ReleaseLoop()
 	}
+}
+
+// SyncPair locks slave's tempo to master's. It is the programmatic entry
+// point; the TUI and mixrender both go through it.
+//
+// Both decks must carry an analysed beatgrid. Sync is unavailable without one
+// rather than approximate, because a wrong tempo match is worse than none
+// (spec §5.6).
+func (e *Engine) SyncPair(slave, master int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.SyncPairLocked(slave, master)
+}
+
+// SyncPairLocked is SyncPair with e.mu already held. Callers inside Apply use
+// it to avoid re-entering the mutex.
+func (e *Engine) SyncPairLocked(slave, master int) error {
+	if slave < 0 || slave >= len(e.decks) || master < 0 || master >= len(e.decks) {
+		return analyze.ErrNoBeatGrid
+	}
+	return e.decks[slave].EngageSync(e.decks[master])
+}
+
+// masterForLocked returns the deck a sync action should treat as master, or -1
+// when the slave is the cued deck and no other candidate exists.
+// Callers hold e.mu.
+func (e *Engine) masterForLocked(slave int) int {
+	if m := e.cfg.CuedIndex; m != slave {
+		return m
+	}
+	// The cued deck cannot be its own master. With two decks the other one is
+	// the obvious choice; with more, take the lowest-index alternative.
+	for i := 0; i < len(e.decks); i++ {
+		if i != slave {
+			return i
+		}
+	}
+	return -1
 }
 
 // strip returns mixer strip i, or nil. Callers hold e.mu.

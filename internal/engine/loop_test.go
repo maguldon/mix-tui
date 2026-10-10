@@ -10,9 +10,14 @@ import (
 )
 
 // testGrid builds a synthetic beatgrid of n beats at bpm.
+//
+// A beat is 60/bpm SECONDS: 120 BPM is one beat every 500ms, not every 8.3ms.
+// Dividing a second by the BPM gives beats per second, which is a different
+// quantity and silently makes every beat-related assertion wrong by a factor
+// of 60.
 func testGrid(bpm float64, beats int) *analyze.BeatGrid {
 	g := &analyze.BeatGrid{BPM: bpm, Confidence: 0.9}
-	per := time.Duration(float64(time.Second) / bpm)
+	per := time.Duration(float64(time.Second) * 60 / bpm)
 	for i := 0; i < beats; i++ {
 		g.Beats = append(g.Beats, time.Duration(i)*per)
 	}

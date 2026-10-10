@@ -2217,7 +2217,7 @@ git commit -m "feat(engine): beat-quantised, saved, and roll loops via the seek 
 - Sync may retune a looped deck but never re-lays its loop.
 - Quantize may nudge a loop start on creation but never while the loop is playing.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/engine/sync_test.go`:
 
@@ -2343,12 +2343,12 @@ func TestNudgeBeats(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/engine/ -run 'Sync|Quantize|Delta|Nudge' -v`
 Expected: FAIL — `undefined: EngageSync`.
 
-- [ ] **Step 3: Implement `internal/engine/sync.go`**
+- [x] **Step 3: Implement `internal/engine/sync.go`**
 
 ```go
 // EngageSync matches this deck's tempo to the master. It sets pitch only —
@@ -2380,18 +2380,18 @@ quantize introduces the exact click the seek primitive exists to prevent.
 grid, compute the time to each nearest beat, and return the slave's offset from the
 master's. Clamp to ±half a beat.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/engine/ -run 'Sync|Quantize|Delta|Nudge' -v -race`
 Expected: PASS.
 
-- [ ] **Step 5: Wire sync into `Engine.Apply`**
+- [x] **Step 5: Wire sync into `Engine.Apply`**
 
 Handle `Sync`, `SyncToggle`, and `Quantize` in `Apply`. `Sync` with `Target` = the slave
 deck uses `CuedDeck` (or the other deck) as master. Add `Engine.SyncPair(a, b int) error`
 so `mixrender` can drive it.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/engine/
