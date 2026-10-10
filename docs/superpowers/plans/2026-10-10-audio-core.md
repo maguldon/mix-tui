@@ -1631,7 +1631,7 @@ git commit -m "feat(analyze): shared STFT feeding beatgrid and Camelot key detec
   }
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/engine/engine_test.go`:
 
@@ -1761,12 +1761,12 @@ func renderN(e *Engine, blocks int) dsp.Stereo {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/engine/ -run 'Engine|Snapshot|Action|Crossfader' -v`
 Expected: FAIL — `undefined: New`, `undefined: Config`.
 
-- [ ] **Step 3: Implement `internal/engine/mixer.go`**
+- [x] **Step 3: Implement `internal/engine/mixer.go`**
 
 ```go
 type strip struct {
@@ -1791,13 +1791,13 @@ preallocated in `New`** — `mix` must not allocate.
 
 Add `CrossfaderSet` to `ActionKind`.
 
-- [ ] **Step 4: Implement `internal/engine/snapshot.go`**
+- [x] **Step 4: Implement `internal/engine/snapshot.go`**
 
 `DeckState`, `Snapshot` exactly as specified. `Snapshot()` takes the engine's mutex,
 copies scalar fields, and allocates a fresh `[]DeckState` — it is the one place allowed
 to allocate, since it runs on the UI goroutine, never the audio thread.
 
-- [ ] **Step 5: Implement `internal/engine/engine.go`**
+- [x] **Step 5: Implement `internal/engine/engine.go`**
 
 ```go
 type Engine struct {
@@ -1819,12 +1819,12 @@ a race until you know the intent.
 
 Underrun counters from both rings are folded into `Snapshot.Underruns`.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `go test ./internal/engine/ -v -race -count=2`
 Expected: PASS — including the concurrency test.
 
-- [ ] **Step 7: Implement `cmd/mixrender/main.go`**
+- [x] **Step 7: Implement `cmd/mixrender/main.go`**
 
 ```go
 // mixrender renders an engine state sequence to a WAV file.
@@ -1839,18 +1839,18 @@ Flags: `-out` (required), `-a`/`-b` track paths, `-play` (repeatable deck indice
 `-xf` crossfader -1..1, `-seconds` duration, `-loop-a`/`-loop-b` beat loop sizes,
 `-stats`.
 
-Write with `go-audio/wav` as 16-bit PCM stereo at 44100. Convert float32 → int16 with
+Write 16-bit PCM stereo at 44100 (deviation: a small hand-written WAV writer, matching the hand-written WAV reader in `internal/audio` rather than adding a dependency for one file format). Convert float32 → int16 with
 clamping. This binary is the spec's §9 verification harness: the same engine code that
 would play to a speaker writes to a file.
 
-- [ ] **Step 8: Run the CLI end to end**
+- [x] **Step 8: Run the CLI end to end**
 
 Run: `go run ./cmd/mixrender -out /tmp/mix.wav -a internal/testdata/fixtures/sine440.wav -b internal/testdata/fixtures/sine440.wav -play 0 -play 1 -seconds 4 -stats`
 Expected: writes `/tmp/mix.wav`, prints a snapshot with both decks loaded and playing,
 and `MasterLevel` > 0. Verify with `ls -la /tmp/mix.wav` — a 4-second stereo 44.1k 16-bit
 file is ~705KB.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add internal/engine/ cmd/mixrender/

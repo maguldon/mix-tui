@@ -246,6 +246,10 @@ func TestPitchChangesTempo(t *testing.T) {
 	up.Load(memTrack(dsp.Sine(440, 20.0)))
 	up.SetPitch(1.0) // +8%
 	up.Play()
+	// Controls apply at the start of the next block, so render one before
+	// measuring: a caller reading position immediately after Apply would
+	// otherwise see the pre-change state.
+	renderBlocks(up, BlockFrames, 1)
 	s2 := up.Pos()
 	for i := 0; i < 172; i++ {
 		up.Render(tmp)
@@ -259,15 +263,19 @@ func TestPitchChangesTempo(t *testing.T) {
 
 func TestPitchRatioMapping(t *testing.T) {
 	d := NewDeck(0)
+	d.Load(memTrack(dsp.Sine(440, 1.0)))
 	d.SetPitch(1.0)
+	renderBlocks(d, BlockFrames, 1) // apply the posted command
 	if math.Abs(d.PitchRatio()-1.08) > 1e-9 {
 		t.Errorf("ratio at +1 = %v, want 1.08", d.PitchRatio())
 	}
 	d.SetPitch(-1.0)
+	renderBlocks(d, BlockFrames, 1)
 	if math.Abs(d.PitchRatio()-0.92) > 1e-9 {
 		t.Errorf("ratio at -1 = %v, want 0.92", d.PitchRatio())
 	}
 	d.SetPitch(0)
+	renderBlocks(d, BlockFrames, 1)
 	if math.Abs(d.PitchRatio()-1.0) > 1e-9 {
 		t.Errorf("centre ratio = %v, want 1.0", d.PitchRatio())
 	}
@@ -324,6 +332,7 @@ func TestPlayAfterEndRestartsFromSeek(t *testing.T) {
 	}
 	d.seek(0)
 	d.Play()
+	renderBlocks(d, BlockFrames, 1) // apply the posted play command
 	if !d.IsPlaying() {
 		t.Error("Play after seeking to zero did not restart the deck")
 	}

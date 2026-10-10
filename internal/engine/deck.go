@@ -50,6 +50,16 @@ type Deck struct {
 	// pitch, EQ, and filters keep working (spec §8).
 	beatgrid *analyze.BeatGrid
 	loopOn   bool
+
+	// hotcues holds exact fractional frame positions, parallel to pos, so a
+	// hotcue jump lands with the same precision as any other seek.
+	hotcues   [numHotcues]float64
+	hotcueSet [numHotcues]bool
+
+	// pending carries control changes from Apply to the render goroutine. See
+	// the type comment: a Deck has exactly one writer (Render) and one reader
+	// (Apply) of audio state, which is what makes the audio path lock-free.
+	pending commandQueue
 }
 
 // NewDeck returns a stopped, empty deck.
@@ -117,6 +127,11 @@ func (d *Deck) HasBeatGrid() bool {
 
 // Play starts or resumes the deck.
 func (d *Deck) Play() {
+	d.post(command{kind: cmdPlay})
+}
+
+// play applies a play command on the render goroutine.
+func (d *Deck) play() {
 	if d.track == nil {
 		return
 	}
@@ -124,13 +139,21 @@ func (d *Deck) Play() {
 }
 
 // Stop halts the deck, leaving the playhead where it is.
-func (d *Deck) Stop() { d.playing = false }
+func (d *Deck) Stop() { d.post(command{kind: cmdStop}) }
+
+// stop applies a stop command on the render goroutine.
+func (d *Deck) stop() { d.playing = false }
 
 // SetPitch sets the pitch fader from a normalized value in [-1, 1], where
 // 1.0 is +PitchRange. Out-of-range and NaN inputs are clamped, because a MIDI
 // knob or a config file can send anything and a deck running at 3x speed is
 // not a defensible failure.
 func (d *Deck) SetPitch(normalized float64) {
+	d.post(command{kind: cmdPitch, value: normalized})
+}
+
+// setPitch applies a pitch change on the render goroutine.
+func (d *Deck) setPitch(normalized float64) {
 	d.pitchNorm = dsp.ClampNormalized(normalized)
 	d.resampler.SetRatio(1 + d.pitchNorm*PitchRange)
 }
@@ -154,13 +177,114 @@ func RatioToNormalized(ratio float64) float64 {
 }
 
 // SetEQBand sets one EQ band's linear gain. Band: 0=low 1=mid 2=high.
-func (d *Deck) SetEQBand(band int, gain float64) { d.eq.SetBand(band, gain) }
+// SetEQBand sets one EQ band's linear gain. Band: 0=low 1=mid 2=high.
+//
+// It posts rather than mutating: the render goroutine owns the filter state.
+func (d *Deck) SetEQBand(band int, gain float64) {
+	switch band {
+	case 0:
+		d.post(command{kind: cmdEQLow, value: gain})
+	case 1:
+		d.post(command{kind: cmdEQMid, value: gain})
+	case 2:
+		d.post(command{kind: cmdEQHigh, value: gain})
+	}
+}
 
 // SetFilter sets the DJ filter. cutoffHz is clamped to a usable range.
 func (d *Deck) SetFilter(highpass bool, cutoffHz, resonance float64) {
-	d.filter.SetKind(highpass)
+	if highpass {
+		d.SetFilterKind(true)
+	} else {
+		d.SetFilterKind(false)
+	}
 	d.filter.SetParams(cutoffHz, resonance)
 }
+
+// FilterHighpass reports whether the filter is sweeping highs (true) or lows.
+func (d *Deck) FilterHighpass() bool { return d.filter.IsHighpass() }
+
+// SetFilterKind selects highpass or lowpass.
+func (d *Deck) SetFilterKind(highpass bool) {
+	v := -1.0
+	if highpass {
+		v = 1
+	}
+	d.post(command{kind: cmdFilterKind, value: v})
+}
+
+// SetFilterResonance sets filter resonance from a normalized 0..1 value.
+func (d *Deck) SetFilterResonance(normalized float64) {
+	d.post(command{kind: cmdFilterReso, value: normalized})
+}
+
+// SetFilterCutoff sets the cutoff from a normalized 0..1 knob position.
+func (d *Deck) SetFilterCutoff(normalized float64) {
+	d.post(command{kind: cmdFilterCutoff, value: normalized})
+}
+
+// FilterCutoff returns the current cutoff in Hz.
+func (d *Deck) FilterCutoff() float64 { return d.filter.Cutoff() }
+
+// Track returns the loaded track, or nil.
+func (d *Deck) Track() *audio.Track { return d.track }
+
+// SetHotcue stores the current playhead position in a slot.
+//
+// Assigning an occupied slot overwrites it: on a real deck, pressing the
+// assign button on a lit cue re-cues it rather than doing nothing.
+func (d *Deck) SetHotcue(slot int) {
+	d.post(command{kind: cmdHotcueSet, slot: slot})
+}
+
+// setHotcue applies a hotcue assignment on the render goroutine.
+func (d *Deck) setHotcue(slot int) {
+	if slot < 0 || slot >= numHotcues {
+		return
+	}
+	d.hotcues[slot] = d.pos
+	d.hotcueSet[slot] = true
+}
+
+// JumpToHotcue seeks to a hotcue. An unassigned slot is a no-op: hitting a
+// cue that was never set must not move the playhead somewhere arbitrary.
+func (d *Deck) JumpToHotcue(slot int) {
+	d.post(command{kind: cmdHotcueJump, slot: slot})
+}
+
+// jumpToHotcue applies a hotcue jump on the render goroutine.
+func (d *Deck) jumpToHotcue(slot int) {
+	if slot < 0 || slot >= numHotcues || !d.hotcueSet[slot] {
+		return
+	}
+	d.seekFrames(d.hotcues[slot])
+	d.playing = true
+}
+
+// DeleteHotcue clears a slot.
+func (d *Deck) DeleteHotcue(slot int) {
+	d.post(command{kind: cmdHotcueDelete, slot: slot})
+}
+
+// deleteHotcue clears a slot on the render goroutine.
+func (d *Deck) deleteHotcue(slot int) {
+	if slot < 0 || slot >= numHotcues {
+		return
+	}
+	d.hotcues[slot] = 0
+	d.hotcueSet[slot] = false
+}
+
+// Hotcue reports whether a slot holds a cue and where it points.
+func (d *Deck) Hotcue(slot int) (time.Duration, bool) {
+	if slot < 0 || slot >= numHotcues || !d.hotcueSet[slot] {
+		return 0, false
+	}
+	return time.Duration(d.hotcues[slot] / float64(dsp.SampleRate) * float64(time.Second)), true
+}
+
+// numHotcues is the number of hotcue slots per deck, matching a CDJ.
+const numHotcues = 8
 
 // seek moves the playhead with correct resampler and filter state at the
 // destination.
@@ -223,6 +347,29 @@ func (d *Deck) seekFrames(frame float64) {
 // exposing it as a user action would bypass the modifier and mapping layers.
 func (d *Deck) Seek(target time.Duration) { d.seek(target) }
 
+// SeekNormalized moves the playhead to a normalized 0..1 position of the
+// track.
+//
+// Values outside 0..1 and NaN are clamped rather than wrapping: a scrub past
+// the end of a track should land at the end, not at an undefined frame.
+func (d *Deck) SeekNormalized(normalized float64) {
+	d.post(command{kind: cmdSeekNorm, value: normalized})
+}
+
+// seekNormalized applies a normalized seek on the render goroutine.
+func (d *Deck) seekNormalized(normalized float64) {
+	if d.track == nil || math.IsNaN(normalized) {
+		return
+	}
+	if normalized < 0 {
+		normalized = 0
+	}
+	if normalized > 1 {
+		normalized = 1
+	}
+	d.seek(time.Duration(float64(d.Duration()) * normalized))
+}
+
 // Render produces audio into out, returning the number of stereo frames
 // actually produced.
 //
@@ -232,7 +379,19 @@ func (d *Deck) Seek(target time.Duration) { d.seek(target) }
 // treating the unwritten remainder as audio inserts a discontinuity
 // indistinguishable from a seek seam.
 func (d *Deck) Render(out dsp.Stereo) int {
-	if d.track == nil || !d.playing || len(out) == 0 {
+	if d.track == nil || len(out) == 0 {
+		for i := range out {
+			out[i] = 0
+		}
+		return 0
+	}
+
+	// Drain posted commands BEFORE the playing check. A stopped deck must
+	// still process its queue: otherwise the play command that would start it
+	// sits unread behind the early return, and the deck can never start.
+	d.drainCommands()
+
+	if !d.playing {
 		for i := range out {
 			out[i] = 0
 		}

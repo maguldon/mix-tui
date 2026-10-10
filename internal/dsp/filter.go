@@ -69,6 +69,46 @@ func (f *Filter) update() {
 // Cutoff returns the clamped cutoff in Hz.
 func (f *Filter) Cutoff() float64 { return f.cutoff }
 
+// IsHighpass reports whether the filter is sweeping highs (true) or lows.
+func (f *Filter) IsHighpass() bool { return f.highpass }
+
+// Resonance returns the current Q.
+func (f *Filter) Resonance() float64 { return f.q }
+
+// SetResonance sets Q from a normalized 0..1 knob position, spanning the
+// usable range from Butterworth to a resonant peak. Values outside 0..1 and
+// NaN are clamped: a MIDI knob can send anything, and a self-oscillating
+// filter on a PA is not a defensible failure.
+func (f *Filter) SetResonance(normalized float64) {
+	if math.IsNaN(normalized) {
+		normalized = 0
+	}
+	if normalized < 0 {
+		normalized = 0
+	}
+	if normalized > 1 {
+		normalized = 1
+	}
+	f.SetParams(f.cutoff, minQ+(maxQ-minQ)*normalized)
+}
+
+// SetCutoffNormalized sets the cutoff from a normalized 0..1 knob position,
+// sweeping exponentially from the minimum to the maximum. A linear sweep
+// would crowd almost the entire usable range into the last few percent of
+// knob travel, because pitch is logarithmic.
+func (f *Filter) SetCutoffNormalized(normalized float64) {
+	if math.IsNaN(normalized) {
+		normalized = 1
+	}
+	if normalized < 0 {
+		normalized = 0
+	}
+	if normalized > 1 {
+		normalized = 1
+	}
+	f.SetParams(minCutoffHz*math.Pow(maxCutoffHz/minCutoffHz, normalized), f.q)
+}
+
 // Reset clears filter state.
 func (f *Filter) Reset() { f.b.reset() }
 
