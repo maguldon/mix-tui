@@ -39,6 +39,15 @@ type Resampler struct {
 	// it keeps math.Sin out of the inner loop, which is what makes the
 	// realtime budget achievable without cgo.
 	table [resamplerPhases][resamplerTaps]float32
+
+	// primed records that Prime set the read position explicitly, and
+	// primedAt is the source frame it was primed to. ProcessFrom uses these to
+	// re-prime when a caller jumps somewhere else, so the resampler and the
+	// caller can never silently disagree about where playback is.
+	primed   bool
+	primedAt int
+	// consumed is the total source frames consumed, for diagnostics.
+	consumed int64
 }
 
 // NewResampler returns a resampler converting between inRate and outRate.
@@ -100,6 +109,9 @@ func (r *Resampler) Reset() {
 	}
 	r.len = 0
 	r.rp = 0
+	r.primed = false
+	r.primedAt = 0
+	r.consumed = 0
 }
 
 // HistorySamples is how many frames of context Prime must load for the filter
@@ -137,6 +149,42 @@ func (r *Resampler) Prime(stream Stereo, pos int, historySamples int) {
 	// the convolution treats as a zero-padded history: correct and silent.
 	r.len = have * 2
 	r.rp = float64(have)
+	r.primed = true
+	r.primedAt = pos
+	r.consumed = int64(pos)
+}
+
+// ProcessFrom converts src into dst starting at absolute source frame pos,
+// advancing filter state, and returns the number of stereo frames produced.
+//
+// It exists so a caller with a large source buffer (a whole decoded track)
+// does not have to slice and re-slice it every block. Passing only the
+// relevant window keeps the cost proportional to the block rather than to the
+// track length, and passing the absolute position keeps the resampler and the
+// caller from drifting apart.
+func (r *Resampler) ProcessFrom(src Stereo, pos int, dst Stereo) int {
+	if len(dst) == 0 {
+		return 0
+	}
+	outFrames := dst.Frames()
+
+	// A seek primes the resampler onto a specific position; if the caller asks
+	// for a different one, re-prime so the two cannot disagree.
+	if r.primed && r.primedAt != pos {
+		r.Prime(src, pos, r.HistorySamples())
+	}
+
+	// Feed only what this block can consume.
+	need := int(float64(outFrames)*r.ratio) + resamplerHalf + 2
+	start := pos
+	if start < 0 {
+		start = 0
+	}
+	end := start + need*2
+	if end > len(src) {
+		end = len(src)
+	}
+	return r.process(src[start:end], dst, outFrames)
 }
 
 // Process converts src into dst, advancing filter state, and returns the
@@ -151,10 +199,21 @@ func (r *Resampler) Prime(stream Stereo, pos int, historySamples int) {
 //
 // It never allocates once warm and never blocks.
 func (r *Resampler) Process(src, dst Stereo) int {
+	return r.process(src, dst, dst.Frames())
+}
+
+// process is the shared body. src is a contiguous window the caller guarantees
+// begins at the resampler's current read position.
+func (r *Resampler) process(src, dst Stereo, outFrames int) int {
 	if len(dst) == 0 {
 		return 0
 	}
-	outFrames := dst.Frames()
+	if len(src) == 0 {
+		for i := range dst {
+			dst[i] = 0
+		}
+		return 0
+	}
 
 	// Unity is an exact passthrough: faster, and perfectly transparent, which
 	// is what makes the unity-rate test exact rather than approximate.
@@ -170,6 +229,7 @@ func (r *Resampler) Process(src, dst Stereo) int {
 		r.push(src)
 		r.rp += float64(outFrames)
 		r.compact()
+		r.consumed += int64(outFrames)
 		return n / 2
 	}
 
@@ -218,6 +278,7 @@ func (r *Resampler) Process(src, dst Stereo) int {
 		dst[i] = 0
 	}
 	r.compact()
+	r.consumed += int64(float64(written) * step)
 	return written
 }
 

@@ -5,27 +5,6 @@ import (
 	"testing"
 )
 
-// Sine returns a stereo sine tone at freq Hz lasting seconds, full scale.
-func Sine(freq, seconds float64) Stereo {
-	n := int(seconds * SampleRate)
-	out := make(Stereo, n*2)
-	for i := 0; i < n; i++ {
-		v := float32(0.5 * math.Sin(2*math.Pi*freq*float64(i)/SampleRate))
-		out[i*2], out[i*2+1] = v, v
-	}
-	return out
-}
-
-// DC returns a stereo constant signal lasting seconds.
-func DC(amplitude, seconds float64) Stereo {
-	n := int(seconds * SampleRate)
-	out := make(Stereo, n*2)
-	for i := range out {
-		out[i] = float32(amplitude)
-	}
-	return out
-}
-
 func TestStereoFramesAndRMS(t *testing.T) {
 	s := Stereo{1, -1, 1, -1} // 2 frames, full scale
 	if got := s.Frames(); got != 2 {
