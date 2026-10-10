@@ -168,6 +168,11 @@ beatgrid — a failure that surfaces as mysteriously bad sync, long after the ca
 
 ### 4.2 Realtime path (per 512-frame block, ~11.6ms at 44.1kHz)
 
+The block size is fixed at 512 frames; the sample rate is whatever the device runs at
+(typically 44100 or 48000), negotiated once at startup. Block duration varies with the
+rate — 10.7ms at 48000 — but the buffer count and ring depth are expressed in frames, so
+the code is rate-agnostic.
+
 ```
                          ┌─────────────────────────────────────────┐
                          │  per deck, in DSP order                 │
