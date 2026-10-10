@@ -143,7 +143,7 @@ func TestCrossfadeHandlesEmpty(t *testing.T) {
 }
 
 func TestLimiterPreventsClipping(t *testing.T) {
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	hot := make(Stereo, 4410*2)
 	for i := range hot {
 		hot[i] = 0.99 // constant near-full-scale
@@ -155,7 +155,7 @@ func TestLimiterPreventsClipping(t *testing.T) {
 }
 
 func TestLimiterLeavesQuietSignalAlone(t *testing.T) {
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	quiet := Sine(440, 0.1)
 	in := quiet.RMS()
 	l.Process(quiet)
@@ -165,7 +165,7 @@ func TestLimiterLeavesQuietSignalAlone(t *testing.T) {
 }
 
 func TestLimiterCeilingIsNeverExceeded(t *testing.T) {
-	l := NewLimiter(0.9, 0.5)
+	l := NewLimiter(SampleRate, 0.9, 0.5)
 	// a signal far above the ceiling must be brought under it
 	hot := Sine(440, 0.3)
 	for i := range hot {
@@ -178,7 +178,7 @@ func TestLimiterCeilingIsNeverExceeded(t *testing.T) {
 }
 
 func TestLimiterNoNaNOnSilence(t *testing.T) {
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	s := make(Stereo, 4410)
 	l.Process(s)
 	if s.Peak() != 0 {
@@ -192,7 +192,7 @@ func TestLimiterNoNaNOnSilence(t *testing.T) {
 func TestLimiterRecoversAfterTransient(t *testing.T) {
 	// After a loud burst, the limiter must release so quiet material is not
 	// left attenuated.
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	burst := make(Stereo, 4410)
 	for i := range burst {
 		burst[i] = 0.99
@@ -207,7 +207,7 @@ func TestLimiterRecoversAfterTransient(t *testing.T) {
 }
 
 func TestLimiterReset(t *testing.T) {
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	hot := make(Stereo, 4410)
 	for i := range hot {
 		hot[i] = 0.99
@@ -223,14 +223,14 @@ func TestLimiterReset(t *testing.T) {
 }
 
 func TestLimiterHandlesEmpty(t *testing.T) {
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	l.Process(nil) // must not panic
 }
 
 func BenchmarkLimiterProcess(b *testing.B) {
 	const block = 512
 	in := Sine(1000, 2.0)
-	l := NewLimiter(0.8, 0.95)
+	l := NewLimiter(SampleRate, 0.8, 0.95)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

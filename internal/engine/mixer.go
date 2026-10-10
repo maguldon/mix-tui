@@ -54,13 +54,16 @@ type Mixer struct {
 //
 // blockFrames must be positive: every buffer below is sized from it, and a
 // zero would silently produce a mixer that renders nothing.
-func NewMixer(decks []*Deck, blockFrames int) *Mixer {
+func NewMixer(decks []*Deck, blockFrames, rate int) *Mixer {
 	if blockFrames < 1 {
 		blockFrames = BlockFrames
 	}
+	if rate <= 0 {
+		rate = dsp.SampleRate
+	}
 	m := &Mixer{
 		strips:     make([]*strip, len(decks)),
-		limiter:    dsp.NewLimiter(1.0, 1.0),
+		limiter:    dsp.NewLimiter(rate, 1.0, 1.0),
 		master:     make(dsp.Stereo, blockFrames*2),
 		cue:        make(dsp.Stereo, blockFrames*2),
 		cuedIndex:  0,

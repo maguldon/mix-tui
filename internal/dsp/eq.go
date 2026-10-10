@@ -22,11 +22,18 @@ const (
 type EQ struct {
 	bands [3]biquad
 	gains [3]float64
+	// rate designs the biquad coefficients. It is per-EQ rather than a package
+	// constant because the device rate is negotiated at startup and spec §4.2
+	// requires the chain to be rate-agnostic.
+	rate int
 }
 
 // NewEQ returns a flat EQ.
-func NewEQ() *EQ {
-	e := &EQ{}
+func NewEQ(rate int) *EQ {
+	if rate <= 0 {
+		rate = SampleRate
+	}
+	e := &EQ{rate: rate}
 	for i := range e.gains {
 		e.gains[i] = 1.0
 	}
@@ -58,9 +65,9 @@ func (e *EQ) Gain(band int) float64 {
 }
 
 func (e *EQ) update() {
-	e.bands[EQLow].peakingRBJ(SampleRate, eqLowHz, eqQ, e.gains[EQLow])
-	e.bands[EQMid].peakingRBJ(SampleRate, eqMidHz, eqQ, e.gains[EQMid])
-	e.bands[EQHigh].peakingRBJ(SampleRate, eqHighHz, eqQ, e.gains[EQHigh])
+	e.bands[EQLow].peakingRBJ(float64(e.rate), eqLowHz, eqQ, e.gains[EQLow])
+	e.bands[EQMid].peakingRBJ(float64(e.rate), eqMidHz, eqQ, e.gains[EQMid])
+	e.bands[EQHigh].peakingRBJ(float64(e.rate), eqHighHz, eqQ, e.gains[EQHigh])
 }
 
 // Reset clears filter state, discarding the history of a previous position.

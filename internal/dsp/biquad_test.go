@@ -89,7 +89,7 @@ func TestBiquadIsLinear(t *testing.T) {
 }
 
 func TestEQIsStableAtExtremeSettings(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(EQLow, 10.0)
 	eq.SetBand(EQMid, 0.01)
 	eq.SetBand(EQHigh, 10.0)
@@ -110,7 +110,7 @@ func TestFilterIsStableAcrossParameterSweep(t *testing.T) {
 	for _, hp := range []bool{false, true} {
 		for _, cutoff := range []float64{20, 100, 500, 2000, 8000, 20000} {
 			for _, q := range []float64{0.707, 1.0, 2.0, 5.0, 20.0} {
-				f := NewFilter()
+				f := NewFilter(SampleRate)
 				f.SetKind(hp)
 				f.SetParams(cutoff, q)
 				in := Sine(1000, 0.2)
@@ -135,9 +135,9 @@ func TestFilterPrimeMatchesRunningState(t *testing.T) {
 
 	tone := Sine(200, 10.0)
 
-	running := NewFilter()
+	running := NewFilter(SampleRate)
 	params(running)
-	fresh := NewFilter()
+	fresh := NewFilter(SampleRate)
 	params(fresh)
 
 	const warm = 8192

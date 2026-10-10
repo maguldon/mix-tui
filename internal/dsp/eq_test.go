@@ -6,7 +6,7 @@ import (
 )
 
 func TestEQUnityIsTransparent(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	in := Sine(1000, 0.1)
 	out := make(Stereo, len(in))
 	eq.Process(in, out)
@@ -18,7 +18,7 @@ func TestEQUnityIsTransparent(t *testing.T) {
 func TestEQHighBoostRaisesHighFrequency(t *testing.T) {
 	low := Sine(200, 0.2)
 	high := Sine(5000, 0.2)
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(2, 4.0) // high band +12dB
 	lo := make(Stereo, len(low))
 	eq.Process(low, lo)
@@ -34,7 +34,7 @@ func TestEQHighBoostRaisesHighFrequency(t *testing.T) {
 func TestEQHighBoostIsExactAtBandCentre(t *testing.T) {
 	// At its centre frequency a peaking EQ delivers exactly the requested
 	// gain. This is what makes the knob usable: +12dB means +12dB.
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(2, 4.0) // +12dB on the 4kHz band
 	in := Sine(4000, 0.2)
 	out := make(Stereo, len(in))
@@ -48,7 +48,7 @@ func TestEQHighBoostIsExactAtBandCentre(t *testing.T) {
 func TestEQOffCentreBoostIsTapered(t *testing.T) {
 	// Away from the centre the boost tapers, so neighbouring bands are not
 	// lifted as much as the band itself.
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(2, 4.0)
 	centre := Sine(4000, 0.2)
 	off := Sine(1000, 0.2)
@@ -65,7 +65,7 @@ func TestEQOffCentreBoostIsTapered(t *testing.T) {
 
 func TestEQLowCutAttenuatesLowFrequency(t *testing.T) {
 	low := Sine(100, 0.2)
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(0, 0.01) // low band near-silent (-40dB at 250Hz)
 	out := make(Stereo, len(low))
 	eq.Process(low, out)
@@ -79,7 +79,7 @@ func TestEQLowCutAttenuatesLowFrequency(t *testing.T) {
 func TestEQMidBoostTargetsMid(t *testing.T) {
 	mid := Sine(1000, 0.2)
 	side := Sine(5000, 0.2)
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(1, 4.0)
 	m := make(Stereo, len(mid))
 	eq.Process(mid, m)
@@ -91,7 +91,7 @@ func TestEQMidBoostTargetsMid(t *testing.T) {
 }
 
 func TestEQClampsAbsurdGain(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(0, 1e6)
 	eq.SetBand(1, -1e6)
 	eq.SetBand(2, 0)
@@ -104,13 +104,13 @@ func TestEQClampsAbsurdGain(t *testing.T) {
 }
 
 func TestEQRejectsOutOfRangeBand(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(7, 2.0) // must not panic
 	eq.SetBand(-1, 2.0)
 }
 
 func TestEQAliasedInPlace(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(1, 2.0)
 	s := Sine(1000, 0.1)
 	eq.Process(s, s) // must not corrupt
@@ -120,7 +120,7 @@ func TestEQAliasedInPlace(t *testing.T) {
 }
 
 func TestEQResetRestoresFlat(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(2, 4.0)
 	warm := Sine(5000, 0.05)
 	buf := make(Stereo, len(warm))
@@ -138,7 +138,7 @@ func BenchmarkEQProcess(b *testing.B) {
 	const block = 512
 	in := Sine(1000, 2.0)
 	out := make(Stereo, block*2)
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.SetBand(EQLow, 0.5)
 	eq.SetBand(EQMid, 1.5)
 	eq.SetBand(EQHigh, 3.0)
@@ -150,7 +150,7 @@ func BenchmarkEQProcess(b *testing.B) {
 }
 
 func TestEQHandlesEmptyBuffers(t *testing.T) {
-	eq := NewEQ()
+	eq := NewEQ(SampleRate)
 	eq.Process(nil, nil) // must not panic
 	out := make(Stereo, 512)
 	eq.Process(nil, out) // no input, output should be silent

@@ -20,7 +20,7 @@ type Limiter struct {
 
 // NewLimiter returns a limiter with the given threshold and ceiling. Both are
 // linear peak values; ceiling must be below 1.0 to be meaningful.
-func NewLimiter(threshold, ceiling float64) *Limiter {
+func NewLimiter(rate int, threshold, ceiling float64) *Limiter {
 	if math.IsNaN(threshold) || threshold <= 0 {
 		threshold = 1.0
 	}
@@ -32,7 +32,7 @@ func NewLimiter(threshold, ceiling float64) *Limiter {
 	if ceiling > threshold {
 		ceiling = threshold
 	}
-	releaseFrames := float64(SampleRate) * limiterReleaseMs / 1000
+	releaseFrames := float64(rate) * limiterReleaseMs / 1000
 	return &Limiter{
 		threshold: threshold,
 		ceiling:   ceiling,

@@ -22,12 +22,17 @@ type Filter struct {
 	highpass bool
 	cutoff   float64
 	q        float64
+	// rate designs the biquad coefficients; see EQ.rate.
+	rate int
 }
 
 // NewFilter returns a filter with its band wide open (cutoff at Nyquist, Q at
 // minimum), so a fresh deck passes everything until the knob is turned.
-func NewFilter() *Filter {
-	f := &Filter{cutoff: maxCutoffHz, q: 0.707}
+func NewFilter(rate int) *Filter {
+	if rate <= 0 {
+		rate = SampleRate
+	}
+	f := &Filter{rate: rate, cutoff: maxCutoffHz, q: 0.707}
 	f.update()
 	return f
 }
@@ -51,7 +56,7 @@ func (f *Filter) SetParams(cutoffHz, resonance float64) {
 	}
 	// Keep the cutoff below Nyquist with headroom; a filter tuned at or above
 	// Nyquist is degenerate.
-	nyq := float64(SampleRate) / 2
+	nyq := float64(f.rate) / 2
 	hi := math.Min(maxCutoffHz, nyq*0.99)
 	f.cutoff = math.Max(minCutoffHz, math.Min(hi, cutoffHz))
 	f.q = math.Max(minQ, math.Min(maxQ, resonance))
@@ -60,9 +65,9 @@ func (f *Filter) SetParams(cutoffHz, resonance float64) {
 
 func (f *Filter) update() {
 	if f.highpass {
-		f.b.highpassRBJ(SampleRate, f.cutoff, f.q)
+		f.b.highpassRBJ(float64(f.rate), f.cutoff, f.q)
 	} else {
-		f.b.lowpassRBJ(SampleRate, f.cutoff, f.q)
+		f.b.lowpassRBJ(float64(f.rate), f.cutoff, f.q)
 	}
 }
 

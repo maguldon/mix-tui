@@ -74,9 +74,9 @@ func New(cfg Config) *Engine {
 	e := &Engine{cfg: cfg}
 	e.decks = make([]*Deck, cfg.DeckCount)
 	for i := range e.decks {
-		e.decks[i] = NewDeck(i)
+		e.decks[i] = NewDeckAtRate(i, cfg.SampleRate)
 	}
-	e.mixer = NewMixer(e.decks, cfg.BlockFrames)
+	e.mixer = NewMixer(e.decks, cfg.BlockFrames, cfg.SampleRate)
 	e.mixer.SetCuedIndex(cfg.CuedIndex)
 	e.scratchMain = make(dsp.Stereo, cfg.BlockFrames*2)
 	e.scratchCue = make(dsp.Stereo, cfg.BlockFrames*2)

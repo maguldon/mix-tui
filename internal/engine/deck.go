@@ -29,7 +29,11 @@ const BlockFrames = 512
 
 // Deck is one playback head with its own pitch, EQ, and filter.
 type Deck struct {
-	index   int
+	index int
+	// rate is the engine's negotiated sample rate. Positions are in source
+	// frames, so every conversion to or from a duration divides by this rather
+	// than by a package constant (spec §4.2: the code is rate-agnostic).
+	rate    int
 	track   *audio.Track
 	pos     float64 // fractional source sample position
 	playing bool
@@ -77,18 +81,25 @@ type Deck struct {
 	pending commandQueue
 }
 
-// NewDeck returns a stopped, empty deck.
-func NewDeck(index int) *Deck {
+// NewDeck returns a stopped, empty deck at the default sample rate.
+func NewDeck(index int) *Deck { return NewDeckAtRate(index, dsp.SampleRate) }
+
+// NewDeckAtRate returns a stopped, empty deck rendering at rate.
+func NewDeckAtRate(index, rate int) *Deck {
+	if rate <= 0 {
+		rate = dsp.SampleRate
+	}
 	d := &Deck{
+		rate:  rate,
 		index: index,
 		// Initialised eagerly: SaveLoop and PushRoll must never write to a nil
 		// map or slice, both of which panic rather than fail cleanly.
 		savedLoop:       make(map[int]SavedLoop),
 		rollStack:       make([]rollFrame, 0, 8),
-		resampler:       dsp.NewResampler(dsp.SampleRate, dsp.SampleRate),
-		eq:              dsp.NewEQ(),
-		filter:          dsp.NewFilter(),
-		settleResampler: dsp.NewResampler(dsp.SampleRate, dsp.SampleRate),
+		resampler:       dsp.NewResampler(rate, rate),
+		eq:              dsp.NewEQ(rate),
+		filter:          dsp.NewFilter(rate),
+		settleResampler: dsp.NewResampler(rate, rate),
 		primeBuf:        make(dsp.Stereo, dsp.BiquadHistorySamples*2),
 		inBuf:           make(dsp.Stereo, BlockFrames*2),
 		outBuf:          make(dsp.Stereo, BlockFrames*2),
@@ -109,6 +120,9 @@ func (d *Deck) Load(t *audio.Track) {
 // Index returns the deck's index.
 func (d *Deck) Index() int { return d.index }
 
+// SampleRate returns the rate this deck renders at.
+func (d *Deck) SampleRate() int { return d.rate }
+
 // HasTrack reports whether a track is loaded.
 func (d *Deck) HasTrack() bool { return d.track != nil }
 
@@ -125,7 +139,7 @@ func (d *Deck) Duration() time.Duration {
 
 // Pos returns the current playhead position.
 func (d *Deck) Pos() time.Duration {
-	return time.Duration(d.pos / float64(dsp.SampleRate) * float64(time.Second))
+	return time.Duration(d.pos / float64(d.rate) * float64(time.Second))
 }
 
 // PosFrames returns the playhead as an exact fractional sample frame, which
@@ -301,7 +315,7 @@ func (d *Deck) Hotcue(slot int) (time.Duration, bool) {
 	if slot < 0 || slot >= numHotcues || !d.hotcueSet[slot] {
 		return 0, false
 	}
-	return time.Duration(d.hotcues[slot] / float64(dsp.SampleRate) * float64(time.Second)), true
+	return time.Duration(d.hotcues[slot] / float64(d.rate) * float64(time.Second)), true
 }
 
 // numHotcues is the number of hotcue slots per deck, matching a CDJ.
@@ -333,7 +347,7 @@ func (d *Deck) seek(target time.Duration) {
 
 // durationToFrames converts a position to a whole sample frame.
 func (d *Deck) durationToFrames(t time.Duration) float64 {
-	return float64(t) / float64(time.Second) * float64(dsp.SampleRate)
+	return float64(t) / float64(time.Second) * float64(d.rate)
 }
 
 // seekFrames moves the playhead to an exact fractional sample frame. This is

@@ -6,7 +6,7 @@ import (
 )
 
 func TestFilterLowpassAttenuatesAboveCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(false)      // lowpass
 	f.SetParams(200, 1.0) // 200Hz, Q=1
 	in := Sine(2000, 0.3)
@@ -20,7 +20,7 @@ func TestFilterLowpassAttenuatesAboveCutoff(t *testing.T) {
 }
 
 func TestFilterHighpassAttenuatesBelowCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(true)
 	f.SetParams(200, 1.0)
 	in := Sine(100, 0.3)
@@ -38,7 +38,7 @@ func TestFilterHighpassAttenuatesBelowCutoff(t *testing.T) {
 // predictable amount.
 func TestFilterIsButterworthAtCutoff(t *testing.T) {
 	for _, hp := range []bool{false, true} {
-		f := NewFilter()
+		f := NewFilter(SampleRate)
 		f.SetKind(hp)
 		f.SetParams(1000, 0.707)
 		in := Sine(1000, 0.3)
@@ -55,7 +55,7 @@ func TestFilterIsButterworthAtCutoff(t *testing.T) {
 // gives: -12dB/octave. Two octaves above a 200Hz cutoff is 800Hz, where the
 // response should be about 1/16 (-24dB).
 func TestFilterSlopeIsTwoPoles(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(false)
 	f.SetParams(200, 0.707)
 	in := Sine(800, 0.3)
@@ -68,7 +68,7 @@ func TestFilterSlopeIsTwoPoles(t *testing.T) {
 }
 
 func TestFilterLowpassPassesBelowCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(false)
 	f.SetParams(5000, 0.707)
 	in := Sine(200, 0.3)
@@ -80,7 +80,7 @@ func TestFilterLowpassPassesBelowCutoff(t *testing.T) {
 }
 
 func TestFilterHighpassPassesAboveCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(true)
 	f.SetParams(200, 0.707)
 	in := Sine(5000, 0.3)
@@ -92,7 +92,7 @@ func TestFilterHighpassPassesAboveCutoff(t *testing.T) {
 }
 
 func TestFilterClampsAbsurdCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(1e9, 0.01) // must clamp, must not panic or produce NaN
 	in := Sine(1000, 0.1)
 	out := make(Stereo, len(in))
@@ -106,7 +106,7 @@ func TestFilterClampsAbsurdCutoff(t *testing.T) {
 }
 
 func TestFilterClampsNegativeCutoff(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(-500, 1.0)
 	in := Sine(1000, 0.1)
 	out := make(Stereo, len(in))
@@ -119,7 +119,7 @@ func TestFilterClampsNegativeCutoff(t *testing.T) {
 func TestFilterCentreIsNearUnity(t *testing.T) {
 	// At the cutoff frequency a 2-pole filter is -3dB, so within 30% is a
 	// generous but meaningful bound.
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetKind(false)
 	f.SetParams(1000, 0.707)
 	in := Sine(1000, 0.3)
@@ -131,7 +131,7 @@ func TestFilterCentreIsNearUnity(t *testing.T) {
 }
 
 func TestFilterAliasedInPlace(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(1000, 1.0)
 	s := Sine(4000, 0.1)
 	f.Process(s, s) // must not corrupt
@@ -141,7 +141,7 @@ func TestFilterAliasedInPlace(t *testing.T) {
 }
 
 func TestFilterReset(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(1000, 1.0)
 	warm := Sine(4000, 0.05)
 	buf := make(Stereo, len(warm))
@@ -156,7 +156,7 @@ func TestFilterReset(t *testing.T) {
 }
 
 func TestFilterSwitchingKindIsSafe(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(1000, 1.0)
 	in := Sine(1000, 0.1)
 	out := make(Stereo, len(in))
@@ -169,7 +169,7 @@ func TestFilterSwitchingKindIsSafe(t *testing.T) {
 }
 
 func TestFilterHandlesEmptyBuffers(t *testing.T) {
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.Process(nil, nil)
 	out := make(Stereo, 512)
 	f.Process(nil, out)
@@ -182,7 +182,7 @@ func BenchmarkFilterProcess(b *testing.B) {
 	const block = 512
 	in := Sine(1000, 2.0)
 	out := make(Stereo, block*2)
-	f := NewFilter()
+	f := NewFilter(SampleRate)
 	f.SetParams(2000, 1.0)
 	b.ResetTimer()
 	b.ReportAllocs()

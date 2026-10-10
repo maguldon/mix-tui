@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/maguldon/mix-tui/internal/analyze"
-	"github.com/maguldon/mix-tui/internal/dsp"
 )
 
 // ErrNoBeatGrid is re-exported from analyze so callers of a Deck do not have
@@ -89,7 +88,7 @@ func (d *Deck) framesToDuration(f float64) time.Duration {
 	if d.track == nil {
 		return 0
 	}
-	return time.Duration(f / float64(dsp.SampleRate) * float64(time.Second))
+	return time.Duration(f / float64(d.rate) * float64(time.Second))
 }
 
 // beatPeriodFrames returns the length of one beat in source frames.
@@ -100,7 +99,7 @@ func (d *Deck) beatPeriodFrames() float64 {
 	if d.beatgrid == nil || d.beatgrid.BPM <= 0 {
 		return 0
 	}
-	return dsp.SampleRate * 60 / d.beatgrid.BPM
+	return float64(d.rate) * 60 / d.beatgrid.BPM
 }
 
 // SetLoopBeat arms a loop of n beats starting at the next beat boundary.
