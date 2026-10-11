@@ -98,7 +98,13 @@ struct pw_properties *make_stream_props(const char *node_name,
 	props = pw_properties_new(
 		"node.name", node_name,
 		"media.type", "Audio",
-		"media.category", "Source",
+		/* media.class is what the session manager keys on to decide what a
+		 * node is. Without it WirePlumber cannot classify the stream, and
+		 * "media.category" alone ("Source") describes a capture node, which
+		 * is backwards for a playback stream: PW_DIRECTION_OUTPUT streams
+		 * produce audio into the graph. */
+		"media.class", "Stream/Output/Audio",
+		"media.category", "Output",
 		"media.role", "Music",
 		/* Interleaved F32P matches dsp.Stereo, so the realtime drain is a
 		 * straight copy with no deinterleave on the audio thread. */

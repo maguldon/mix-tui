@@ -59,9 +59,6 @@ type StreamConfig struct {
 	// Channels is 2 for this project; the drain path assumes interleaved
 	// stereo, which is what dsp.Stereo is.
 	Channels int
-	// TargetLatencyFrames requests a latency from the daemon. Zero means
-	// default.
-	TargetLatencyFrames int
 }
 
 type Stats struct {
