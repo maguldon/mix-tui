@@ -68,7 +68,7 @@ func parseFlags(args []string) (flags, error) {
 	set.Float64Var(&fs.roll, "roll", 0, "roll both decks by N beats")
 	set.BoolVar(&fs.sync, "sync", false, "lock deck 1's tempo to deck 0")
 	set.BoolVar(&fs.quantize, "quantize", false, "quantize both decks to a beat")
-	set.IntVar(&fs.rate, "rate", 0, "sample rate (0 = negotiate, else 44100)")
+	set.IntVar(&fs.rate, "rate", 0, "sample rate (0 = default 44100)")
 	set.Float64Var(&fs.bpmA, "bpm-a", 0, "deck 0 tempo, enabling beat features")
 	set.Float64Var(&fs.bpmB, "bpm-b", 0, "deck 1 tempo")
 	set.StringVar(&fs.mainTarget, "main-target", "", "route MAIN to this node")
