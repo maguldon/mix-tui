@@ -28,20 +28,17 @@ func renderMixerPanel(w int, s engine.Snapshot, st ViewState) Panel {
 	// Header labels the two channel columns. Built by padding, not slicing a
 	// shorter string, so it cannot overrun when the panel is narrow.
 	head := padRight("A", barW) + padRight("B", barW)
+	// The crossfader comes first: a 5-row footer shows only 3 content rows, and
+	// the crossfader is what a DJ reads in a stacked layout. The level bars are
+	// the first thing that can go.
+	rows = append(rows, PanelRow{Kind: RowText, Text: crossfaderRow(s.Crossfader, inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(head, inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(channelBar("A", lvl(0), barW)+channelBar("B", lvl(1), barW), inner)})
 
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("xfade", inner), Style: &dimStyle})
-	rows = append(rows, PanelRow{Kind: RowText, Text: crossfaderRow(s.Crossfader, inner)})
-
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("MASTER", inner), Style: &dimStyle})
-	master := 0.0
-	for i := range s.Decks {
-		if lvl(i) > master {
-			master = lvl(i)
-		}
-	}
-	rows = append(rows, PanelRow{Kind: RowText, Text: RenderPeakHold(master, master, inner)})
+	// Master level, from the Snapshot's master bus rather than the loudest
+	// deck: the mixer output is not the peak of its inputs once the crossfader
+	// and channel faders have had their say.
+	rows = append(rows, PanelRow{Kind: RowText, Text: "MASTER " + RenderMeter(s.MasterLevel, maxInt(0, inner-7))})
 
 	return Panel{Title: "MIXER", Width: w, Rows: rows}
 }

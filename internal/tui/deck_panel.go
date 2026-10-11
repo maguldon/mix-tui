@@ -15,7 +15,7 @@ import (
 // Rows are assembled then the panel is returned; RenderPanel clips to whatever
 // height the layout gives it, so an extra row here costs nothing and a missing
 // one leaves a blank line.
-func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Panel {
+func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, contentRows int) Panel {
 	inner := w - 2
 	if inner < 0 {
 		inner = 0
@@ -28,9 +28,19 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 		return Panel{Title: title, Width: w, Rows: emptyDeckRows(inner)}
 	}
 
+	// rowsAvail is the content height the layout will give this panel. The panel
+	// adapts to it rather than emitting a fixed row list that gets clipped.
+	rowsAvail := contentRows
+
 	waveH := 4
 	if inner < 40 {
 		waveH = 2 // a compact panel cannot afford 4 waveform rows
+	}
+	if rowsAvail < 9 {
+		waveH = minInt(waveH, 2)
+	}
+	if rowsAvail < 7 {
+		waveH = 0
 	}
 
 	// Zoom replaces the full-track wave with a sliding window when this deck is
@@ -61,9 +71,18 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	}
 
 	rows := make([]PanelRow, 0, 10)
-	for i, r := range wave {
-		rows = append(rows, PanelRow{Kind: RowText, Text: r})
-		_ = i
+	// A short panel drops the waveform before it drops the transport row: a
+	// missing waveform is a smaller loss than a deck that shows no PLAY or CUE
+	// indicator at all, which is what happens when the rows are simply
+	// clipped by the layout.
+	maxWave := waveH
+	if rowsAvail <= 6 {
+		maxWave = 0
+	} else if rowsAvail <= 8 {
+		maxWave = minInt(maxWave, 2)
+	}
+	for i := 0; i < maxWave && i < len(wave); i++ {
+		rows = append(rows, PanelRow{Kind: RowText, Text: wave[i]})
 	}
 
 	// Progress / playhead bar.
@@ -80,8 +99,10 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	// showing only "128.00" is merely incomplete.
 	rows = append(rows, PanelRow{Kind: RowText, Text: metaRow(d, inner)})
 
-	// EQ bars.
-	rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: &dimStyle})
+	// EQ bars, dropped before the transport row when the panel is short.
+	if rowsAvail >= len(rows)+3 {
+		rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: &dimStyle})
+	}
 
 	// Transport.
 	rows = append(rows, PanelRow{Kind: RowText, Text: transportRow(d, inner)})

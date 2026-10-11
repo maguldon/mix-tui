@@ -29,8 +29,8 @@ func renderA(w, h int, s engine.Snapshot, st ViewState) string {
 		deckW += (w - used) / 2
 	}
 
-	left := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 0), st, st.Focus == 0), bodyH)
-	right := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 1), st, st.Focus == 1), bodyH)
+	left := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 0), st, st.Focus == 0, bodyH-2), bodyH)
+	right := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 1), st, st.Focus == 1, bodyH-2), bodyH)
 	mid := RenderPanel(renderMixerPanel(mixerW, s, st), bodyH)
 	body := RenderColumns([][]string{left, right, mid}, gap, w)
 

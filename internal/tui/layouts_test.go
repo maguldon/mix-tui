@@ -183,3 +183,31 @@ func TestFallbackRendersAllDecks(t *testing.T) {
 		t.Errorf("fallback lost a deck:\n%s", out)
 	}
 }
+
+// TestAllLayoutsShowTransportAtStandardSize covers I11: at 80x24 -- the standard
+// terminal -- layout C gave each deck six content rows, enough for a waveform
+// but not for the transport row, so no deck showed PLAY or CUE at all.
+func TestAllLayoutsShowTransportAtStandardSize(t *testing.T) {
+	for _, k := range []LayoutKind{LayoutA, LayoutB, LayoutC, LayoutD} {
+		for _, sz := range [][2]int{{120, 40}, {100, 30}, {80, 24}} {
+			out := Render(sz[0], sz[1], snapTwoDecks(), ViewState{Layout: k})
+			if !strings.Contains(out, "PLAY") {
+				t.Errorf("layout %c at %dx%d shows no transport row", rune('A'+int(k)), sz[0], sz[1])
+			}
+		}
+	}
+}
+
+// TestLayoutCUsesTheRealMixerPanel covers I10: layout C drew the Task-2
+// placeholder, which has no levels, no crossfader position and no master, so it
+// looked broken next to A and D.
+func TestLayoutCUsesTheRealMixerPanel(t *testing.T) {
+	// A crossfader away from centre must move the marker in layout C.
+	center := Render(100, 40, snapTwoDecks(), ViewState{Layout: LayoutC})
+	right := snapTwoDecks()
+	right.Crossfader = 0.8
+	moved := Render(100, 40, right, ViewState{Layout: LayoutC})
+	if center == moved {
+		t.Error("layout C ignores the crossfader; it is drawing the placeholder panel")
+	}
+}

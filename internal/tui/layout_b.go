@@ -36,7 +36,7 @@ func renderB(w, h int, s engine.Snapshot, st ViewState) string {
 	if focus == 0 && len(s.Decks) > 1 {
 		other = 1
 	}
-	big := RenderPanel(renderDeckPanel(w, deckAt(&s, focus), st, true), bodyH)
+	big := RenderPanel(renderDeckPanel(w, deckAt(&s, focus), st, true, bodyH-2), bodyH)
 
 	strip := RenderPanel(renderDeckStrip(w, deckAt(&s, other)), stripH)
 

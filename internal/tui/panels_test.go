@@ -12,7 +12,7 @@ import (
 func emptyDeck() engine.DeckState { return engine.DeckState{Index: 0, Loaded: false} }
 
 func TestDeckPanelShowsTrackMetadata(t *testing.T) {
-	p := renderDeckPanel(40, snapTwoDecks().Decks[0], ViewState{}, true)
+	p := renderDeckPanel(40, snapTwoDecks().Decks[0], ViewState{}, true, 12)
 	out := strings.Join(RenderPanel(p, 14), "\n")
 	for _, want := range []string{"Track A", "128.00", "A"} {
 		if !strings.Contains(out, want) {
@@ -25,7 +25,7 @@ func TestDeckPanelShowsBPMWithoutGridAsUnknown(t *testing.T) {
 	d := snapTwoDecks().Decks[0]
 	d.BPM = 0
 	d.HasBeatGrid = false
-	out := strings.Join(RenderPanel(renderDeckPanel(40, d, ViewState{}, false), 14), "\n")
+	out := strings.Join(RenderPanel(renderDeckPanel(40, d, ViewState{}, false, 12), 14), "\n")
 	if strings.Contains(out, "0.00") {
 		t.Error("a deck with no beatgrid must not show 0.00 BPM")
 	}
@@ -37,13 +37,13 @@ func TestDeckPanelShowsBPMWithoutGridAsUnknown(t *testing.T) {
 func TestDeckPanelShowsKeyWithConfidence(t *testing.T) {
 	d := snapTwoDecks().Decks[0]
 	d.KeyCamelot, d.KeyConfidence = "8A", 0.91
-	out := strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, false), 14), "\n")
+	out := strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, false, 12), 14), "\n")
 	if !strings.Contains(out, "8A") {
 		t.Errorf("key missing:\n%s", out)
 	}
 
 	d.KeyCamelot, d.KeyConfidence = "9A", 0.30 // below threshold
-	out = strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, false), 14), "\n")
+	out = strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, false, 12), 14), "\n")
 	if strings.Contains(out, "9A") {
 		t.Errorf("a below-threshold key must render as undetected:\n%s", out)
 	}
@@ -52,14 +52,14 @@ func TestDeckPanelShowsKeyWithConfidence(t *testing.T) {
 func TestDeckPanelShowsLoopState(t *testing.T) {
 	d := snapTwoDecks().Decks[0]
 	d.LoopActive, d.LoopBeatCount = true, 4
-	out := strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, true), 14), "\n")
+	out := strings.Join(RenderPanel(renderDeckPanel(44, d, ViewState{}, true, 12), 14), "\n")
 	if !strings.Contains(out, "LOOP 4") {
 		t.Errorf("loop size not shown:\n%s", out)
 	}
 }
 
 func TestEmptyDeckShowsArtNotBlank(t *testing.T) {
-	out := strings.Join(RenderPanel(renderDeckPanel(40, emptyDeck(), ViewState{}, false), 14), "\n")
+	out := strings.Join(RenderPanel(renderDeckPanel(40, emptyDeck(), ViewState{}, false, 12), 14), "\n")
 	if !strings.Contains(out, "L") {
 		t.Errorf("expected a load hint:\n%s", out)
 	}
@@ -79,7 +79,7 @@ func TestMixerPanelShowsBothFaders(t *testing.T) {
 
 func TestPanelWidthIsExactAtManySizes(t *testing.T) {
 	for _, w := range []int{24, 28, 32, 40, 48, 52} {
-		p := renderDeckPanel(w, snapTwoDecks().Decks[0], ViewState{}, true)
+		p := renderDeckPanel(w, snapTwoDecks().Decks[0], ViewState{}, true, 12)
 		for i, l := range RenderPanel(p, 14) {
 			if lipgloss.Width(l) != w {
 				t.Errorf("w=%d line %d is %d wide", w, i, lipgloss.Width(l))
@@ -94,8 +94,8 @@ func TestPanelWidthIsExactAtManySizes(t *testing.T) {
 func TestDeckPanelDropsLeastImportantFieldsFirst(t *testing.T) {
 	d := snapTwoDecks().Decks[0]
 	d.KeyCamelot, d.KeyConfidence = "8A", 0.9
-	wide := strings.Join(RenderPanel(renderDeckPanel(52, d, ViewState{}, true), 14), "\n")
-	narrow := strings.Join(RenderPanel(renderDeckPanel(24, d, ViewState{}, true), 14), "\n")
+	wide := strings.Join(RenderPanel(renderDeckPanel(52, d, ViewState{}, true, 12), 14), "\n")
+	narrow := strings.Join(RenderPanel(renderDeckPanel(24, d, ViewState{}, true, 12), 14), "\n")
 
 	if !strings.Contains(wide, "128.00") {
 		t.Fatalf("wide panel should show BPM:\n%s", wide)
@@ -114,9 +114,9 @@ func TestDeckPanelDropsLeastImportantFieldsFirst(t *testing.T) {
 func TestDeckPanelNeverPanicsAcrossSizes(t *testing.T) {
 	for _, w := range []int{0, 1, 2, 5, 10, 20, 30, 60, 120} {
 		for _, h := range []int{0, 1, 2, 5, 14, 40} {
-			p := renderDeckPanel(w, snapTwoDecks().Decks[0], ViewState{}, true)
+			p := renderDeckPanel(w, snapTwoDecks().Decks[0], ViewState{}, true, 12)
 			_ = RenderPanel(p, h)
-			p2 := renderDeckPanel(w, emptyDeck(), ViewState{}, false)
+			p2 := renderDeckPanel(w, emptyDeck(), ViewState{}, false, 12)
 			_ = RenderPanel(p2, h)
 		}
 	}
