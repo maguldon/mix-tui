@@ -177,8 +177,13 @@ func run(args appArgs) error {
 		handler := model.MIDIHandler()
 		listener, err := midi.OpenListener(handler)
 		if err != nil {
-			// No controller is a normal state, not a failure.
+			// No controller is a normal state, not a failure. Spec 8 asks for
+			// the available devices and the mapping directory alongside it:
+			// "no MIDI" on its own leaves the user with no way to find out
+			// whether the device is missing, or the mapping.
 			fmt.Fprintf(os.Stderr, "mix-tui: no MIDI: %v (keyboard only)\n", err)
+			reportMIDIDevices()
+			fmt.Fprintf(os.Stderr, "mix-tui: mappings are read from %s\n", filepath.Join(configDir(), "mappings"))
 		} else {
 			defer listener.Close()
 			model.AttachMIDI(handler)
@@ -204,9 +209,14 @@ func run(args appArgs) error {
 			w := midi.NewWatcher(dir, handler, func(f string, a ...any) {
 				fmt.Fprintf(os.Stderr, f+"\n", a...)
 			})
-			if _, errs := w.ReloadOnce(); len(errs) > 0 {
+			// One scan, not two. The second ReloadOnce always saw nothing new,
+			// so "loaded N mapping(s)" could never print -- a user with a
+			// working mapping was told nothing about it.
+			n, errs := w.ReloadOnce()
+			if len(errs) > 0 {
 				fmt.Fprintf(os.Stderr, "mix-tui: %d mapping error(s) at startup\n", len(errs))
-			} else if n, _ := w.ReloadOnce(); n > 0 {
+			}
+			if n > 0 {
 				fmt.Fprintf(os.Stderr, "mix-tui: loaded %d mapping(s)\n", n)
 			}
 			go w.Run(ctx)
@@ -349,5 +359,26 @@ func (d *diagLogger) slog() *slog.Logger { return d.logger }
 func (d *diagLogger) Close() {
 	if d.file != nil {
 		_ = d.file.Close()
+	}
+}
+
+// reportMIDIDevices lists the inputs the driver can see.
+//
+// Spec 8: when no device opens, say what was found. An empty list is itself
+// the answer -- it distinguishes "the driver sees nothing" from "the
+// application failed to open something that is there".
+func reportMIDIDevices() {
+	devices, err := midi.OpenDevices()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mix-tui: could not enumerate MIDI inputs: %v\n", err)
+		return
+	}
+	if len(devices) == 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: no MIDI inputs are visible to the driver\n")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "mix-tui: MIDI inputs found:\n")
+	for _, d := range devices {
+		fmt.Fprintf(os.Stderr, "  %d  %s\n", d.Index, d.Name)
 	}
 }

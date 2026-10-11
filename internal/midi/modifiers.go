@@ -20,6 +20,16 @@ import (
 type Handler struct {
 	table atomic.Pointer[Table]
 
+	// byDevice holds every compiled mapping keyed by its device name, so a
+	// controller picks the table that names it (spec 5.1: "matched by device
+	// name substring").
+	//
+	// table remains the fallback for a message that matches none of them, and
+	// for every caller that never registers devices -- which is most of the
+	// tests. Without this the application installed whichever mapping file
+	// compiled last, so plugging in a K2 could be served the generic table.
+	byDevice atomic.Pointer[map[string]*Table]
+
 	mu      sync.Mutex
 	mods    ModSet
 	latched map[string]bool
@@ -55,6 +65,67 @@ func (h *Handler) SetTable(t *Table) { h.table.Store(t) }
 // Table returns the currently installed mapping, or nil if none is loaded.
 func (h *Handler) Table() *Table { return h.table.Load() }
 
+// SetDeviceTables registers every known mapping, keyed by device name.
+//
+// The single-table field is left pointing at the first entry so behaviour is
+// unchanged for a caller that has not said which device is plugged in.
+func (h *Handler) SetDeviceTables(tables map[string]*Table) {
+	if len(tables) == 0 {
+		h.byDevice.Store(nil)
+		return
+	}
+	cp := make(map[string]*Table, len(tables))
+	for name, t := range tables {
+		cp[name] = t
+	}
+	h.byDevice.Store(&cp)
+	// Deterministic fallback: a single mapping, or the lexicographically first
+	// device name. Map iteration order is random, so without this the fallback
+	// would change between runs.
+	if h.table.Load() == nil {
+		first := ""
+		for name := range cp {
+			if first == "" || name < first {
+				first = name
+			}
+		}
+		if first != "" {
+			h.table.Store(cp[first])
+		}
+	}
+}
+
+// tableForDevice returns the mapping whose device name matches, or nil.
+//
+// An exact match wins over a substring match, so a device literally called
+// "K2" prefers the "K2" mapping over one that merely contains it.
+func (h *Handler) tableForDevice(name string) *Table {
+	p := h.byDevice.Load()
+	if p == nil || name == "" {
+		return nil
+	}
+	m := *p
+	if t, ok := m[name]; ok {
+		return t
+	}
+	var best *Table
+	bestLen := -1
+	for device, t := range m {
+		if t.Matches(name) && len(device) > bestLen {
+			best, bestLen = t, len(device)
+		}
+	}
+	return best
+}
+
+// SetDeviceName tells the handler which controller is plugged in, so incoming
+// messages are resolved against that device's mapping.
+func (h *Handler) SetDeviceName(name string) {
+	if t := h.tableForDevice(name); t != nil {
+		h.table.Store(t)
+	}
+}
+
 // ActiveMods returns a copy of the held-modifier set for display.
 func (h *Handler) ActiveMods() ModSet {
 	h.mu.Lock()
@@ -72,8 +143,17 @@ func (h *Handler) Counts() map[string]uint64 { return h.counts.Snapshot() }
 // Handle processes one message and emits zero or more Actions. It returns an
 // error when the message was ignored (an Other category) or was well-formed but
 // unmapped, so the caller can log once per category rather than per message.
-func (h *Handler) Handle(m Message) error {
-	table := h.table.Load()
+func (h *Handler) Handle(m Message) error { return h.HandleFrom("", m) }
+
+// HandleFrom resolves a message against the mapping for a named device.
+//
+// An empty name means "whatever table is installed", which is what a caller
+// with a single mapping, or no device at all, wants.
+func (h *Handler) HandleFrom(device string, m Message) error {
+	table := h.tableForDevice(device)
+	if table == nil {
+		table = h.table.Load()
+	}
 
 	// Count ignored categories first: a message outside the CC/note vocabulary
 	// is tallied and reported, and never reaches resolution (spec §7).

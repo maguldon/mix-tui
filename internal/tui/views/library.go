@@ -261,6 +261,19 @@ func trackLine(t library.Track, w int) string {
 func crateRows(ix *library.Index, w, rows int) []string {
 	out := make([]string, 0, rows)
 	out = append(out, pad(dimStyle.Render("CRATES"), w))
+
+	// Spec 8: a root that could not be read is listed as unreachable, with the
+	// reason. Without this an unmounted music drive produced an empty library
+	// and no explanation at all.
+	if un := ix.Unreachable(); len(un) > 0 {
+		out = append(out, pad(warnStyle.Render("UNREACHABLE"), w))
+		for _, u := range un {
+			if len(out) >= rows-2 {
+				break
+			}
+			out = append(out, pad(truncate("  "+u, w), w))
+		}
+	}
 	out = append(out, pad(dimStyle.Render(strings.Repeat("-", minInt(w, 6))), w))
 	for i := 0; i < rows-2; i++ {
 		name := ""

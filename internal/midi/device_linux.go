@@ -202,6 +202,11 @@ func OpenListener(h *Handler) (*Listener, error) {
 			// Skip a port we cannot open rather than failing the whole listener.
 			continue
 		}
+		// The port name is captured so each message is resolved against the
+		// mapping that names its own device (spec 5.1). A single handler fed by
+		// every port meant one table served all of them, so the last mapping to
+		// compile won regardless of what was actually plugged in.
+		portName := port.String()
 		stop, err := port.Listen(func(raw []byte, _ int32) {
 			// Check cancellation so a message is not handled after teardown.
 			select {
@@ -209,7 +214,7 @@ func OpenListener(h *Handler) (*Listener, error) {
 				return
 			default:
 			}
-			_ = l.h.Handle(fromWire(raw))
+			_ = l.h.HandleFrom(portName, fromWire(raw))
 		}, drivers.ListenConfig{})
 		if err != nil {
 			_ = port.Close()

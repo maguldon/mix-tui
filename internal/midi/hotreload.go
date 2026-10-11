@@ -52,6 +52,7 @@ func (w *Watcher) ReloadOnce() (changed int, errs []error) {
 	if err != nil {
 		return 0, []error{err}
 	}
+	loaded := map[string]*Table{}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -93,12 +94,20 @@ func (w *Watcher) ReloadOnce() (changed int, errs []error) {
 			w.logf("mixplay: keeping previous mapping: %v", err)
 			continue
 		}
-		w.h.SetTable(tab)
+		// Accumulate rather than install immediately. Setting one table per
+		// file meant the last mapping parsed was the only one in force, so the
+		// controller actually plugged in could be served another device's
+		// mapping, and Table.Matches -- which exists precisely to select by
+		// device name -- had no caller outside its own test.
+		loaded[tab.Device] = tab
 		w.mu.Lock()
 		w.seen[path] = stamp
 		w.mu.Unlock()
 		changed++
 	}
+	// Install the accumulated set once, after the scan, so a device that had no
+	// mapping keeps none rather than inheriting another device's.
+	w.h.SetDeviceTables(loaded)
 	return changed, errs
 }
 

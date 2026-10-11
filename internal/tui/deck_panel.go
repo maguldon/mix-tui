@@ -104,6 +104,23 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 		rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: &dimStyle})
 	}
 
+	// The full-track overview strip. When zoom is off, the waveform already
+	// shows the whole track and an overview of it would be redundant -- but
+	// when zoom is on, the waveform is a window and the strip is the only thing
+	// showing where in the track that window sits.
+	//
+	// RenderOverview was written and unit-tested and never called from a view:
+	// the first review fixed "it returned a blank strip", which was true and
+	// also irrelevant, because no panel ever asked for one.
+	if st.Zoom && d.HasBeatGrid && rowsAvail > 6 {
+		w0, w1 := overviewWindow(d, inner)
+		rows = append(rows, PanelRow{
+			Kind: RowText,
+			Text: padRight(RenderOverview(resamplePeaks(d.Peaks, inner),
+				inner, w0, w1, playCell(d, inner)), inner),
+		})
+	}
+
 	// Transport.
 	rows = append(rows, PanelRow{Kind: RowText, Text: transportRow(d, inner)})
 
@@ -367,4 +384,24 @@ func transportRow(d engine.DeckState, w int) string {
 		s += " " + on(d.Cued, "CUE")
 	}
 	return TruncateTo(s, w)
+}
+
+// overviewWindow maps the deck's duration into the cells of an overview strip.
+//
+// The window covers one eighth of the track, which is the widest zoom level
+// the view offers: at that setting the strip is most useful, because the window
+// is smallest relative to the whole.
+func overviewWindow(d engine.DeckState, width int) (start, end int) {
+	if width <= 0 || d.Duration <= 0 {
+		return -1, -2
+	}
+	span := d.Duration / 8
+	if span <= 0 {
+		span = d.Duration
+	}
+	start = int(float64(d.Position) / float64(d.Duration) * float64(width))
+	end = int(float64(d.Position+span) / float64(d.Duration) * float64(width))
+	start = minInt(maxInt(0, start), width-1)
+	end = minInt(maxInt(start, end), width-1)
+	return start, end
 }

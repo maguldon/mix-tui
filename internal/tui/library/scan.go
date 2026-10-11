@@ -38,6 +38,7 @@ func (ix *Index) Scan(ctx context.Context, roots []string,
 
 	ix.reset()
 	var errs []error
+	var unreachable []string
 
 	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
@@ -46,12 +47,17 @@ func (ix *Index) Scan(ctx context.Context, roots []string,
 		rootTracks, err := scanRoot(ctx, root, ix, onTrack)
 		if err != nil {
 			errs = append(errs, err)
+			// Spec 8: an unreadable root is reported as unreachable, with the
+			// reason. A silently skipped root shows up as an empty library,
+			// which is indistinguishable from having no music.
+			unreachable = append(unreachable, root+": "+err.Error())
 		}
 		if onProgress != nil {
 			onProgress(ix.Len(), ix.Len())
 		}
 		_ = rootTracks
 	}
+	ix.SetUnreachable(unreachable)
 	return errors.Join(errs...)
 }
 

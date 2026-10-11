@@ -47,6 +47,12 @@ const (
 
 // Index is a searchable, sortable collection of tracks.
 type Index struct {
+	// unreachable records library roots that could not be read, with the
+	// reason. Spec 8 requires an unreadable root to be listed as unreachable
+	// rather than silently yielding an empty library: a user whose music folder
+	// is on an unmounted drive sees "no tracks" and no explanation.
+	unreachable []string
+
 	mu     sync.RWMutex
 	tracks []Track
 	seen   map[string]bool
@@ -65,6 +71,21 @@ func (ix *Index) Tracks() []Track {
 	out := make([]Track, len(ix.tracks))
 	copy(out, ix.tracks)
 	return out
+}
+
+// Unreachable returns the roots that could not be scanned, with reasons.
+func (ix *Index) Unreachable() []string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.unreachable
+}
+
+// SetUnreachable records the roots that could not be scanned. The scan calls
+// it with whatever it could not read.
+func (ix *Index) SetUnreachable(roots []string) {
+	ix.mu.Lock()
+	ix.unreachable = roots
+	ix.mu.Unlock()
 }
 
 // Len reports how many tracks are indexed.

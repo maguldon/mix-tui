@@ -154,3 +154,105 @@ func TestOneBadFileDoesNotBlockOthers(t *testing.T) {
 		t.Error("good mapping was blocked by the bad one")
 	}
 }
+
+// TestEachDeviceGetsItsOwnMapping covers spec 5.1: mappings are matched by
+// device name. The application installed whichever mapping file compiled last,
+// so a K2 could be served the generic table -- and Table.Matches, which exists
+// precisely to select by name, had no caller outside its own test.
+func TestEachDeviceGetsItsOwnMapping(t *testing.T) {
+	dir := t.TempDir()
+	writeMapping(t, dir, "k2.yaml", `
+device: "xone-k2"
+controls:
+  - midi: {kind: cc, chan: 1, num: 9}
+    action: {kind: DeckPitch, target: 0}
+`)
+	writeMapping(t, dir, "generic.yaml", `
+device: "generic-2deck"
+controls:
+  - midi: {kind: cc, chan: 1, num: 11}
+    action: {kind: DeckCue, target: 0}
+`)
+
+	h := NewHandler(nil, func(engine.Action) {})
+	w := NewWatcher(dir, h, func(string, ...any) {})
+	if _, errs := w.ReloadOnce(); len(errs) > 0 {
+		t.Fatalf("reload: %v", errs)
+	}
+
+	k2 := h.tableForDevice("xone-k2")
+	gen := h.tableForDevice("generic-2deck")
+	if k2 == nil || gen == nil {
+		t.Fatalf("device lookup failed: k2=%v generic=%v", k2, gen)
+	}
+	if k2 == gen {
+		t.Fatal("both devices resolved to the same table")
+	}
+}
+
+// TestUnmatchedDeviceFallsBack. A device with no mapping of its own must still
+// work through the installed table rather than going dead.
+func TestUnmatchedDeviceFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	writeMapping(t, dir, "k2.yaml", `
+device: "xone-k2"
+controls:
+  - midi: {kind: cc, chan: 1, num: 9}
+    action: {kind: DeckPitch, target: 0}
+`)
+
+	h := NewHandler(nil, func(engine.Action) {})
+	w := NewWatcher(dir, h, func(string, ...any) {})
+	if _, errs := w.ReloadOnce(); len(errs) > 0 {
+		t.Fatalf("reload: %v", errs)
+	}
+
+	if h.Table() == nil {
+		t.Fatal("no table installed; an unmapped device would be dead")
+	}
+	if h.tableForDevice("some-other-controller") != nil {
+		t.Error("an unmatched device name should not select a table by name")
+	}
+}
+
+// TestHotReloadReplacesDeviceTables. After deleting one file the whole set must
+// be reinstalled, or the removed mapping stays live.
+func TestHotReloadReplacesDeviceTables(t *testing.T) {
+	dir := t.TempDir()
+	writeMapping(t, dir, "k2.yaml", `
+device: "xone-k2"
+controls:
+  - midi: {kind: cc, chan: 1, num: 9}
+    action: {kind: DeckPitch, target: 0}
+`)
+	writeMapping(t, dir, "generic.yaml", `
+device: "generic-2deck"
+controls:
+  - midi: {kind: cc, chan: 1, num: 11}
+    action: {kind: DeckCue, target: 0}
+`)
+
+	h := NewHandler(nil, func(engine.Action) {})
+	w := NewWatcher(dir, h, func(string, ...any) {})
+	if _, errs := w.ReloadOnce(); len(errs) > 0 {
+		t.Fatalf("reload: %v", errs)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "generic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	// Touch the survivor so a rescan is triggered by its stamp.
+	survivor := filepath.Join(dir, "k2.yaml")
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(survivor, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	w.ReloadOnce()
+	if h.tableForDevice("generic-2deck") != nil {
+		t.Error("a deleted mapping is still installed")
+	}
+	if h.tableForDevice("xone-k2") == nil {
+		t.Error("the surviving mapping was dropped")
+	}
+}
