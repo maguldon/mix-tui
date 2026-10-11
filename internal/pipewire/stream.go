@@ -36,6 +36,9 @@ struct spa_hook *alloc_stream_hook(void);
 extern int set_stream_active(struct pw_stream *stream, int active);
 
 extern struct spa_pod **make_connect_params(int rate, int channels);
+extern int format_rate(const struct spa_pod *param);
+
+extern int format_rate(const struct spa_pod *param);
 
 
 extern struct pw_properties *make_stream_props(const char *node_name,
@@ -61,7 +64,6 @@ type StreamConfig struct {
 	TargetLatencyFrames int
 }
 
-// Stats reports drain-thread health.
 type Stats struct {
 	// Callbacks is the number of drain callback invocations.
 	Callbacks uint64
@@ -69,6 +71,12 @@ type Stats struct {
 	FramesDrained uint64
 	// Starves counts callbacks that found the ring empty.
 	Starves uint64
+	// NegotiatedRate is the rate the daemon granted, or 0 if it has not said.
+	NegotiatedRate int
+	// RateMismatch is true when the daemon granted a rate other than the one
+	// declared. That plays every track at the wrong speed, so it is surfaced
+	// rather than left to be discovered by ear.
+	RateMismatch bool
 }
 
 // Stream is one playback stream draining a ring buffer.
@@ -111,10 +119,13 @@ type Stream struct {
 	// state and stateErr record the last state the daemon reported, so a
 	// stream that connects but never processes can be diagnosed from outside
 	// rather than guessed at.
-	state    atomic.Int64
-	stateErr atomic.Pointer[C.char]
-	started  atomic.Bool
-	stopped  atomic.Bool
+	// rateMismatch records that the daemon granted a different rate than we
+	// declared. Surfaced in Stats so a silent pitch error is visible.
+	rateMismatch atomic.Bool
+	state        atomic.Int64
+	stateErr     atomic.Pointer[C.char]
+	started      atomic.Bool
+	stopped      atomic.Bool
 	// negotiated records the rate the daemon actually gave us, which may
 	// differ from the requested one.
 	negotiated atomic.Int64
@@ -207,8 +218,14 @@ func (s *Stream) Start() error {
 	// PW_DIRECTION_OUTPUT: a playback stream PRODUCES audio into the graph.
 	s.ctx.lock()
 	defer s.ctx.unlock()
+	// Declare the format the stream accepts. A stream with no EnumFormat pod
+	// gives the graph nothing to negotiate against, and connect then fails on
+	// the half-built object — which is why the helper existed but was never
+	// called.
+	params := C.make_connect_params(C.int(s.cfg.SampleRate), C.int(s.cfg.Channels))
+
 	if rc := C.pw_stream_connect(s.stream, C.PW_DIRECTION_OUTPUT, C.PW_ID_ANY,
-		0, nil, 0); rc != 0 {
+		0, params, 1); rc != 0 {
 		return fmt.Errorf("pipewire: pw_stream_connect failed with code %d", int(rc))
 	}
 	// Connect alone does not start processing: the stream must be made active
@@ -282,9 +299,11 @@ func (s *Stream) Stats() Stats {
 		return Stats{}
 	}
 	return Stats{
-		Callbacks:     s.callbacks.Load(),
-		FramesDrained: s.frames.Load(),
-		Starves:       s.starves.Load(),
+		Callbacks:      s.callbacks.Load(),
+		FramesDrained:  s.frames.Load(),
+		Starves:        s.starves.Load(),
+		NegotiatedRate: int(s.negotiated.Load()),
+		RateMismatch:   s.rateMismatch.Load(),
 	}
 }
 

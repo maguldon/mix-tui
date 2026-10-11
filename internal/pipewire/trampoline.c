@@ -18,6 +18,7 @@
 #include <spa/pod/builder.h>
 #include <spa/param/format.h>
 #include <spa/param/audio/raw.h>
+#include <spa/param/audio/raw-utils.h>
 #include <stdint.h>
 
 /* The exported Go entry point, emitted by cgo into _cgo_export.c from the
@@ -200,4 +201,21 @@ struct spa_hook *alloc_stream_hook(void)
 int set_stream_active(struct pw_stream *stream, int active)
 {
 	return pw_stream_set_active(stream, active ? true : false);
+}
+
+/* --- negotiated format --------------------------------------------------- */
+
+/* Read audio.rate out of a Format param pod. Returns 0 when the pod is absent
+ * or carries no rate. The stream's paramChanged callback records this so a
+ * daemon that grants a different rate than we asked for is visible rather than
+ * silent. */
+int format_rate(const struct spa_pod *param)
+{
+	struct spa_audio_info_raw info;
+
+	if (param == NULL)
+		return 0;
+	if (spa_format_audio_raw_parse(param, &info) < 0)
+		return 0;
+	return (int)info.rate;
 }

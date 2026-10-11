@@ -2,6 +2,9 @@ package pipewire
 
 /*
 #include <stdlib.h>
+#include <spa/pod/pod.h>
+
+extern int format_rate(const struct spa_pod *param);
 */
 import "C"
 
@@ -85,6 +88,21 @@ func streamStateChanged(data unsafe.Pointer, old, state int32, errs unsafe.Point
 //export streamParamChanged
 func streamParamChanged(data unsafe.Pointer, id uint32, param unsafe.Pointer) {
 	defer func() { _ = recover() }()
+	s, ok := streamFromHandle(cgo.Handle(uintptr(data)))
+	if !ok || s == nil {
+		return
+	}
+	// Record the rate the daemon actually granted. This is the only place the
+	// device's true rate becomes visible; without it there is no way to notice
+	// that we declared 44100 and the graph gave us 48000, which plays every
+	// track at the wrong speed.
+	rate := int(C.format_rate((*C.struct_spa_pod)(param)))
+	if rate > 0 {
+		s.negotiated.Store(int64(rate))
+		if rate != s.cfg.SampleRate {
+			s.rateMismatch.Store(true)
+		}
+	}
 }
 
 // streamProcess is the realtime drain. This is spec §4.3's contract.
