@@ -193,3 +193,33 @@ func TestDrainGateStopsWorkAfterTeardown(t *testing.T) {
 	// And again with a zero stream it must not panic either way.
 	s.drain()
 }
+
+// TestStreamReconnectsAfterStop covers the stop-then-play cycle. A
+// disconnected pw_stream can be reconnected, so Stop must clear the started
+// flag; if it did not, a later Start would silently return nil and the stream
+// would stay dead with nothing to indicate why.
+func TestStreamReconnectsAfterStop(t *testing.T) {
+	ring := audio.NewRing(1 << 16)
+	s := newTestStream(t, ring)
+
+	if err := s.Start(); err != nil {
+		t.Skipf("cannot connect in this environment: %v", err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	// The started flag must be clear, or the next Start is a no-op.
+	if s.started.Load() {
+		t.Fatal("Stop left started set; Start would silently no-op")
+	}
+	// A second Start must actually attempt to reconnect rather than return
+	// early on the idempotency check.
+	if err := s.Start(); err != nil {
+		t.Skipf("cannot reconnect in this environment: %v", err)
+	}
+	if !s.started.Load() {
+		t.Fatal("Start after Stop did not mark the stream started")
+	}
+	_ = s.Stop()
+	_ = s.Destroy()
+}

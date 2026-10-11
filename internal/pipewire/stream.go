@@ -260,6 +260,10 @@ func (s *Stream) Stop() error {
 	s.ctx.lock()
 	defer s.ctx.unlock()
 	C.pw_stream_disconnect(s.stream)
+	// A disconnected pw_stream can be reconnected, so clear started to let a
+	// later Start reconnect. Without this, Stop/Start cycles - which Output
+	// uses for stop-then-play - silently no-op and the stream stays dead.
+	s.started.Store(false)
 	return nil
 }
 
