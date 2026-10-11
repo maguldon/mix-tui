@@ -195,6 +195,21 @@ func (d *Deck) loadNow(t *audio.Track) {
 	d.applyResamplerRatio()
 	d.eq.Reset()
 	d.filter.Reset()
+	d.warmPeaks()
+}
+
+// warmPeaks computes the waveform envelope for the track that was just loaded.
+//
+// This is the eager half of the peaks cache. Computing it lazily left the cost
+// on whoever asked first -- the TUI goroutine inside Snapshot, which holds the
+// engine lock, so a load stalled the render goroutine for the full 33ms scan of
+// a five-minute track. Here it is paid once, on the render goroutine, at a
+// moment when the deck is not yet playing.
+func (d *Deck) warmPeaks() {
+	if d.track == nil {
+		return
+	}
+	d.peaks.set(d.track.Path, computePeaks(d.PCM(), peaksWidth))
 }
 
 // Index returns the deck's index.
@@ -250,17 +265,21 @@ func (d *Deck) PCM() dsp.Stereo {
 	return d.track.PCM
 }
 
-// Peaks returns the waveform envelope for the loaded track, computing it on
-// first use.
+// Peaks returns the waveform envelope for the loaded track.
 //
-// The envelope is cached: recomputing it per frame costs ~33ms for a five-minute
-// track, and views run 30 times a second.
+// The envelope is cached and warmed at load time, so this never scans: the scan
+// costs ~33ms for a five-minute track, and this runs from Snapshot on a
+// goroutine holding the engine mutex, thirty times a second. An empty envelope
+// is returned when nothing is cached, which renders as a flat line.
 func (d *Deck) Peaks() (Peaks, int) {
 	path := ""
 	if d.track != nil {
 		path = d.track.Path
 	}
-	return d.peaks.get(path, d.PCM(), peaksWidth), peaksWidth
+	if p, ok := d.peaks.peek(path); ok {
+		return p, peaksWidth
+	}
+	return Peaks{Min: make([]float32, peaksWidth*2), Max: make([]float32, peaksWidth*2)}, peaksWidth
 }
 
 // BeatGrid returns the deck's grid, or nil when it has none.

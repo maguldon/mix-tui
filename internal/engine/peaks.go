@@ -72,16 +72,38 @@ func (c *peaksCache) invalidate() {
 	c.mu.Unlock()
 }
 
-// get returns the cached envelope, computing it if the track or resolution
-// changed.
+// set stores a precomputed envelope.
+//
+// The scan is deliberately NOT done inside get: get is reached from Snapshot,
+// which holds the engine mutex, and scanning a five-minute track there stalls
+// the render goroutine for 33ms. Load warms the cache on the render goroutine
+// instead, so get only ever reads.
+func (c *peaksCache) set(path string, p Peaks) {
+	c.mu.Lock()
+	c.p, c.ok, c.path = p, true, path
+	c.mu.Unlock()
+}
+
+// get returns the cached envelope for path.
+//
+// It computes only as a fallback, for a deck whose envelope was never warmed
+// (a track loaded through a path that skipped warmPeaks). Callers on the lock-
+// holding path should prefer peek.
 func (c *peaksCache) get(path string, pcm []float32, width int) Peaks {
+	if p, ok := c.peek(path); ok {
+		return p
+	}
+	p := computePeaks(pcm, width)
+	c.set(path, p)
+	return p
+}
+
+// peek returns the cached envelope without computing anything.
+func (c *peaksCache) peek(path string) (Peaks, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ok && c.path == path {
-		return c.p
+		return c.p, true
 	}
-	c.p = computePeaks(pcm, width)
-	c.ok = true
-	c.path = path
-	return c.p
+	return Peaks{}, false
 }
