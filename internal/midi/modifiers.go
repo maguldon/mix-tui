@@ -52,6 +52,9 @@ func NewHandler(table *Table, onAction func(engine.Action)) *Handler {
 // SetTable swaps the mapping atomically. The next Handle uses the new table.
 func (h *Handler) SetTable(t *Table) { h.table.Store(t) }
 
+// Table returns the currently installed mapping, or nil if none is loaded.
+func (h *Handler) Table() *Table { return h.table.Load() }
+
 // ActiveMods returns a copy of the held-modifier set for display.
 func (h *Handler) ActiveMods() ModSet {
 	h.mu.Lock()
