@@ -27,9 +27,30 @@ func (m *Model) handleKey(k string) {
 		return
 	}
 
+	// Mode-relative keys run BEFORE the universal exits. TAB and SHIFT+ENTER
+	// mean something different inside the browser (cycle panes, load to the
+	// other deck) and must reach it first -- handled after this, TAB changed
+	// which DECK was focused while the user was browsing, which is the moment a
+	// mistake is most expensive.
+	if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
+		if m.handleBrowserKey(k) {
+			return
+		}
+	}
+
 	// Universal exits.
 	switch name {
 	case "escape":
+		// Spec 6.5: sort state resets when the view is left. It did not, so
+		// re-entering the library opened with the sort menu still covering the
+		// detail pane and the previous sort silently applied.
+		if m.st.Mode == ModeLibrary {
+			m.st.ShowSort = false
+			m.st.SortBy = library.SortTitle
+			m.st.SortDesc = false
+			m.st.SortSel = 0
+			m.st.LibPane = views.PaneTracks
+		}
 		m.st.Mode = ModeMix
 		return
 	case "tab":
@@ -45,6 +66,8 @@ func (m *Model) handleKey(k string) {
 		m.st.Mode = toggleMode(m.st.Mode, ModeDebug)
 		return
 	case "/":
+		// Focus the track list on entry, for the same reason LibraryOpen does.
+		m.st.LibPane = views.PaneTracks
 		m.st.Mode = toggleMode(m.st.Mode, ModeLibrary)
 		return
 	case "l":
@@ -55,18 +78,6 @@ func (m *Model) handleKey(k string) {
 			m.st.Mode = ModeOverlay
 		}
 		return
-	}
-
-	// Mode-relative keys. A key meaning different things in two modes is fine,
-	// as long as the footer says which mode you are in.
-	if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
-		// The browser gets the RAW key, not the binding name. bindingName maps
-		// " " to "space", which is 5 runes, so the printable-rune test below
-		// rejected it and the space fell through to the deck-play binding:
-		// typing a space in the filter box started the focused deck instead.
-		if m.handleBrowserKey(k) {
-			return
-		}
 	}
 
 	switch name {
@@ -106,22 +117,64 @@ func (m *Model) handleKey(k string) {
 // binding. Typing a space in the filter box started the focused deck. The
 // browser needs to see the character the user actually pressed.
 func (m *Model) handleBrowserKey(name string) bool {
+	// With the sort menu open, up/down/enter drive the menu rather than the
+	// track list. The menu replaced the detail pane, so a user choosing a sort
+	// needs the selection keys to reach it -- otherwise "s" opens a menu with no
+	// way to pick anything, which is what happened before.
+	if m.st.ShowSort {
+		switch name {
+		case "up":
+			m.st.SortSel = maxInt(0, m.st.SortSel-1)
+			return true
+		case "down":
+			m.st.SortSel = minInt(m.st.SortSel+1, len(views.SortKeys)-1)
+			return true
+		case "enter":
+			m.st.SortBy = views.SortKeys[m.st.SortSel]
+			m.st.ShowSort = false
+			return true
+		case "s", "escape":
+			m.st.ShowSort = false
+			return true
+		case "d":
+			m.st.SortDesc = !m.st.SortDesc
+			return true
+		}
+	}
+
 	switch name {
 	case "up":
-		if m.st.TrackSel > 0 {
-			m.st.TrackSel--
+		if m.st.LibPane == views.PaneCrates {
+			m.st.CrateSel = maxInt(0, m.st.CrateSel-1)
+			return true
 		}
+		m.st.TrackSel = maxInt(0, m.st.TrackSel-1)
 		return true
 	case "down":
 		// Clamp at the bottom. Running past the end left scrollOffset beyond the
 		// list, which blanked every row: pressing down on a one-track library
 		// showed no tracks at all.
+		if m.st.LibPane == views.PaneCrates {
+			m.st.CrateSel = minInt(m.st.CrateSel+1, maxInt(0, m.crateCount()-1))
+			return true
+		}
 		m.st.TrackSel = minInt(m.st.TrackSel+1, maxInt(0, m.trackCount()-1))
+		return true
+	case "tab":
+		// Spec 6.5: TAB cycles pane focus inside the library. It previously fell
+		// through to the global TAB, which moved DECK focus -- so browsing and
+		// pressing tab silently changed which deck ENTER would load into.
+		m.st.LibPane = (m.st.LibPane + 1) % views.PaneCount
 		return true
 	case "left":
 		m.st.Query = dropLastRune(m.st.Query)
 		return true
 	case "right":
+		return true
+	case "shift+enter":
+		// Spec 6.5: SHIFT+ENTER loads to the OTHER deck. It was absent
+		// entirely, so every load went to the focused deck.
+		m.loadSelectedInto(1 - m.st.Focus)
 		return true
 	case "enter":
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
@@ -135,6 +188,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 		// The sort menu replaces the detail pane; without a producer it was
 		// unreachable in the running application even though it rendered.
 		m.st.ShowSort = !m.st.ShowSort
+		m.st.SortSel = int(m.st.SortBy)
 		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
@@ -151,14 +205,28 @@ func (m *Model) handleBrowserKey(name string) bool {
 
 // loadSelected loads the highlighted track into the focused deck and returns to
 // the decks so the user sees the result.
-func (m *Model) loadSelected() {
+func (m *Model) loadSelected() { m.loadSelectedInto(m.st.Focus) }
+
+// loadSelectedInto loads the highlighted track into a specific deck and
+// returns to the decks so the user sees the result.
+//
+// SHIFT+ENTER targets the other deck (spec 6.5). With two decks that is the
+// whole of "load to the other deck"; with N it is the next one round, which is
+// what the two-deck MVP needs and does not pretend to be more.
+func (m *Model) loadSelectedInto(deck int) {
 	tr, ok := m.selectedTrack()
 	if !ok {
 		return
 	}
-	if err := m.LoadSelected(m.st.Focus, tr.Path); err != nil {
+	if n := m.eng.DeckCount(); n > 0 {
+		deck = ((deck % n) + n) % n
+	}
+	if err := m.LoadSelected(deck, tr.Path); err != nil {
 		return // the error is already recorded and auto-expires
 	}
+	// Focus follows the load: the deck that just changed is the one the user
+	// is now looking at.
+	m.st.Focus = deck
 	m.st.Mode = ModeMix
 	m.st.TrackSel = 0
 	m.st.Query = ""
@@ -173,6 +241,12 @@ func (m *Model) selectedTrack() (library.Track, bool) {
 }
 
 // trackCount is how many tracks the filtered library holds.
+// crateCount reports how many rows the crates pane offers: "All tracks" plus
+// the scan summary. There is no crate store on the Model, so the pane cannot
+// offer a real crate picker yet; it at least navigates what it renders rather
+// than running off the end.
+func (m *Model) crateCount() int { return 2 }
+
 func (m *Model) trackCount() int {
 	if m.lib == nil {
 		return 0
@@ -203,6 +277,11 @@ func (m *Model) applyAction(a engine.Action) {
 		m.quitting = true
 		return
 	case engine.LibraryOpen:
+		// Focus the track list on entry. The crates pane is a picker the user
+		// comes to deliberately; entering the browser is about the tracks, and
+		// starting on the crates pane meant the first arrow key moved a crate
+		// cursor rather than the one the user could see.
+		m.st.LibPane = views.PaneTracks
 		m.st.Mode = ModeLibrary
 		return
 	case engine.LibraryClose:
@@ -274,7 +353,7 @@ func zoomIndexOf(bars int) int {
 func modeFooter(m Mode) string {
 	switch m {
 	case ModeLibrary:
-		return "↑↓ select   ⏎ load   / close   esc back"
+		return "↑↓ select   ⏎ load deck   shift+⏎ other deck   tab pane   s sort   esc back"
 	case ModeHelp:
 		return "esc back"
 	case ModeDebug:

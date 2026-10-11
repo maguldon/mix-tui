@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 // Mode is the top-level view.
@@ -65,6 +67,19 @@ type ViewState struct {
 	Query    string
 	// ShowSort opens the sort menu over the detail pane.
 	ShowSort bool
+	// SortBy and SortDesc drive the track list order. They were never set
+	// from a keypress, so the sort was permanently title-ascending.
+	SortBy   library.SortKey
+	SortDesc bool
+	// SortSel is the highlighted entry of the sort menu.
+	SortSel int
+	// LibPane is the focused pane in the library: 0 crates, 1 tracks.
+	// TAB cycles it (spec 6.5). It used to fall through to the global TAB,
+	// which moved DECK focus mid-browse, so the deck ENTER would load into
+	// changed under the user.
+	LibPane views.Pane
+	// CrateSel is the highlighted crate.
+	CrateSel int
 	// LastErr and LastErrAt drive the auto-expiring error line.
 	LastErr   string
 	LastErrAt time.Time

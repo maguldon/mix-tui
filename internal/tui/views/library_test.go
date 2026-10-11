@@ -223,17 +223,26 @@ func TestColumnsAlignWithHeader(t *testing.T) {
 
 	for _, c := range []struct{ heading, value string }{
 		{"BPM", "128.00"},
-		{"KEY", "8A"},
+		// The key cell carries a confidence marker (spec 6.5), so the value
+		// is searched for including it. Searching for the bare code would find
+		// it one column late and report a misalignment that is not there.
+		{"KEY", "✓8A"},
 		{"TIME", "3:34"},
 	} {
+		// Column positions must be compared in DISPLAY cells, not bytes: the
+		// key cell now carries a confidence marker, and "✓" is three bytes but
+		// one column, so byte arithmetic reports a two-column misalignment that
+		// is not on screen.
 		hi := strings.Index(header, c.heading)
 		vi := strings.Index(row, c.value)
 		if hi < 0 || vi < 0 {
 			t.Fatalf("%s: heading at %d, value at %d\n%s", c.heading, hi, vi, out)
 		}
-		if hi+len(c.heading) != vi+len(c.value) {
-			t.Errorf("%s value ends at column %d but its heading ends at %d",
-				c.heading, vi+len(c.value), hi+len(c.heading))
+		headEnd := lipgloss.Width(header[:hi]) + lipgloss.Width(c.heading)
+		valEnd := lipgloss.Width(row[:vi]) + lipgloss.Width(c.value)
+		if headEnd != valEnd {
+			t.Errorf("%s value ends at column %d but its heading ends at %d\nheader: %q\nrow:    %q",
+				c.heading, valEnd, headEnd, header, row)
 		}
 	}
 }
@@ -265,5 +274,42 @@ func TestColumnsAlignWithWideGlyphs(t *testing.T) {
 	}
 	if ai != bi {
 		t.Errorf("BPM at column %d for an ASCII title but %d for a CJK title", ai, bi)
+	}
+}
+
+// TestKeyConfidenceMarkers covers spec 6.5's three-tier display. Confidence was
+// stored on every track and never shown: the list displayed either the bare key
+// or "--", with nothing in between, so a detection the analyser was unsure of
+// looked identical to one it was sure of.
+func TestKeyConfidenceMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tr   library.Track
+		want string
+	}{
+		{"high confidence", library.Track{KeyCamelot: "8A", KeyConfidence: 0.9}, "✓8A"},
+		{"detected but not confident", library.Track{KeyCamelot: "9B", KeyConfidence: 0.60}, "~9B"},
+		{"below the detection threshold is undetected", library.Track{KeyCamelot: "3A", KeyConfidence: 0.10}, "?"},
+		{"no key at all", library.Track{}, "?"},
+	} {
+		if got := formatKey(tc.tr); got != tc.want {
+			t.Errorf("%s: formatKey = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestKeyMarkersRenderInTheList. The marker is the whole point, so it has to
+// reach the screen and not just the formatter.
+func TestKeyMarkersRenderInTheList(t *testing.T) {
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/a.wav", Title: "Sure", KeyCamelot: "8A", KeyConfidence: 0.95})
+	ix.Add(library.Track{Path: "/b.wav", Title: "Unsure", KeyCamelot: "9B", KeyConfidence: 0.60})
+	ix.Add(library.Track{Path: "/c.wav", Title: "Unknown", KeyConfidence: 0.0})
+
+	out := RenderLibrary(140, 12, ix, LibraryState{})
+	for _, want := range []string{"✓8A", "~9B"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the track list does not show %q:\n%s", want, out)
+		}
 	}
 }

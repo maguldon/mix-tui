@@ -328,7 +328,18 @@ func (m *Model) libOrEmpty() *library.Index {
 }
 
 func (m *Model) libState() views.LibraryState {
-	return views.LibraryState{TrackSel: m.st.TrackSel, Query: m.st.Query, ShowSort: m.st.ShowSort}
+	return views.LibraryState{
+		TrackSel: m.st.TrackSel,
+		Query:    m.st.Query,
+		ShowSort: m.st.ShowSort,
+		// Sort state was never populated here, so the sort was permanently
+		// title-ascending: library.Sort was called correctly with defaults and
+		// the menu could show but could not change anything.
+		SortBy:   m.st.SortBy,
+		SortDesc: m.st.SortDesc,
+		Pane:     views.Pane(m.st.LibPane),
+		CrateSel: m.st.CrateSel,
+	}
 }
 
 func (m *Model) snapshot() engine.Snapshot {

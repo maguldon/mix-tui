@@ -22,6 +22,44 @@ import (
 // unreadable slivers.
 const minLibraryWidth = 120
 
+// keyColWidth fits the widest possible key cell: a confidence marker plus a
+// two-digit Camelot code ("✓12B").
+const keyColWidth = 4
+
+// keyHighConfidence is the point at which a detection is presented as certain.
+// Below it but above the detection floor the key is shown with a "~" so the
+// user knows the analyser was not confident.
+const keyHighConfidence = 0.75
+
+// formatKey renders the Camelot key with its confidence marker (spec 6.5):
+//
+//	✓  high confidence
+//	~  low confidence -- shown, but flagged
+//	?  below threshold; reported as undetected
+//
+// A key below keyConfidenceThreshold was never detected at all, so it has no
+// Camelot value to show and reports "?". A detected key whose confidence is
+// under keyHighConfidence is shown with "~": the detection is real but shaky,
+// and hiding it entirely would be as unhelpful as showing it as certain.
+//
+// The three tiers exist because key detection on percussive or atonal material
+// yields confident nonsense. A wrong key displayed confidently is worse than
+// no key, because the user would crate-match against it -- so the band between
+// "no idea" and "confident" is shown and marked rather than hidden or
+// presented as certain.
+//
+// The confidence was stored on every track and never displayed: the list showed
+// either the bare key or "--", with nothing in between.
+func formatKey(t library.Track) string {
+	if t.KeyCamelot == "" || t.KeyConfidence < keyConfidenceThreshold {
+		return "?"
+	}
+	if t.KeyConfidence < keyHighConfidence {
+		return "~" + t.KeyCamelot
+	}
+	return "✓" + t.KeyCamelot
+}
+
 // keyConfidenceThreshold matches the engine's gate. Below it a key is shown as
 // unknown, because a displayed key is believed.
 const keyConfidenceThreshold = 0.55
@@ -32,8 +70,24 @@ type Pane int
 const (
 	PaneCrates Pane = iota
 	PaneTracks
+	// PaneSearch is the filter field. It is the third stop in the cycle because
+	// the filter is a field, not a list: tabbing to it is how a user finds out
+	// they can type.
 	PaneSearch
+
+	// PaneCount is the cycle length for TAB.
+	PaneCount
 )
+
+// SortKeys is the order the sort menu presents, matching sortRows. The model
+// needs the same list to move a selection and to apply it.
+var SortKeys = []library.SortKey{
+	library.SortTitle,
+	library.SortArtist,
+	library.SortBPM,
+	library.SortByKey,
+	library.SortAdded,
+}
 
 // LibraryState is the browser's interaction state.
 type LibraryState struct {
@@ -92,7 +146,7 @@ func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
 
 	right := detailRows(tracks, st, detailW, rows)
 	if st.ShowSort {
-		right = sortRows(detailW, rows)
+		right = sortRows(st, detailW, rows)
 	}
 
 	lines := combine([][]string{cratePane, trackPane, right}, gap, w, h)
@@ -159,7 +213,7 @@ func colWidths(w int) (title, artist int) {
 // ends up one to the left of its header.
 func trackHeader(w int) string {
 	tw, aw := colWidths(w - cursorW)
-	return padRight("  "+cell(tw, "TITLE")+" "+cell(aw, "ARTIST")+" "+right("BPM", 7)+" "+right("KEY", 4)+" "+right("TIME", 6), w)
+	return padRight("  "+cell(tw, "TITLE")+" "+cell(aw, "ARTIST")+" "+right("BPM", 7)+" "+right("KEY", keyColWidth)+" "+right("TIME", 6), w)
 }
 
 // cursorW is the width reserved for the selection cursor.
@@ -193,17 +247,14 @@ func trackLine(t library.Track, w int) string {
 	if t.BPM > 0 {
 		bpm = fmt.Sprintf("%.2f", t.BPM)
 	}
-	key := "--"
-	if t.KeyCamelot != "" && t.KeyConfidence >= keyConfidenceThreshold {
-		key = t.KeyCamelot
-	}
+	key := formatKey(t)
 	dur := mmss(t.Duration)
 
 	tw, aw := colWidths(w)
 	if aw == 0 {
-		return padRight(cell(tw, t.Title)+" "+right(bpm, 7)+" "+right(key, 4)+" "+right(dur, 6), w)
+		return padRight(cell(tw, t.Title)+" "+right(bpm, 7)+" "+right(key, keyColWidth)+" "+right(dur, 6), w)
 	}
-	return padRight(cell(tw, t.Title)+" "+cell(aw, t.Artist)+" "+right(bpm, 7)+" "+right(key, 4)+" "+right(dur, 6), w)
+	return padRight(cell(tw, t.Title)+" "+cell(aw, t.Artist)+" "+right(bpm, 7)+" "+right(key, keyColWidth)+" "+right(dur, 6), w)
 }
 
 // crateRows renders the left pane: crate names plus the scan summary.
@@ -218,6 +269,11 @@ func crateRows(ix *library.Index, w, rows int) []string {
 			name = "All tracks"
 		case i == 1:
 			name = fmt.Sprintf("  (%d tracks)", ix.Len())
+		default:
+			// Crates beyond the two summary rows. There is no crate store on
+			// the Model yet, so this pane reports what it has rather than
+			// pretending a crate picker exists.
+			name = fmt.Sprintf("  (crate %d: none saved)", i-1)
 		}
 		out = append(out, pad(name, w))
 	}
@@ -251,7 +307,7 @@ func detailRows(tracks []library.Track, st LibraryState, w, rows int) []string {
 }
 
 // sortRows renders the sort menu that replaces the detail pane.
-func sortRows(w, rows int) []string {
+func sortRows(st LibraryState, w, rows int) []string {
 	opts := []struct {
 		name string
 		k    library.SortKey
@@ -263,9 +319,21 @@ func sortRows(w, rows int) []string {
 		{"added", library.SortAdded},
 	}
 	out := make([]string, 0, rows)
-	out = append(out, labelStyle.Render("SORT BY"))
-	for _, o := range opts {
-		out = append(out, truncate("  "+o.name, w))
+	dir := "asc"
+	if st.SortDesc {
+		dir = "desc"
+	}
+	out = append(out, labelStyle.Render("SORT BY  ("+dir+")"))
+	for i, o := range opts {
+		label := "  " + o.name
+		if library.SortKey(i) == st.SortBy {
+			// The current sort is marked, so the menu shows where it is
+			// rather than making the user remember a setting they cannot see.
+			label = "> " + o.name
+			out = append(out, truncate(label, w))
+			continue
+		}
+		out = append(out, truncate(label, w))
 	}
 	for len(out) < rows {
 		out = append(out, spaces(w))
