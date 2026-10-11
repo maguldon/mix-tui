@@ -162,40 +162,88 @@ func TestRenderZoomedHandlesShortPCM(t *testing.T) {
 	}
 }
 
-// TestRenderZoomedRespectsSampleRate pins spec §4.2's rate-agnostic requirement.
+// TestRenderZoomedRespectsSampleRate pins spec 4.2's rate-agnostic requirement.
 // Converting window times with the dsp.SampleRate constant put every window
 // 8.8% out at 48kHz, so the zoomed waveform was drawn from the wrong region of
 // the audio and the playhead did not match what was drawn.
+//
+// The previous version of this test computed the expected start frame from
+// w.Start and its own rate, but w.Start comes from WindowFor, which takes no
+// rate -- so the assertion never touched RenderZoomed's rate handling and
+// passed unchanged against the bug it was written for.
+//
+// This puts a single click at a known second and asserts it lands in the
+// column the window geometry puts it in. That assertion only holds if
+// RenderZoomed actually converted the window with the rate it was given.
 func TestRenderZoomedRespectsSampleRate(t *testing.T) {
-	// A 1Hz click every second, at 48k. The window must pick out the region
-	// around 30s regardless of the rate passed.
+	// One click per second, so a click marks every whole second of the PCM.
 	const rate = 48000
-	sec := 40
-	pcm := make(dsp.Stereo, 0, sec*rate*2)
-	for i := 0; i < sec*rate; i++ {
+	const seconds = 40
+	pcm := make(dsp.Stereo, seconds*rate*2)
+	for i := 0; i < seconds*rate; i++ {
 		v := float32(0)
 		if i%rate == 0 {
 			v = 1
 		}
-		pcm = append(pcm, v, v)
+		pcm[i*2], pcm[i*2+1] = v, v
 	}
 
+	const width = 60
 	w := WindowFor(30*time.Second, 2, 128)
-	at48 := RenderZoomed(pcm, w, 60, 4, nil, nil, rate)
-	if len(at48) != 4 {
-		t.Fatalf("got %d rows", len(at48))
+	rows := RenderZoomed(pcm, w, width, 4, nil, nil, rate)
+	if len(rows) != 4 {
+		t.Fatalf("got %d rows, want 4", len(rows))
 	}
 
-	// The window start must land near 30s. Passing 44100 for a 48k signal
-	// shifts it by 8.8%, which is about 2.6s here -- far enough to miss the
-	// click at 30s entirely.
-	startFrame := int(w.Start.Seconds() * float64(rate))
-	if want := int(29 * rate); startFrame < want || startFrame > 31*rate {
-		t.Fatalf("window start frame %d (%.2fs) is nowhere near 30s", startFrame, float64(startFrame)/rate)
+	// The window starts at 30s and is 2s long, so the clicks at 30s and 31s
+	// are inside it, at columns 0 and width/2. Under an 8.8% error the slice
+	// would begin at 27.4s and neither click would be where it belongs.
+	lit := litColumns(rows, width)
+	for _, want := range []float64{0, 0.5} {
+		col := int(want * float64(width-1))
+		if lit[col] == 0 {
+			t.Errorf("no waveform at column %d (expected a click at %.0f%% of the window); lit=%v",
+				col, want*100, lit)
+		}
+	}
+
+	// The strongest form of the check: rendering the same window with the wrong
+	// rate must produce a different picture. If it produced the same one, the
+	// rate argument would not be reaching the slice at all.
+	wrong := RenderZoomed(pcm, w, width, 4, nil, nil, 44100)
+	if sameAs(t, rows, wrong) {
+		t.Error("rendering at 44.1k and 48k produced identical output; the rate argument is not being used")
 	}
 
 	// A non-positive rate falls back to the default rather than dividing by zero.
-	if got := RenderZoomed(pcm, w, 60, 4, nil, nil, 0); len(got) != 4 {
+	if got := RenderZoomed(pcm, w, width, 4, nil, nil, 0); len(got) != 4 {
 		t.Error("a zero sample rate must fall back, not fail")
 	}
+}
+
+// litColumns reports, per column, how many of the rows have a glyph there.
+func litColumns(rows []string, width int) []int {
+	lit := make([]int, width)
+	for _, row := range rows {
+		r := []rune(row)
+		for i := 0; i < width && i < len(r); i++ {
+			if r[i] != ' ' {
+				lit[i]++
+			}
+		}
+	}
+	return lit
+}
+
+func sameAs(t *testing.T, a, b []string) bool {
+	t.Helper()
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -267,3 +267,70 @@ func TestRenderOverviewHighlightsWindowRange(t *testing.T) {
 		t.Error("moving the window changed nothing; the overview cannot show where it sits")
 	}
 }
+
+// brailleDotMask is the cell value the window-edge marker writes: the top dot of
+// both columns. OR-ing an amplitude dot would be invisible on a loud track,
+// where every amplitude dot is already lit, so the marker overwrites instead.
+const brailleDotMask = 0x01 | 0x08
+
+// TestRenderOverviewMarksTheWindowEdges pins the window bracket. The old test
+// only checked the width, which a blank string satisfies, so both the bracket
+// and the quiet-signal floor could be deleted without a single failure.
+func TestRenderOverviewMarksTheWindowEdges(t *testing.T) {
+	const width = 20
+	// A loud signal, so amplitude dots are lit everywhere. The marker is then
+	// only visible as the top-dot glyph it writes.
+	o := RenderOverview(testPeaks(20, 1), width, 5, 14, -1)
+
+	for _, c := range []int{5, 14} {
+		cell := []rune(o)[c] - brailleBase
+		if rune(cell) != brailleDotMask {
+			t.Errorf("window edge %d: cell = %#x, want the top-dot marker %#x", c, cell, brailleDotMask)
+		}
+	}
+
+	// A cell outside the window must NOT carry the marker.
+	if cell := []rune(o)[2] - brailleBase; cell == brailleDotMask {
+		t.Errorf("cell 2 is outside the window but carries the marker: %#x", cell)
+	}
+}
+
+// TestRenderOverviewShowsAQuietSignal pins the floor that keeps a quiet but
+// present signal visible. Without it, a track that is audible but does not
+// reach the first amplitude level draws as silence.
+func TestRenderOverviewShowsAQuietSignal(t *testing.T) {
+	// Amplitude well below the level that would round to a dot on its own,
+	// but above the "genuinely silent" cutoff.
+	p := Peaks{Min: make([]float32, 40), Max: make([]float32, 40)}
+	for i := range p.Max {
+		p.Max[i] = 0.02
+		p.Min[i] = -0.02
+	}
+
+	o := RenderOverview(p, 20, -1, -2, -1)
+	lit := 0
+	for _, r := range o {
+		if r != brailleBase {
+			lit++
+		}
+	}
+	if lit == 0 {
+		t.Errorf("a quiet but audible signal rendered blank: %q", o)
+	}
+}
+
+// TestRenderOverviewGenuineSilence checks the other end: below the cutoff the
+// strip stays blank, so silence is not drawn as audio.
+func TestRenderOverviewGenuineSilence(t *testing.T) {
+	p := Peaks{Min: make([]float32, 40), Max: make([]float32, 40)}
+	p.Max[0] = 0.005 // below the 0.01 floor
+	p.Min[0] = -0.005
+
+	o := RenderOverview(p, 20, -1, -2, -1)
+	for i, r := range o {
+		if r != brailleBase {
+			t.Errorf("cell %d lit for a signal below the silence floor: %q", i, o)
+			break
+		}
+	}
+}

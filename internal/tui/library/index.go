@@ -145,14 +145,29 @@ func Sort(tracks []Track, by SortKey, desc bool) []Track {
 
 // stableUndetected moves undetected entries to the end after a descending
 // reverse would have put them first.
+// stableUndetected moves entries with no detected value to the end, in both
+// directions.
+//
+// It applies to key sorting as well as BPM. camelLess already ranks an
+// undetected key last, but the descending path reverses the whole slice
+// afterwards, which put every un-keyed track at the top of the list -- the
+// opposite of what the ascending comparator promises.
 func stableUndetected(ts []Track, by SortKey) {
-	if by != SortBPM {
+	if by != SortBPM && by != SortByKey {
 		return
 	}
+	undetected := func(t Track) bool {
+		if by == SortByKey {
+			_, _, ok := parseCamelot(t.KeyCamelot)
+			return !ok
+		}
+		return t.BPM == 0
+	}
+
 	detected := ts[:0]
 	var undet []Track
 	for _, t := range ts {
-		if t.BPM == 0 {
+		if undetected(t) {
 			undet = append(undet, t)
 		} else {
 			detected = append(detected, t)
@@ -178,6 +193,12 @@ func camelLess(a, b string) bool {
 	return aa < ba
 }
 
+// parseCamelot splits a Camelot key into its number and its A/B letter.
+//
+// The number must be 1-12, the wheel's actual range. Without the range check
+// "100A" parsed as a valid key and sorted after every real one, so a corrupt or
+// mistyped key would quietly push a track to the end of the list instead of
+// being treated as undetected.
 func parseCamelot(s string) (num int, letter byte, ok bool) {
 	if len(s) < 2 {
 		return 0, 0, false
@@ -192,6 +213,9 @@ func parseCamelot(s string) (num int, letter byte, ok bool) {
 		digits++
 	}
 	if digits == 0 || (s[len(s)-1] != 'A' && s[len(s)-1] != 'B') {
+		return 0, 0, false
+	}
+	if n < 1 || n > 12 {
 		return 0, 0, false
 	}
 	return n, s[len(s)-1], true
