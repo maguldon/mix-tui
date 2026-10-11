@@ -74,6 +74,10 @@ func (ix *Index) Len() int {
 	return len(ix.tracks)
 }
 
+// Add inserts a track, ignoring duplicates by path. It lets a caller populate
+// an index from a cache or a crate without going through a filesystem scan.
+func (ix *Index) Add(t Track) bool { return ix.add(t) }
+
 func (ix *Index) add(t Track) bool {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()

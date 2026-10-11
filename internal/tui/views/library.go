@@ -1,0 +1,356 @@
+// Package views renders the library browser and the mid-set load overlay.
+//
+// Both are pure functions of (width, height, index, state) to a string: no I/O,
+// no terminal access. That is what lets the whole interface be asserted on
+// without a terminal (spec §8).
+package views
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/maguldon/mix-tui/internal/tui/library"
+)
+
+// minLibraryWidth is the hard floor for the three-pane browser.
+//
+// spec §6.5 chose a floor over permanently truncated columns: at a narrow
+// terminal, telling the user to widen it is more useful than showing three
+// unreadable slivers.
+const minLibraryWidth = 120
+
+// keyConfidenceThreshold matches the engine's gate. Below it a key is shown as
+// unknown, because a displayed key is believed.
+const keyConfidenceThreshold = 0.55
+
+// Pane selects which pane has focus.
+type Pane int
+
+const (
+	PaneCrates Pane = iota
+	PaneTracks
+	PaneSearch
+)
+
+// LibraryState is the browser's interaction state.
+type LibraryState struct {
+	Pane     Pane
+	CrateSel int
+	TrackSel int
+	Query    string
+	SortBy   library.SortKey
+	SortDesc bool
+	// ShowSort swaps the detail pane for the sort menu.
+	ShowSort bool
+	Width    int
+}
+
+// RenderLibrary draws the three-pane browser: crates | tracks | detail.
+func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	if w < minLibraryWidth {
+		return tooNarrow(w, minLibraryWidth, "library browser")
+	}
+
+	tracks := ix.Tracks()
+	if st.Query != "" {
+		tracks = library.Search(tracks, st.Query)
+	}
+	tracks = library.Sort(tracks, st.SortBy, st.SortDesc)
+
+	// Fixed panes take their width; the track pane absorbs the remainder so the
+	// frame is exactly w columns wide. Leftover width goes to the track list
+	// rather than being dropped, which would leave the right edge ragged.
+	gap := 1
+	crateW := 28
+	detailW := 22
+	if w < crateW+detailW+3*gap {
+		// Too narrow for three panes: drop the detail pane before squeezing the
+		// track list into something unreadable.
+		detailW = 0
+	}
+	if crateW > w-2*gap {
+		crateW = maxInt(4, w-2*gap)
+	}
+	trackW := w - crateW - detailW - 2*gap
+	if trackW < 20 {
+		detailW = 0
+		trackW = w - crateW - gap
+	}
+	if trackW < 1 {
+		trackW = 1
+	}
+
+	rows := h - 1 // one header row
+	trackPane := trackRows(tracks, st, trackW, rows)
+	cratePane := crateRows(ix, crateW, rows)
+
+	right := detailRows(tracks, st, detailW, rows)
+	if st.ShowSort {
+		right = sortRows(detailW, rows)
+	}
+
+	lines := combine([][]string{cratePane, trackPane, right}, gap, w, h)
+	return frame(lines, w, h)
+}
+
+// trackRows renders the middle pane.
+func trackRows(tracks []library.Track, st LibraryState, w, rows int) []string {
+	out := make([]string, 0, rows)
+	header := pad(trackHeader(w), w)
+	out = append(out, header)
+	for i := 0; i < rows-1; i++ {
+		idx := i + scrollOffset(st, rows)
+		if idx < 0 || idx >= len(tracks) {
+			out = append(out, spaces(w))
+			continue
+		}
+		cursor := "  "
+		if idx == st.TrackSel {
+			cursor = "> "
+		}
+		out = append(out, pad(cursor+trackLine(tracks[idx], w-2), w))
+	}
+	return out
+}
+
+// scrollOffset keeps the selection visible in a long list.
+func scrollOffset(st LibraryState, rows int) int {
+	visible := rows - 1
+	if visible < 1 {
+		visible = 1
+	}
+	if st.TrackSel < visible {
+		return 0
+	}
+	return st.TrackSel - visible + 1
+}
+
+// colWidths derives the track pane's column widths from the pane width, once,
+// so the header and every row line up. Computing them separately per row is how
+// a column drifts by one and the whole table stops being readable.
+func colWidths(w int) (title, artist int) {
+	const bpm, key, dur, gap = 7, 4, 6, 3
+	avail := w - bpm - key - dur - gap - 3 // minus the cursor and a trailing gap
+	if avail < 10 {
+		// Too narrow for both names: give the title what it needs and drop the
+		// artist rather than truncating the title to nothing.
+		return maxInt(0, avail), 0
+	}
+	title = avail / 2
+	artist = avail - title
+	if title > 28 {
+		// Leftover goes to the title first: a DJ scans titles.
+		title = minInt(28, avail-6)
+		artist = avail - title
+	}
+	return title, artist
+}
+
+// trackHeader labels the columns using the same widths as the rows.
+func trackHeader(w int) string {
+	tw, aw := colWidths(w)
+	s := "  " + fmt.Sprintf("%-*s %-*s %7s %4s %6s ", tw, "TITLE", aw, "ARTIST", "BPM", "KEY", "TIME")
+	return truncate(s, w)
+}
+
+// trackLine renders one track row, dropping the duration bar first when space
+// runs short and distributing leftover width to title then artist.
+func trackLine(t library.Track, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	bpm := "--"
+	if t.BPM > 0 {
+		bpm = fmt.Sprintf("%.2f", t.BPM)
+	}
+	key := "--"
+	if t.KeyCamelot != "" && t.KeyConfidence >= keyConfidenceThreshold {
+		key = t.KeyCamelot
+	}
+	dur := mmss(t.Duration)
+
+	tw, aw := colWidths(w)
+	if aw == 0 {
+		return truncate(fmt.Sprintf("%-*s %7s %4s %6s", tw, t.Title, bpm, key, dur), w)
+	}
+	return truncate(fmt.Sprintf("%-*s %-*s %7s %4s %6s ",
+		tw, t.Title, aw, t.Artist, bpm, key, dur), w)
+}
+
+// crateRows renders the left pane: crate names plus the scan summary.
+func crateRows(ix *library.Index, w, rows int) []string {
+	out := make([]string, 0, rows)
+	out = append(out, pad(dimStyle.Render("CRATES"), w))
+	out = append(out, pad(dimStyle.Render(strings.Repeat("-", minInt(w, 6))), w))
+	for i := 0; i < rows-2; i++ {
+		name := ""
+		switch {
+		case i == 0:
+			name = "All tracks"
+		case i == 1:
+			name = fmt.Sprintf("  (%d tracks)", ix.Len())
+		}
+		out = append(out, pad(name, w))
+	}
+	return out
+}
+
+// detailRows renders the right pane for the selected track.
+func detailRows(tracks []library.Track, st LibraryState, w, rows int) []string {
+	if w <= 0 {
+		return make([]string, rows)
+	}
+	var lines []string
+	lines = append(lines, labelStyle.Render("DETAIL"))
+	if t, ok := pick(tracks, st.TrackSel); ok {
+		lines = append(lines, truncate(t.Title, w))
+		lines = append(lines, dimStyle.Render(truncate(t.Artist, w)))
+		lines = append(lines, "")
+		lines = append(lines, truncate("BPM  "+bpmText(t), w))
+		lines = append(lines, truncate("KEY  "+keyText(t), w))
+		lines = append(lines, truncate("key conf "+fmt.Sprintf("%.0f%%", t.KeyConfidence*100), w))
+		lines = append(lines, "")
+		lines = append(lines, truncate("TIME "+mmss(t.Duration), w))
+		lines = append(lines, truncate("PATH "+t.Path, w))
+	} else {
+		lines = append(lines, dimStyle.Render(truncate("no selection", w)))
+	}
+	for len(lines) < rows {
+		lines = append(lines, spaces(w))
+	}
+	return lines[:rows]
+}
+
+// sortRows renders the sort menu that replaces the detail pane.
+func sortRows(w, rows int) []string {
+	opts := []struct {
+		name string
+		k    library.SortKey
+	}{
+		{"title", library.SortTitle},
+		{"artist", library.SortArtist},
+		{"BPM", library.SortBPM},
+		{"key", library.SortByKey},
+		{"added", library.SortAdded},
+	}
+	out := make([]string, 0, rows)
+	out = append(out, labelStyle.Render("SORT BY"))
+	for _, o := range opts {
+		out = append(out, truncate("  "+o.name, w))
+	}
+	for len(out) < rows {
+		out = append(out, spaces(w))
+	}
+	return out[:rows]
+}
+
+// MatchTrack returns the track a selection refers to after filtering.
+//
+// The selection applies to the FILTERED list, so filtering first and clamping
+// after is what keeps a stale index from returning the wrong track.
+func MatchTrack(ts []library.Track, query string, sel int) (library.Track, bool) {
+	return pick(library.Search(ts, query), sel)
+}
+
+func pick(tracks []library.Track, sel int) (library.Track, bool) {
+	if sel < 0 || sel >= len(tracks) {
+		return library.Track{}, false
+	}
+	return tracks[sel], true
+}
+
+func bpmText(t library.Track) string {
+	if t.BPM <= 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%.2f", t.BPM)
+}
+
+func keyText(t library.Track) string {
+	if t.KeyCamelot == "" || t.KeyConfidence < keyConfidenceThreshold {
+		return "--"
+	}
+	return t.KeyCamelot
+}
+
+func combine(cols [][]string, gap, w, h int) []string {
+	maxRows := 0
+	for _, c := range cols {
+		if len(c) > maxRows {
+			maxRows = len(c)
+		}
+	}
+	gapStr := spaces(gap)
+	out := make([]string, 0, maxRows)
+	for i := 0; i < maxRows; i++ {
+		var b strings.Builder
+		for j, c := range cols {
+			if j > 0 {
+				b.WriteString(gapStr)
+			}
+			if i < len(c) {
+				b.WriteString(c[i])
+			} else {
+				b.WriteString(spaces(colWidth(cols, j)))
+			}
+		}
+		out = append(out, b.String())
+	}
+	for len(out) < h {
+		out = append(out, spaces(w))
+	}
+	return out[:h]
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func colWidth(cols [][]string, j int) int {
+	w := 0
+	for _, l := range cols[j] {
+		if lw := lipgloss.Width(l); lw > w {
+			w = lw
+		}
+	}
+	return w
+}
+
+// frame makes the output an exact w-by-h rectangle: every line is padded to w
+// and the row count clamped to h. A ragged frame makes a full-screen app
+// repaint noise, so this is not cosmetic.
+func frame(lines []string, w, h int) string {
+	out := make([]string, h)
+	for i := 0; i < h; i++ {
+		if i < len(lines) {
+			out[i] = pad(lines[i], w)
+		} else {
+			out[i] = spaces(w)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func tooNarrow(w, need int, what string) string {
+	msg := fmt.Sprintf("terminal too small: %d cols, need %d", w, need)
+	sub := fmt.Sprintf("the %s needs %d columns", what, need)
+	return frame([]string{pad(msg, w), "", dimStyle.Render(pad(sub, w))}, w, 3)
+}
+
+func mmss(d time.Duration) string {
+	if d <= 0 {
+		return "--:--"
+	}
+	m := int(d / time.Minute)
+	s := int((d % time.Minute) / time.Second)
+	return fmt.Sprintf("%d:%02d", m, s)
+}
