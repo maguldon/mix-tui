@@ -45,18 +45,30 @@ const (
 	cmdFilterKind
 )
 
-// commandQueueSize is a power of two so the index wrap is a mask.
+// commandQueueSize is a power of two so the index wrap is a MASK, not a
+// modulo.
 //
-// The depth is a deliberate trade. It must absorb a MIDI storm without
-// dropping commands, but a control change older than a few blocks is stale: a
-// pitch fader position from 100ms ago is not what the user wants. 256 gives
-// roughly 3 seconds of blocks at a pathological block rate, far more than any
-// real burst, while keeping the backlog bounded and stale-free in practice.
+// It was previously used as commandQueueSize-1, which silently made the ring
+// one slot smaller than the fullness check allowed: the 256th outstanding
+// command was written to the slot the reader was about to consume, destroying
+// the oldest unread command and racing the reader, while droppedCount — the
+// counter whose whole purpose is to make a glitch observable — stayed at zero.
+//
+// The depth is a deliberate trade. It must absorb a MIDI storm without dropping
+// commands, but a control change older than a few blocks is stale. 256 gives
+// roughly three seconds of blocks at a pathological block rate, far more than
+// any real burst, while keeping the backlog bounded.
 const commandQueueSize = 256
+
+// commandQueueMask is the wrap mask. With a power-of-two size the ring holds
+// commandQueueSize-1 entries: a full ring cannot be told from an empty one
+// without a spare slot, and using commandQueueSize for the count would make
+// the writer lap the reader.
+const commandQueueMask = commandQueueSize - 1
 
 // commandQueue is a bounded lock-free SPSC queue of commands.
 type commandQueue struct {
-	buf   [commandQueueSize]command
+	buf   [commandQueueMask]command
 	write atomic.Uint32
 	read  atomic.Uint32
 	// droppedCount counts commands lost to a full queue. Exposed through
@@ -70,11 +82,14 @@ type commandQueue struct {
 func (q *commandQueue) post(c command) {
 	w := q.write.Load()
 	r := q.read.Load()
-	if w-r >= commandQueueSize {
+	if w-r >= uint32(commandQueueMask) {
+		// Full. Drop the NEWEST rather than overwrite the oldest: the reader
+		// may already be reading that slot, and clobbering it would both lose
+		// a command and race.
 		q.droppedCount.Add(1)
 		return
 	}
-	q.buf[w%(commandQueueSize-1)] = c
+	q.buf[w&uint32(commandQueueMask)] = c
 	q.write.Store(w + 1)
 }
 
@@ -86,7 +101,7 @@ func (q *commandQueue) drain(fn func(command)) {
 	r := q.read.Load()
 	w := q.write.Load()
 	for ; r != w; r++ {
-		fn(q.buf[r%(commandQueueSize-1)])
+		fn(q.buf[r&uint32(commandQueueMask)])
 	}
 	q.read.Store(r)
 }
