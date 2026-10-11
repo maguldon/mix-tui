@@ -70,6 +70,10 @@ type Deck struct {
 	savedLoop map[int]SavedLoop
 	rollStack []rollFrame
 
+	// rateRatio converts the track's sample rate to the deck's. 1.0 when they
+	// match; set in Load.
+	rateRatio float64
+
 	// hotcues holds exact fractional frame positions, parallel to pos, so a
 	// hotcue jump lands with the same precision as any other seek.
 	hotcues   [numHotcues]float64
@@ -100,6 +104,7 @@ func NewDeckAtRate(index, rate int) *Deck {
 		eq:              dsp.NewEQ(rate),
 		filter:          dsp.NewFilter(rate),
 		settleResampler: dsp.NewResampler(rate, rate),
+		rateRatio:       1,
 		primeBuf:        make(dsp.Stereo, dsp.BiquadHistorySamples*2),
 		inBuf:           make(dsp.Stereo, BlockFrames*2),
 		outBuf:          make(dsp.Stereo, BlockFrames*2),
@@ -112,7 +117,20 @@ func (d *Deck) Load(t *audio.Track) {
 	d.track = t
 	d.pos = 0
 	d.playing = false
-	d.resampler.Reset()
+	// A track may be decoded at a different rate than the deck renders at —
+	// a 48k file on a 44.1k deck, or the reverse. The resampler converts
+	// between them so the deck's output rate always matches its declaration.
+	// Without this the audio plays at the source rate's speed while the stream
+	// declares the deck's, which is 9% fast and a semitone sharp at 48k.
+	// SetRatio is INPUT frames consumed per OUTPUT frame produced, so
+	// producing outRate frames per second from a source at inRate needs
+	// inRate/outRate. Getting this backwards plays the track fast instead of
+	// converting it.
+	d.rateRatio = 1
+	if t != nil && t.SampleRate > 0 {
+		d.rateRatio = float64(t.SampleRate) / float64(d.rate)
+	}
+	d.applyResamplerRatio()
 	d.eq.Reset()
 	d.filter.Reset()
 }
@@ -190,7 +208,17 @@ func (d *Deck) SetPitch(normalized float64) {
 // setPitch applies a pitch change on the render goroutine.
 func (d *Deck) setPitch(normalized float64) {
 	d.pitchNorm = dsp.ClampNormalized(normalized)
-	d.resampler.SetRatio(1 + d.pitchNorm*PitchRange)
+	d.applyResamplerRatio()
+}
+
+// applyResamplerRatio sets the resampler to the product of the rate conversion
+// and the pitch fader, so moving one never discards the other.
+func (d *Deck) applyResamplerRatio() {
+	ratio := d.rateRatio
+	if ratio <= 0 {
+		ratio = 1
+	}
+	d.resampler.SetRatio(ratio * (1 + d.pitchNorm*PitchRange))
 }
 
 // SetPitchNormalized is an alias for SetPitch, named for call sites that
@@ -504,7 +532,12 @@ func (d *Deck) renderBlock(out dsp.Stereo) int {
 		d.playing = false
 		return 0
 	}
-	d.pos += float64(n) * d.PitchRatio()
+	// The playhead advances by the SAME combined ratio the resampler runs at.
+	// ProcessFrom is given an absolute source position; if d.pos advanced by
+	// pitch alone while the resampler consumed rate*source frames per output
+	// frame, the two desynchronise and the pitch drifts. This is why a 48k
+	// deck playing a 44.1k source rendered the tone at 480Hz.
+	d.pos += float64(n) * d.rateRatio * d.PitchRatio()
 
 	// EQ then filter, in the order a hardware signal chain runs.
 	d.eq.Process(out, d.outBuf[:len(out)])
@@ -558,7 +591,7 @@ func (d *Deck) primeFilters(frame int) {
 	// resampler, so the deck's own state (already primed at frame) is
 	// untouched. The scratch resampler is allocated once in NewDeck: seeking
 	// must not allocate (spec §4.3).
-	d.settleResampler.SetRatio(d.PitchRatio())
+	d.settleResampler.SetRatio(d.rateRatio * d.PitchRatio())
 	d.settleResampler.Prime(d.track.PCM, frame-n, d.settleResampler.HistorySamples())
 	if got := d.settleResampler.ProcessFrom(d.track.PCM, frame-n, hist); got != n {
 		for i := got * 2; i < len(hist); i++ {
