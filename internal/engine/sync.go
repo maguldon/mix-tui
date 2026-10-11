@@ -65,15 +65,41 @@ func (d *Deck) nearestBeat(frame float64) (float64, bool) {
 		return 0, false
 	}
 	if beats := d.beatgrid.Beats; len(beats) > 0 {
-		best := math.Inf(1)
-		var bestFrame float64
-		for _, b := range beats {
-			f := d.durationToFrames(b)
-			if diff := math.Abs(f - frame); diff < best {
-				best, bestFrame = diff, f
+		// Binary search for the insertion point, then pick the nearer of the
+		// two beats around it.
+		//
+		// This ran as a linear scan over every beat in the track, twice per
+		// deck, on every Snapshot -- and Snapshot runs about thirty times a
+		// second while holding the engine mutex. A seven-hour set at 120BPM is
+		// 50,000 beats, which put half a millisecond of render-path work per
+		// frame behind the same lock the mix takes. The list is sorted and
+		// never mutates between loads, so the search is exact, not an
+		// approximation.
+		//
+		// The search stays in frame space throughout. Converting the frame to
+		// a duration and back would be lossy, and framesToDuration returns 0
+		// for a deck with no track loaded, which silently collapsed the whole
+		// search onto the first beat.
+		lo, hi := 0, len(beats)
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if d.durationToFrames(beats[mid]) < frame {
+				lo = mid + 1
+			} else {
+				hi = mid
 			}
 		}
-		return bestFrame, true
+		best, bestDiff := 0.0, math.Inf(1)
+		for _, i := range [...]int{lo - 1, lo} {
+			if i < 0 || i >= len(beats) {
+				continue
+			}
+			f := d.durationToFrames(beats[i])
+			if diff := math.Abs(f - frame); diff < bestDiff {
+				best, bestDiff = f, diff
+			}
+		}
+		return best, true
 	}
 
 	per := d.beatPeriodFrames()
