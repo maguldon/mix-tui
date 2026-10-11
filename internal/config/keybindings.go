@@ -16,6 +16,8 @@ import (
 type KeyResolver struct {
 	bindings map[string]compiled
 	toggles  map[string]bool
+	// lines caches the rendered help listing; see DescribeLines.
+	lines []string
 }
 
 type compiled struct {
@@ -177,14 +179,38 @@ type Binding struct {
 // Describe returns the bound keys with descriptions, sorted by key.
 func (r *KeyResolver) Describe() []Binding {
 	out := make([]Binding, 0, len(r.bindings))
+	for _, line := range r.DescribeLines() {
+		k, desc := splitBinding(line)
+		out = append(out, Binding{Key: k, Description: desc})
+	}
+	return out
+}
+
+func splitBinding(b string) (key, desc string) {
+	if i := strings.Index(b, "  "); i >= 0 {
+		return strings.TrimSpace(b[:i]), strings.TrimSpace(b[i:])
+	}
+	return strings.TrimSpace(b), ""
+}
+
+// DescribeLines returns the help lines as "key  description", sorted.
+//
+// The result is cached: the binding table only changes when a new resolver is
+// built, and the view asked for this on every rendered frame.
+func (r *KeyResolver) DescribeLines() []string {
+	if r.lines != nil {
+		return r.lines
+	}
+	out := make([]string, 0, len(r.bindings))
 	for k := range r.bindings {
 		desc := keyDescriptions[k]
 		if desc == "" {
 			desc = r.bindings[k].action.String()
 		}
-		out = append(out, Binding{Key: k, Description: desc})
+		out = append(out, k+"  "+desc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	sort.Strings(out)
+	r.lines = out
 	return out
 }
 

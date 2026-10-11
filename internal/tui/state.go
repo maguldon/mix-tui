@@ -63,6 +63,8 @@ type ViewState struct {
 	// which is what a DJ expects when they press escape to check something.
 	TrackSel int
 	Query    string
+	// ShowSort opens the sort menu over the detail pane.
+	ShowSort bool
 	// LastErr and LastErrAt drive the auto-expiring error line.
 	LastErr   string
 	LastErrAt time.Time

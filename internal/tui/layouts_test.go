@@ -35,9 +35,19 @@ func TestAllLayoutsSurviveTiny(t *testing.T) {
 	for _, k := range []LayoutKind{LayoutA, LayoutB, LayoutC, LayoutD} {
 		for _, size := range [][2]int{{20, 5}, {10, 3}, {1, 1}, {200, 2}} {
 			out := Render(size[0], size[1], snapTwoDecks(), ViewState{Layout: k})
-			for _, l := range strings.Split(out, "\n") {
-				if len(l) > 0 && strings.Contains(l, "panic") {
-					t.Fatalf("layout %v at %dx%d looks broken:\n%s", k, size[0], size[1], out)
+			// Checking for the literal text "panic" proves nothing: no render
+			// path emits it. A panic would fail the test outright, so what is
+			// actually worth asserting is that every size produced a frame of
+			// the right shape.
+			lines := strings.Split(out, "\n")
+			if size[1] > 1 && len(lines) != size[1] {
+				t.Errorf("layout %v at %dx%d produced %d lines, want %d",
+					k, size[0], size[1], len(lines), size[1])
+			}
+			for i, l := range lines {
+				if lipgloss.Width(l) > size[0] {
+					t.Errorf("layout %v at %dx%d line %d is %d cols",
+						k, size[0], size[1], i, lipgloss.Width(l))
 				}
 			}
 		}

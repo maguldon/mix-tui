@@ -161,6 +161,28 @@ func TestRenderWaveMarkersAreVisible(t *testing.T) {
 	if same {
 		t.Error("markers did not change the rendered waveform")
 	}
+	// Each marker class must be individually visible. The previous assertion
+	// only required the frame to differ, which a single marker of the five
+	// would satisfy.
+	for name, spec := range map[string]WaveSpec{
+		"playhead": {Peaks: testPeaks(20, 0), Width: 20, Height: 4, PlayCol: 7},
+		"beats":    {Peaks: testPeaks(20, 0), Width: 20, Height: 4, PlayCol: -1, Beats: []int{7}},
+		"cues":     {Peaks: testPeaks(20, 0), Width: 20, Height: 4, PlayCol: -1, Cues: []int{7}},
+		"loops":    {Peaks: testPeaks(20, 0), Width: 20, Height: 4, PlayCol: -1, Loops: []LoopSpan{{Start: 3, End: 12}}},
+	} {
+		got := RenderWave(spec)
+		changed := false
+		for i := range base {
+			if base[i] != got[i] {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			t.Errorf("the %s marker is invisible", name)
+		}
+	}
+	_ = marked
 }
 
 // TestRenderWaveMarkersStayInBounds feeds out-of-range marker indices; a

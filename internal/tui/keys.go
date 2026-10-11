@@ -50,13 +50,8 @@ func (m *Model) handleKey(k string) {
 
 	// Mode-relative keys. A key meaning different things in two modes is fine,
 	// as long as the footer says which mode you are in.
-	if m.st.Mode == ModeLibrary {
-		if m.handleLibraryKey(name) {
-			return
-		}
-	}
-	if m.st.Mode == ModeOverlay {
-		if m.handleOverlayKey(name) {
+	if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
+		if m.handleBrowserKey(name) {
 			return
 		}
 	}
@@ -89,9 +84,9 @@ func (m *Model) handleKey(k string) {
 	m.applyAction(a)
 }
 
-// handleLibraryKey handles the browser's own keys. It reports whether it
+// handleBrowserKey handles the browser's own keys. It reports whether it
 // consumed the key.
-func (m *Model) handleLibraryKey(name string) bool {
+func (m *Model) handleBrowserKey(name string) bool {
 	switch name {
 	case "up":
 		if m.st.TrackSel > 0 {
@@ -104,7 +99,7 @@ func (m *Model) handleLibraryKey(name string) bool {
 		// showed no tracks at all.
 		m.st.TrackSel = minInt(m.st.TrackSel+1, maxInt(0, m.trackCount()-1))
 		return true
-	case "left", "backspace":
+	case "left":
 		m.st.Query = dropLastRune(m.st.Query)
 		return true
 	case "right":
@@ -113,6 +108,20 @@ func (m *Model) handleLibraryKey(name string) bool {
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
 		// did nothing before, so the browser had no way to load anything.
 		m.loadSelected()
+		return true
+	case "backspace":
+		m.st.Query = dropLastRune(m.st.Query)
+		return true
+	case "s":
+		// The sort menu replaces the detail pane; without a producer it was
+		// unreachable in the running application even though it rendered.
+		m.st.ShowSort = !m.st.ShowSort
+		return true
+	}
+	// Any other single printable rune filters the list. The full-screen
+	// browser previously had no way to narrow a track list at all.
+	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
+		m.st.Query += name
 		return true
 	}
 	return false
@@ -139,25 +148,6 @@ func (m *Model) selectedTrack() (library.Track, bool) {
 		return library.Track{}, false
 	}
 	return views.MatchTrack(m.lib.Tracks(), m.st.Query, m.st.TrackSel)
-}
-
-// handleOverlayKey handles the quick-load overlay: printable characters filter,
-// enter loads into the focused deck.
-func (m *Model) handleOverlayKey(name string) bool {
-	switch name {
-	case "enter":
-		m.loadSelected()
-		return true
-	case "backspace":
-		m.st.Query = dropLastRune(m.st.Query)
-		return true
-	}
-	// Any other single printable rune is appended to the query.
-	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
-		m.st.Query += name
-		return true
-	}
-	return false
 }
 
 // trackCount is how many tracks the filtered library holds.

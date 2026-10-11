@@ -60,8 +60,14 @@ func TestDeckPanelShowsLoopState(t *testing.T) {
 
 func TestEmptyDeckShowsArtNotBlank(t *testing.T) {
 	out := strings.Join(RenderPanel(renderDeckPanel(40, emptyDeck(), ViewState{}, false, 12), 14), "\n")
-	if !strings.Contains(out, "L") {
-		t.Errorf("expected a load hint:\n%s", out)
+	// The art says EMPTY and offers the key that loads. The previous assertion
+	// looked for a bare "L", which the word EMPTY alone satisfies, so it passed
+	// against a panel with no prompt at all.
+	if !strings.Contains(out, "EMPTY") {
+		t.Errorf("the empty deck does not say so:\n%s", out)
+	}
+	if !strings.Contains(out, "press L") {
+		t.Errorf("the empty deck offers no way to load a track:\n%s", out)
 	}
 }
 

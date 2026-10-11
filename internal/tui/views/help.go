@@ -42,9 +42,14 @@ func RenderHelp(w, h int, bindings []string) string {
 	return frame(lines, w, h)
 }
 
-// keyColumn is the leading whitespace-delimited token of a binding line.
+// keyColumn is the leading whitespace-delimited token of a binding line. It
+// returns "" for a blank line rather than indexing an empty slice.
 func keyColumn(b string) string {
-	return strings.TrimRight(strings.Fields(b + " ")[0], " ")
+	f := strings.Fields(b)
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
 }
 
 // splitBinding separates "key  description" on the first run of two spaces.

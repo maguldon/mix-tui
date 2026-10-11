@@ -261,9 +261,7 @@ func (m *Model) RenderAt(w, h int) string {
 	case ModeHelp:
 		var bindings []string
 		if m.keys != nil {
-			for _, b := range m.keys.Describe() {
-				bindings = append(bindings, b.Key+"  "+b.Description)
-			}
+			bindings = m.keys.DescribeLines()
 		}
 		body = views.RenderHelp(w, h, bindings)
 	case ModeDebug:
@@ -305,7 +303,7 @@ func (m *Model) libOrEmpty() *library.Index {
 }
 
 func (m *Model) libState() views.LibraryState {
-	return views.LibraryState{TrackSel: m.st.TrackSel, Query: m.st.Query}
+	return views.LibraryState{TrackSel: m.st.TrackSel, Query: m.st.Query, ShowSort: m.st.ShowSort}
 }
 
 func (m *Model) snapshot() engine.Snapshot {

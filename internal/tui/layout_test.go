@@ -115,8 +115,13 @@ func TestRenderColumnsFillsShortColumn(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("got %d lines, want 3 (shortest column padded)", len(out))
 	}
-	if !strings.Contains(out[2], "x") == false {
-		// row 2 must exist; its second column is spaces
+	// The short column's content must survive, and the rows above it must still
+	// be present with the missing cells padded rather than dropped.
+	if !strings.Contains(out[0], "x") {
+		t.Errorf("the short column's content was dropped:\n%q", out[0])
+	}
+	if !strings.Contains(out[0], "r0") {
+		t.Errorf("the long column's first row was dropped:\n%q", out[0])
 	}
 	for i, l := range out {
 		if lipgloss.Width(l) != 20 {

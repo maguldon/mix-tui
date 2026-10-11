@@ -43,6 +43,18 @@ func renderC(w, h int, s engine.Snapshot, st ViewState) string {
 	}
 	panelH = content + 2
 
+	// Respect the height. The stacked layout composes three blocks and previously
+	// concatenated them without clamping, so at h=2 it emitted seven lines: a
+	// full-screen app given a frame taller than its terminal scrolls, and the
+	// display corrupts (review focus #1).
+	if panelH*2+footerH > h {
+		footerH = maxInt(0, h-2*panelH)
+	}
+	if panelH*2+footerH > h {
+		panelH = maxInt(0, (h-footerH)/2)
+		content = maxInt(0, panelH-2)
+	}
+
 	top := RenderPanel(renderDeckPanel(w, deckAt(&s, 0), st, st.Focus == 0, content), panelH)
 	bottom := RenderPanel(renderDeckPanel(w, deckAt(&s, 1), st, st.Focus == 1, content), panelH)
 	// The real mixer panel, not the Task-2 placeholder: the placeholder shows

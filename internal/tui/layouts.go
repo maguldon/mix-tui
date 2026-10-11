@@ -38,7 +38,12 @@ func MinWidth(k LayoutKind) int {
 // mid-set gets a usable layout back instead of a corrupted one (review focus
 // #1), and a user who is simply too narrow is told what to do (#2).
 func Render(w, h int, s engine.Snapshot, st ViewState) string {
-	out := renderOne(w, h, s, st)
+	// Every layout is clamped to exactly h lines here, in one place. The layouts
+	// compose panels whose heights add up to more than the terminal in short
+	// windows, and each one clamped only its own pieces: at 200x2 layout A
+	// emitted seven lines. A frame taller than the terminal makes a full-screen
+	// app scroll and corrupt (review focus #1).
+	out := clampHeight(renderOne(w, h, s, st), h)
 	// Graceful degradation: if the chosen layout does not fit, fall back to the
 	// most spacious one that does rather than refusing to draw.
 	//
@@ -51,11 +56,26 @@ func Render(w, h int, s engine.Snapshot, st ViewState) string {
 			try := st
 			try.Layout = alt
 			if cand := renderOne(w, h, s, try); !strings.Contains(cand, "too small") {
-				return cand
+				return clampHeight(cand, h)
 			}
 		}
 	}
 	return out
+}
+
+// clampHeight trims or pads output to exactly h lines.
+func clampHeight(s string, h int) string {
+	if h <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderOne(w, h int, s engine.Snapshot, st ViewState) string {
