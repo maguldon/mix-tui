@@ -9,6 +9,8 @@ import (
 
 	"github.com/maguldon/mix-tui/internal/config"
 	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 // tickInterval is the refresh rate. ~30fps is enough for a level meter to read
@@ -30,6 +32,13 @@ type Model struct {
 	eng  Engine
 	cfg  *config.Config
 	keys *config.KeyResolver
+
+	// lib is the scanned library. It may be nil before the first scan, which
+	// every view must tolerate: the browser renders an empty library rather
+	// than failing.
+	lib *library.Index
+	// stats feeds the debug overlay.
+	stats views.DebugStats
 
 	st ViewState
 
@@ -114,60 +123,6 @@ func bindingName(k string) string {
 	return k
 }
 
-// handleKey resolves a key to an Action and applies it, or handles a UI-only
-// key (tab, esc) that has no Action.
-func (m *Model) handleKey(k string) {
-	switch k {
-	case "tab":
-		// Focus cycles and wraps, so repeated tabbing never runs off the end.
-		n := m.eng.DeckCount()
-		if n <= 0 {
-			return
-		}
-		m.st.Focus = (m.st.Focus + 1) % n
-		return
-	case "esc":
-		// Escape leaves any sub-view; from the mix view it is a no-op rather
-		// than an error.
-		if m.st.Mode != ModeMix {
-			m.st.Mode = ModeMix
-		}
-		return
-	}
-
-	if m.keys == nil {
-		return
-	}
-	a, ok := m.keys.Resolve(bindingName(k))
-	if !ok {
-		return // unknown key: no state change, no action
-	}
-
-	switch a.Kind {
-	case engine.LibraryOpen:
-		m.st.Mode = ModeLibrary
-		return
-	case engine.LibraryClose:
-		m.st.Mode = ModeMix
-		return
-	case engine.ZoomToggle:
-		m.st.Zoom = !m.st.Zoom
-		return
-	case engine.ViewNext:
-		m.st.Layout = m.st.Layout.next()
-		return
-	case engine.MixerCrossfader:
-		// Mirror immediately so the crossfader does not lag the engine by a
-		// tick while dragging.
-		m.st.Xfade = a.Value
-	case engine.Quit:
-		// The quit Action reaches the engine like any other; cmd/mix-tui
-		// handles the actual exit.
-	}
-
-	m.eng.Apply(a)
-}
-
 // expireErr clears an error older than errTTL.
 func (m *Model) expireErr() {
 	if m.st.LastErr == "" {
@@ -200,12 +155,27 @@ func (m *Model) RenderAt(w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
-	if m.eng != nil {
-		m.mirrorFromSnapshot()
-	}
-	s := m.eng.Snapshot()
 
-	body := renderLayout(m.st, w, h-1, s)
+	var body string
+	switch m.st.Mode {
+	case ModeLibrary:
+		body = views.RenderLibrary(w, h, m.libOrEmpty(), m.libState())
+	case ModeOverlay:
+		body = views.RenderOverlay(w, h, m.libOrEmpty(), m.st.Query, m.st.TrackSel)
+	case ModeHelp:
+		var bindings []string
+		if m.keys != nil {
+			for _, b := range m.keys.Describe() {
+				bindings = append(bindings, b.Key+"  "+b.Description)
+			}
+		}
+		body = views.RenderHelp(w, h, bindings)
+	case ModeDebug:
+		body = views.RenderDebug(w, h, m.snapshot(), m.stats)
+	default:
+		body = Render(w, h-1, m.snapshot(), m.st)
+	}
+
 	lines := splitLines(body)
 
 	// Cap to h and pad every line to exactly w so the frame is a clean
@@ -221,7 +191,32 @@ func (m *Model) RenderAt(w, h int) string {
 			out[i] = spaces(w)
 		}
 	}
+	if h > 0 && m.st.Mode == ModeMix {
+		// The footer names the active mode's keys, so a key that means
+		// different things in two places is never a surprise.
+		out[h-1] = padRight(dimStyle.Render(truncate(modeFooter(m.st.Mode), w)), w)
+	}
 	return strings.Join(out, "\n")
+}
+
+// libOrEmpty returns the library, or an empty one, so a view is never handed a
+// nil index.
+func (m *Model) libOrEmpty() *library.Index {
+	if m.lib != nil {
+		return m.lib
+	}
+	return library.NewIndex()
+}
+
+func (m *Model) libState() views.LibraryState {
+	return views.LibraryState{TrackSel: m.st.TrackSel, Query: m.st.Query}
+}
+
+func (m *Model) snapshot() engine.Snapshot {
+	if m.eng == nil {
+		return engine.Snapshot{}
+	}
+	return m.eng.Snapshot()
 }
 
 // View renders using the last known terminal size.

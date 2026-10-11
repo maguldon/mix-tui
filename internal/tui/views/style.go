@@ -65,3 +65,12 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// padRight pads s with spaces to exactly w, truncating first if too wide.
+func padRight(s string, w int) string {
+	s = truncate(s, w)
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		return s + spaces(gap)
+	}
+	return s
+}

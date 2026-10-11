@@ -16,6 +16,7 @@ const (
 	ModeLibrary
 	ModeOverlay
 	ModeHelp
+	ModeDebug
 )
 
 // LayoutKind selects one of the four layouts (spec §6.1). D is the default: the
@@ -49,6 +50,11 @@ type ViewState struct {
 	// authoritative; this is only what the user last asked for.
 	Xfade float64
 	Cued  int
+	// TrackSel is the library browser's cursor. Query filters it. They live in
+	// ViewState so leaving the browser and returning restores where the user was,
+	// which is what a DJ expects when they press escape to check something.
+	TrackSel int
+	Query    string
 	// LastErr and LastErrAt drive the auto-expiring error line.
 	LastErr   string
 	LastErrAt time.Time

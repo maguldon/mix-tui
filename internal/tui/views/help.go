@@ -1,6 +1,10 @@
 package views
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // RenderHelp draws the keybinding list.
 //
@@ -18,10 +22,35 @@ func RenderHelp(w, h int, bindings []string) string {
 	if len(bindings) == 0 {
 		lines = append(lines, pad(dimStyle.Render("  no bindings configured"), w))
 	}
+	// Bindings arrive as "key  description". Align the key column so the
+	// descriptions line up; a ragged second column is what makes a help screen
+	// hard to scan.
+	keyW := 0
 	for _, b := range bindings {
-		lines = append(lines, pad(labelStyle.Render(truncate(b, w)), w))
+		if k := keyColumn(b); lipgloss.Width(k) > keyW {
+			keyW = lipgloss.Width(k)
+		}
+	}
+	keyW = minInt(keyW, 16)
+	for _, b := range bindings {
+		k, desc := splitBinding(b)
+		row := padRight(k, keyW) + "  " + desc
+		lines = append(lines, pad(labelStyle.Render(truncate(row, w)), w))
 	}
 	lines = append(lines, "")
-	lines = append(lines, pad(dimStyle.Render("esc  back"), w))
+	lines = append(lines, pad(dimStyle.Render("esc  back to decks"), w))
 	return frame(lines, w, h)
+}
+
+// keyColumn is the leading whitespace-delimited token of a binding line.
+func keyColumn(b string) string {
+	return strings.TrimRight(strings.Fields(b + " ")[0], " ")
+}
+
+// splitBinding separates "key  description" on the first run of two spaces.
+func splitBinding(b string) (key, desc string) {
+	if i := strings.Index(b, "  "); i >= 0 {
+		return strings.TrimSpace(b[:i]), strings.TrimSpace(b[i:])
+	}
+	return strings.TrimSpace(b), ""
 }

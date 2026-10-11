@@ -147,6 +147,45 @@ func (r *KeyResolver) Repeats(key string) bool {
 	return ok && c.repeat
 }
 
+// keyDescriptions give the help view something to say about each key. Without
+// these the help screen is a list of bare key names, which tells a user
+// nothing they did not already know.
+var keyDescriptions = map[string]string{
+	"space":  "play/pause focused deck",
+	"c":      "cue focused deck",
+	"s":      "sync toggle",
+	"q":      "quantize to beat",
+	"[":      "pitch down",
+	"]":      "pitch up",
+	"r":      "loop roll",
+	"z":      "zoom toggle",
+	"Z":      "zoom level",
+	"v":      "cycle layout",
+	"/":      "library",
+	"escape": "close overlay",
+	"ctrl+c": "quit",
+}
+
+// Binding describes one key and what it does, for the help view.
+type Binding struct {
+	Key         string
+	Description string
+}
+
+// Describe returns the bound keys with descriptions, sorted by key.
+func (r *KeyResolver) Describe() []Binding {
+	out := make([]Binding, 0, len(r.bindings))
+	for k := range r.bindings {
+		desc := keyDescriptions[k]
+		if desc == "" {
+			desc = r.bindings[k].action.String()
+		}
+		out = append(out, Binding{Key: k, Description: desc})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
 // Bindings returns the bound key names, sorted, for a help view.
 func (r *KeyResolver) Bindings() []string {
 	out := make([]string, 0, len(r.bindings))

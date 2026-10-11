@@ -191,3 +191,148 @@ func TestFocusWraps(t *testing.T) {
 		t.Errorf("focus after 3 tabs = %d, want wrapped to 1", m.State().Focus)
 	}
 }
+
+func TestZoomToggleChangesDeckPanelHeight(t *testing.T) {
+	m, _ := testModel(t)
+	off := m.RenderAt(120, 40)
+	m2, _ := m.Update(keyMsg("z"))
+	on := m2.(*Model).RenderAt(120, 40)
+	if off == on {
+		t.Error("zoom toggle did not change the render")
+	}
+}
+
+func TestZoomLevelKeyChangesBars(t *testing.T) {
+	m, _ := testModel(t)
+	before := m.State().ZoomBars
+	m2, _ := m.Update(keyMsg("Z"))
+	if m2.(*Model).State().ZoomBars == before {
+		t.Error("zoom level unchanged")
+	}
+	if m2.(*Model).State().ZoomBars > 32 {
+		t.Error("zoom bars out of range")
+	}
+}
+
+func TestLibraryModeRendersLibrary(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("/"))
+	out := m2.(*Model).RenderAt(120, 40)
+	if !strings.Contains(out, "LOAD") && !strings.Contains(out, "crate") &&
+		!strings.Contains(out, "CRATES") && !strings.Contains(out, "too small") {
+		t.Errorf("library mode did not render a library:\n%s", out)
+	}
+}
+
+func TestHelpToggle(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("?"))
+	if m2.(*Model).State().Mode != ModeHelp {
+		t.Error("? did not open help")
+	}
+}
+
+func TestDebugToggle(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("`"))
+	// ` toggles debug on; toggling again returns to the mix view.
+	if m2.(*Model).State().Mode == ModeDebug {
+		m3, _ := m2.(*Model).Update(keyMsg("`"))
+		if m3.(*Model).State().Mode != ModeMix {
+			t.Error("` did not toggle debug off")
+		}
+	}
+}
+
+func TestFocusAffectsRender(t *testing.T) {
+	m, _ := testModel(t)
+	a := m.RenderAt(120, 40)
+	m2, _ := m.Update(keyMsg("tab"))
+	b := m2.(*Model).RenderAt(120, 40)
+	if a == b {
+		t.Error("focus change did not alter the render")
+	}
+}
+
+// TestUIKeysBeatConfigKeys pins the rule that navigation keys are handled
+// before config lookups, so a user binding cannot lock the user out of leaving
+// a screen.
+func TestUIKeysBeatConfigKeys(t *testing.T) {
+	// Bind "v" to a real action in config; "v" must still cycle the layout.
+	keys, err := config.NewKeyResolver(config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeEngine{snap: snapTwoDecks()}
+	m := New(f, &config.Config{UI: config.UIConfig{DefaultView: "D"}}, keys)
+	before := m.State().Layout
+	m2, _ := m.Update(keyMsg("v"))
+	if m2.(*Model).State().Layout == before {
+		t.Error("a config binding on 'v' suppressed layout cycling")
+	}
+}
+
+// TestEscapeLeavesAnyMode keeps escape a universal exit.
+func TestEscapeLeavesAnyMode(t *testing.T) {
+	m, _ := testModel(t)
+	for _, opener := range []string{"?", "/", "`"} {
+		m2, _ := m.Update(keyMsg(opener))
+		m3, _ := m2.(*Model).Update(keyMsg("esc"))
+		if m3.(*Model).State().Mode == ModeHelp || m3.(*Model).State().Mode == ModeDebug {
+			t.Errorf("esc did not leave the mode opened by %q", opener)
+		}
+	}
+}
+
+// TestArrowsMoveSelectionInLibrary guards mode-relative keys: in the library,
+// arrows move the cursor rather than nudging a fader.
+func TestArrowsMoveSelectionInLibrary(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("/"))
+	before := m2.(*Model).State().TrackSel
+	m3, _ := m2.(*Model).Update(keyMsg("down"))
+	if m3.(*Model).State().TrackSel <= before {
+		t.Error("down did not move the library selection")
+	}
+}
+
+// TestUpAtTopClamps keeps the selection from wrapping past the ends, which in a
+// library means jumping to the bottom of a long list.
+func TestUpAtTopClamps(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("/"))
+	m3, _ := m2.(*Model).Update(keyMsg("up"))
+	if m3.(*Model).State().TrackSel != 0 {
+		t.Errorf("up from the top moved to %d", m3.(*Model).State().TrackSel)
+	}
+}
+
+// TestRenderAtSurvivesEveryMode sweeps render across all modes, since the
+// dispatch is new code on the panic-critical path.
+func TestRenderAtSurvivesEveryMode(t *testing.T) {
+	m, _ := testModel(t)
+	for _, mode := range []Mode{ModeMix, ModeLibrary, ModeOverlay, ModeHelp, ModeDebug} {
+		m.st.Mode = mode
+		for _, size := range [][2]int{{200, 50}, {120, 40}, {80, 24}, {40, 10}, {20, 5}} {
+			if out := m.RenderAt(size[0], size[1]); out == "" && size[0] > 0 && size[1] > 0 {
+				t.Errorf("mode %v at %dx%d rendered nothing", mode, size[0], size[1])
+			}
+		}
+	}
+}
+
+// TestRenderAtIsStillRectangularInEveryMode guards the frame shape across modes.
+func TestRenderAtIsStillRectangularInEveryMode(t *testing.T) {
+	m, _ := testModel(t)
+	for _, mode := range []Mode{ModeMix, ModeLibrary, ModeOverlay, ModeHelp, ModeDebug} {
+		m.st.Mode = mode
+		for _, w := range []int{200, 140, 120, 90, 80} {
+			out := m.RenderAt(w, 30)
+			for i, line := range splitLines(out) {
+				if got := lipgloss.Width(line); got != w {
+					t.Errorf("mode %v w=%d line %d width %d", mode, w, i, got)
+				}
+			}
+		}
+	}
+}

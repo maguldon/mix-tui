@@ -71,12 +71,13 @@ func RenderOverlay(w, h int, ix *library.Index, query string, sel int) string {
 	}
 	lines = lines[:boxH]
 
-	// Box border.
-	rule := dimStyle.Render(strings.Repeat("-", inner))
-	out := make([]string, 0, boxH)
+	// Box border, padded to the full frame width so the overlay does not leave
+	// a ragged right edge when the frame is wider than the box.
+	rule := dimStyle.Render(strings.Repeat("-", w))
+	out := make([]string, 0, boxH+2)
 	out = append(out, rule)
 	for _, l := range lines {
-		out = append(out, l)
+		out = append(out, pad(l, w))
 	}
 	out = append(out, rule)
 	return strings.Join(out, "\n")
