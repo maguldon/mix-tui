@@ -11,6 +11,10 @@ import (
 	"github.com/maguldon/mix-tui/internal/engine"
 )
 
+// engineBlockFrames is the render block the engine uses. The pump paces
+// against it so its tick is one block of audio.
+const engineBlockFrames = 512
+
 // PumpConfig parameterises the producer loop.
 type PumpConfig struct {
 	// TargetLatencyFrames is how full each ring should be kept. Zero defaults
@@ -83,19 +87,29 @@ func (p *Pumper) Run(ctx context.Context) error {
 	if p.eng == nil {
 		return nil
 	}
-	// How long to wait between wakeups: the time it takes to consume the
-	// amount we are topping up to, so the loop tracks real time rather than
-	// spinning a core.
-	sleep := time.Duration(p.cfg.TargetLatencyFrames) * time.Second / 44100
-	if sleep <= 0 {
-		sleep = 2 * time.Millisecond
+	// Wake often, and fill to target on each wake. The tick is NOT the pacing
+	// mechanism for the audio itself: a fixed sleep sized to the target
+	// produced one block per wake, which is a fraction of what real time
+	// consumes, and the pump silently fell behind. Waking at a block interval
+	// and topping up whatever the rings are short by decouples pacing from
+	// throughput.
+	rate := p.rate()
+	block := p.cfg.BlockFrames
+	if block <= 0 {
+		block = engineBlockFrames
 	}
-	// Cap the sleep so a large ring does not delay the first fill.
-	if sleep > 20*time.Millisecond {
-		sleep = 20 * time.Millisecond
+	tick := time.Duration(block) * time.Second / time.Duration(rate)
+	if tick <= 0 {
+		tick = time.Millisecond
 	}
-	ticker := time.NewTicker(sleep)
+	// Do not spin when far ahead: a sleep longer than the target would let the
+	// rings drain before the next wake.
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
+
+	// Fill once before the first tick so a run never opens with the drain
+	// consuming an empty ring, which would seed the stats with false starves.
+	p.pumpOnce()
 
 	for {
 		select {
@@ -108,37 +122,72 @@ func (p *Pumper) Run(ctx context.Context) error {
 	}
 }
 
+// rate returns the sample rate the pump paces against.
+func (p *Pumper) rate() int {
+	if p.out != nil && p.out.cfg.SampleRate > 0 {
+		return p.out.cfg.SampleRate
+	}
+	return 44100
+}
+
 // pumpOnce tops both rings up to the target latency.
 //
-// It never blocks on a full ring: RenderInto into a full ring simply drops the
-// excess, which the engine counts as an overrun. Blocking here would stall the
-// render goroutine — the precise inversion of what a producer exists to avoid.
+// It renders REPEATEDLY until the rings reach target, which is what makes the
+// pump track real time. Rendering a single block per wake is the bug this
+// replaced: one block is 512 frames while a wake covers a whole tick's worth of
+// consumption, so the pump delivered a fraction of what the device demanded and
+// the rings drained.
+//
+// It never blocks on a full ring: RenderInto into a full ring drops the excess,
+// which the engine counts as an overrun. Blocking here would stall the render
+// goroutine — the precise inversion of what a producer exists to prevent.
 func (p *Pumper) pumpOnce() {
-	if p.eng == nil {
+	if p.eng == nil || p.main == nil || p.cue == nil {
 		return
 	}
-	if p.main == nil || p.cue == nil {
-		return
-	}
-	if p.main.AvailableRead() >= p.cfg.TargetLatencyFrames &&
-		p.cue.AvailableRead() >= p.cfg.TargetLatencyFrames {
-		// Already ahead; render nothing. Rendering here would just overrun.
+	target := p.cfg.TargetLatencyFrames
+	if target <= 0 {
 		return
 	}
 
-	start := time.Now()
-	if err := p.eng.RenderInto(p.main, p.cue); err != nil {
-		return
+	// Bound the work per wake so a single pass cannot spin if the rings report
+	// as short for some reason. At 200ms of target and 512-frame blocks this
+	// permits ~17 blocks, far more than one tick needs.
+	maxBlocks := target / p.blockFrames()
+	if maxBlocks < 1 {
+		maxBlocks = 1
 	}
-	elapsed := time.Since(start)
-	p.blocks.Add(1)
 
-	for {
-		cur := time.Duration(p.wallMax.Load())
-		if elapsed <= cur || p.wallMax.CompareAndSwap(int64(cur), int64(elapsed)) {
-			break
+	for i := 0; i < maxBlocks; i++ {
+		if p.main.AvailableRead() >= target && p.cue.AvailableRead() >= target {
+			return
+		}
+		start := time.Now()
+		if err := p.eng.RenderInto(p.main, p.cue); err != nil {
+			return
+		}
+		elapsed := time.Since(start)
+		p.blocks.Add(1)
+		for {
+			cur := time.Duration(p.wallMax.Load())
+			if elapsed <= cur || p.wallMax.CompareAndSwap(int64(cur), int64(elapsed)) {
+				break
+			}
 		}
 	}
+	// Reached the loop bound without hitting target: the engine could not keep
+	// the rings at the requested depth. That is a real producer-side condition
+	// and is reported, rather than being indistinguishable from a slow drain.
+	if p.main.AvailableRead() < target || p.cue.AvailableRead() < target {
+		p.targetMisses.Add(1)
+	}
+}
+
+func (p *Pumper) blockFrames() int {
+	if p.cfg.BlockFrames > 0 {
+		return p.cfg.BlockFrames
+	}
+	return engineBlockFrames
 }
 
 // Stats reports producer-side health.
