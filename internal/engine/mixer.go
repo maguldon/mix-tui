@@ -98,16 +98,12 @@ func (m *Mixer) Cued(i int) bool {
 	return m.strips[i].cueEnabled
 }
 
-// crossfadeGains returns the constant-power pair for the current fader
-// position, treating the first strip as left and the cued strip as right.
+// crossfadeAt maps a crossfader position to the constant-power gain pair.
 //
 // Equal-power (cos/sin) rather than equal-gain matters here: a linear fade
 // through the centre audibly dips in level, which reads as a volume drop at
 // the exact moment a crossfade should be seamless. At centre, cos and sin are
 // both 0.707, so the sum holds constant power.
-func (m *Mixer) crossfadeGains() (left, right float64) { return crossfadeAt(m.xfader) }
-
-// crossfadeAt maps a crossfader position to the constant-power gain pair.
 func crossfadeAt(xf float64) (left, right float64) {
 	// x in [-1,1] maps to an angle in [0, pi/2].
 	x := (xf + 1) / 2
@@ -122,59 +118,21 @@ func crossfadeAt(xf float64) (left, right float64) {
 	return math.Sin(theta), math.Cos(theta)
 }
 
-// mix renders every deck and sums the buses for one block.
+// mixLocked renders every deck and sums the buses for one block.
 //
-// It writes exactly blockFrames frames and performs no allocation. Callers on
-// the audio goroutine rely on both properties.
-// ControlSnapshot is the mixer's user-controlled values, copied so the audio
-// goroutine can mix without holding the engine mutex.
+// The caller MUST hold the engine mutex. The mix reads cueEnabled, trim and
+// xfader, which Apply writes from UI and MIDI goroutines, so running unlocked
+// would race them.
 //
-// Apply writes cueEnabled, trim and xfader under the engine lock, while mix
-// runs on the audio goroutine after RenderInto has released it. Sharing those
-// fields without synchronisation is a data race: the race detector reports it,
-// and the value read is undefined rather than merely stale. Snapshotting once
-// per block means a control change lands on the next block boundary, which is
-// 11.6ms -- inaudible, and the reason the crossfader does not zipper.
-type ControlSnapshot struct {
-	Cue  []bool
-	Trim []float64
-	Xf   float64
-}
-
-// snapshot copies the control values. The caller must hold the engine mutex.
-func (m *Mixer) snapshot() ControlSnapshot {
-	c := ControlSnapshot{
-		Cue:  make([]bool, len(m.strips)),
-		Trim: make([]float64, len(m.strips)),
-		Xf:   m.xfader,
-	}
-	for i, s := range m.strips {
-		c.Cue[i] = s.cueEnabled
-		c.Trim[i] = s.trim
-	}
-	return c
-}
-
-// gains applies the crossfader position from a snapshot, matching
-// crossfadeGains but reading a value the audio goroutine owns.
-func gainsFor(c ControlSnapshot) (left, right float64) {
-	return crossfadeAt(c.Xf)
-}
-
-// snapshotLocked exists only so the unlocked entry point compiles; the engine
-// always calls mixLocked under its mutex.
-func (m *Mixer) snapshotLocked() ControlSnapshot { return m.snapshot() }
-
-func (m *Mixer) mix(outMain, outCue dsp.Stereo) error {
-	return m.mixWith(outMain, outCue, m.snapshot())
-}
-
-// mixLocked is the variant used when the caller already holds the engine mutex.
+// It writes exactly blockFrames frames and performs no allocation, so holding
+// the lock across it costs one block (~11.6ms) and never blocks on anything.
+// A control change therefore lands on the next block boundary -- inaudible, and
+// the reason the crossfader does not zipper.
 func (m *Mixer) mixLocked(outMain, outCue dsp.Stereo) error {
-	return m.mixWith(outMain, outCue, m.snapshot())
+	return m.mixWith(outMain, outCue)
 }
 
-func (m *Mixer) mixWith(outMain, outCue dsp.Stereo, ctl ControlSnapshot) error {
+func (m *Mixer) mixWith(outMain, outCue dsp.Stereo) error {
 	frames := outMain.Frames()
 	if outCue.Frames() < frames {
 		frames = outCue.Frames()
@@ -202,7 +160,7 @@ func (m *Mixer) mixWith(outMain, outCue dsp.Stereo, ctl ControlSnapshot) error {
 	// Route each strip to its bus by fader position, then to the cue bus if
 	// selected. Strips other than the left/cued pair ride at unity on the side
 	// they are nearest, so N decks all remain audible.
-	leftGain, rightGain := gainsFor(ctl)
+	leftGain, rightGain := crossfadeAt(m.xfader)
 	for i, s := range m.strips {
 		var g float64
 		switch i {
@@ -221,11 +179,11 @@ func (m *Mixer) mixWith(outMain, outCue dsp.Stereo, ctl ControlSnapshot) error {
 		post := s.post[:frames*2]
 		// trim is a channel fader: 0 means unity, 1 means fully closed. It is
 		// applied after the crossfader so the two stay independent controls.
-		g *= 1 - ctl.Trim[i]
+		g *= 1 - s.trim
 		for i := range m.master {
 			m.master[i] += post[i] * float32(g)
 		}
-		if ctl.Cue[i] {
+		if s.cueEnabled {
 			for i := range m.cue {
 				m.cue[i] += post[i]
 			}

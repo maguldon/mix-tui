@@ -25,6 +25,12 @@ func renderMixerPanel(w int, s engine.Snapshot, st ViewState) Panel {
 		}
 		return s.Decks[i].Level
 	}
+	peak := func(i int) float64 {
+		if i < 0 || i >= len(s.Decks) {
+			return 0
+		}
+		return s.Decks[i].Peak
+	}
 	// Header labels the two channel columns. Built by padding, not slicing a
 	// shorter string, so it cannot overrun when the panel is narrow.
 	head := padRight("A", barW) + padRight("B", barW)
@@ -33,18 +39,22 @@ func renderMixerPanel(w int, s engine.Snapshot, st ViewState) Panel {
 	// the first thing that can go.
 	rows = append(rows, PanelRow{Kind: RowText, Text: crossfaderRow(s.Crossfader, inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(head, inner), Style: &dimStyle})
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(channelBar("A", lvl(0), barW)+channelBar("B", lvl(1), barW), inner)})
+	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(channelBar("A", lvl(0), peak(0), barW)+channelBar("B", lvl(1), peak(1), barW), inner)})
 
 	// Master level, from the Snapshot's master bus rather than the loudest
 	// deck: the mixer output is not the peak of its inputs once the crossfader
 	// and channel faders have had their say.
-	rows = append(rows, PanelRow{Kind: RowText, Text: "MASTER " + RenderMeter(s.MasterLevel, maxInt(0, inner-7))})
+	rows = append(rows, PanelRow{Kind: RowText, Text: "MASTER " + RenderPeakHold(s.MasterPeak, s.MasterLevel, maxInt(0, inner-7))})
 
 	return Panel{Title: "MIXER", Width: w, Rows: rows}
 }
 
 // channelBar renders "X" plus a level bar, exactly barW columns wide.
-func channelBar(label string, level float64, barW int) string {
+//
+// The bar carries a peak-hold marker at peak: without it a short transient is
+// invisible by the time the eye returns to the meter, which is the one thing a
+// gain-reduction display is for.
+func channelBar(label string, level, peak float64, barW int) string {
 	if barW <= 0 {
 		return ""
 	}
@@ -52,7 +62,7 @@ func channelBar(label string, level float64, barW int) string {
 	if inner < 0 {
 		inner = 0
 	}
-	return padRight(label+RenderMeter(level, inner), barW)
+	return padRight(label+RenderPeakHold(peak, level, inner), barW)
 }
 
 // crossfaderRow draws the crossfader as A <track> B with a centre-relative

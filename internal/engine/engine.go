@@ -50,11 +50,12 @@ func (c Config) withDefaults() Config {
 // Engine owns all playback state and is the only thing that touches audio.
 //
 // Actions arrive from the UI and MIDI goroutines; RenderInto is called from
-// the audio goroutine. They are deliberately decoupled: Apply takes the mutex,
-// RenderInto does not hold it while mixing.
+// the audio goroutine. Both take mu: Apply to write a control change, RenderInto
+// to read the controls the mix needs. See RenderInto for why the mix runs under
+// the lock and why that is still realtime-safe.
 type Engine struct {
-	// mu guards deck control state and mixer configuration. It is NOT held
-	// during a mix — see RenderInto.
+	// mu guards deck control state and mixer configuration. RenderInto holds
+	// it across the mix.
 	mu    sync.Mutex
 	decks []*Deck
 	mixer *Mixer
@@ -259,41 +260,33 @@ func (m *Mixer) strip(i int) *strip {
 // RenderInto renders one block from every deck through the mixer into the two
 // output rings.
 //
-// It is called from the audio goroutine and never takes e.mu for the mix.
-// Apply may run concurrently on a MIDI goroutine; the only shared state is
-// per-deck control state, which Deck guards itself. Holding the engine lock
-// across the mix would let a single Apply call stall the audio thread for a
-// whole block — the exact failure spec §3.2 forbids.
+// It is called from the audio goroutine and holds e.mu across the mix. Apply
+// runs concurrently from UI and MIDI goroutines and takes the same mutex, so
+// holding it is what makes the read well-defined rather than a race.
+//
+// Why the lock is held: mix reads cueEnabled, trim and xfader, and Apply writes
+// all three. Releasing the lock first left the audio thread reading values
+// while the control thread wrote them, which the race detector reported and
+// which made the values read undefined rather than merely stale.
+//
+// Why it is still safe for realtime: the mix is non-blocking and allocates
+// nothing, so it holds the lock for the length of one block (~11.6ms). A
+// control action therefore lands on the next block boundary, which is
+// inaudible -- and is the reason the crossfader does not zipper. Nothing called
+// from the mix path re-enters Apply or Snapshot, so the lock cannot be
+// re-entered; see mixLocked.
 func (e *Engine) RenderInto(main, cue *audio.Ring) error {
 	if main == nil || cue == nil {
 		return nil
 	}
-	// Snapshot the scratch buffers under the lock, then release it before
-	// mixing. The mix itself reads s.cueEnabled directly, so there is no
-	// routing snapshot to take here.
-	//
-	// There WAS one: it copied s.cueEnabled into a local under the lock and
-	// wrote it straight back outside it, racing Apply's locked write on the
-	// same address. The copy was a no-op by construction — mix reads the
-	// field, not the local — so removing it removes the race and the
-	// allocation alike.
-	// The mix is performed with the engine mutex held. It previously released
-	// the mutex first, which left cueEnabled, trim and xfader being written by
-	// Apply on the control thread while the audio thread read them: a data race,
-	// so the values read were undefined rather than merely stale.
-	//
-	// mix allocates nothing and does not block, so holding the lock across it
-	// costs only the brief window a control action needs, and a control change
-	// lands on the next block boundary (~11.6ms) -- inaudible, and the reason
-	// the crossfader does not zipper.
 	e.mu.Lock()
 	mainBuf := e.scratchMain
 	cueBuf := e.scratchCue
-	if err := e.mixer.mixLocked(mainBuf, cueBuf); err != nil {
-		e.mu.Unlock()
+	err := e.mixer.mixLocked(mainBuf, cueBuf)
+	e.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	e.mu.Unlock()
 
 	// Tee the mixed MAIN block to the recorder, if one is installed. This runs
 	// on the pump goroutine, not the realtime drain, so a recorder that

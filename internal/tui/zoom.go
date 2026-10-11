@@ -139,14 +139,6 @@ func absDur(d time.Duration) time.Duration {
 	return d
 }
 
-// beatLen is the beat period for a tempo, guarding a missing grid.
-func beatLen(bpm float64) time.Duration {
-	if bpm <= 0 {
-		bpm = 128
-	}
-	return time.Duration(float64(time.Second) / bpm)
-}
-
 // DeltaBeat reports a deck's beat-phase offset from the master.
 //
 // The value comes from the engine, which computes it against both real

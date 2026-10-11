@@ -8,18 +8,6 @@ import (
 	"github.com/maguldon/mix-tui/internal/engine"
 )
 
-// mixerPanel builds the centre mixer panel. Task 5 fills in the real faders.
-func mixerPanel(w int) Panel {
-	rows := []PanelRow{
-		{Kind: RowText, Text: "EQ", Style: &dimStyle},
-		{Kind: RowText, Text: "A      B"},
-		{Kind: RowText, Text: "||||  ||||"},
-		{Kind: RowMeter, Text: "----cross----", Style: &dimStyle},
-		{Kind: RowText, Text: " master"},
-	}
-	return Panel{Title: "MIXER", Width: w, Rows: rows}
-}
-
 // minWidthD is the narrowest terminal that can show layout D's three columns.
 // Below it we say so rather than drawing overlapping panels, which is what
 // review focus #2 describes.

@@ -118,8 +118,7 @@ func NewDeckAtRate(index, rate int) *Deck {
 	return d
 }
 
-// Load installs a track and rewinds to the start.
-// Load replaces the deck's audio.
+// Load replaces the deck's audio and rewinds to the start.
 //
 // It applies immediately, so it is only safe BEFORE the render goroutine starts
 // (or from the render goroutine itself). To replace a track while audio is
