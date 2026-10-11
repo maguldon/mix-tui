@@ -37,6 +37,11 @@ type DeckState struct {
 	// guess: a displayed key is believed (spec §8).
 	KeyCamelot    string
 	KeyConfidence float64
+	// DeltaMS is this deck's beat-phase offset from the master in milliseconds,
+	// as computed by the engine against the real beatgrids. It is valid only
+	// when HasDelta is true.
+	DeltaMS  float64
+	HasDelta bool
 	// Cued reports whether the deck is routed to the headphone bus.
 	Cued   bool
 	Loaded bool

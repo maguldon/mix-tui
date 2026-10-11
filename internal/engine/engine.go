@@ -3,6 +3,7 @@ package engine
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
@@ -313,6 +314,16 @@ func (e *Engine) RenderInto(main, cue *audio.Ring) error {
 	return nil
 }
 
+// otherDeck returns the deck that is not i, for beat-phase comparison.
+func (e *Engine) otherDeck(i int) *Deck {
+	for j, d := range e.decks {
+		if j != i {
+			return d
+		}
+	}
+	return nil
+}
+
 // Snapshot returns a consistent copy of the engine state for the UI.
 //
 // This allocates and takes the engine mutex, which is why the UI reads state
@@ -344,6 +355,15 @@ func (e *Engine) Snapshot() Snapshot {
 			if at, ok := d.Hotcue(slot); ok {
 				st.CueTimes[st.CueCount] = at
 				st.CueCount++
+			}
+		}
+		// The engine computes beat phase against the real grids; the view must
+		// not re-derive it from position-modulo-beat, which assumes a beat
+		// lands at t==0 and is therefore wrong for any detected grid.
+		if other := e.otherDeck(i); other != nil {
+			if d, err := d.DeltaBeat(other); err == nil {
+				st.DeltaMS = float64(d) / float64(time.Millisecond)
+				st.HasDelta = true
 			}
 		}
 		st.LoopActive = ls.Active

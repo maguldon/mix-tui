@@ -139,44 +139,18 @@ func beatLen(bpm float64) time.Duration {
 	return time.Duration(float64(time.Second) / bpm)
 }
 
-// DeltaBeat reports how far a deck sits from the master in beat phase.
+// DeltaBeat reports a deck's beat-phase offset from the master.
 //
-// It returns false when either deck lacks a beatgrid: a ΔBEAT readout computed
-// from one deck's grid alone would be meaningless, and showing a confident
-// number that is wrong is worse than showing none (spec §8).
+// The value comes from the engine, which computes it against both real
+// beatgrids. This package previously re-derived it as position-modulo-beat,
+// which assumes a beat lands at t == 0; a detected grid essentially never starts
+// there, so that number was wrong by the grid's first-beat offset. It also
+// ignored BeatTimes, which the Snapshot already carried.
 func DeltaBeat(d, master engine.DeckState) (time.Duration, bool) {
-	if !d.HasBeatGrid || !master.HasBeatGrid || d.BPM <= 0 || master.BPM <= 0 {
+	if !d.HasDelta || !master.HasDelta {
 		return 0, false
 	}
-	dPh := phaseOf(d.Position, beatLen(d.BPM))
-	mPh := phaseOf(master.Position, beatLen(master.BPM))
-	delta := dPh - mPh
-	// Wrap into (-beat/2, beat/2] so a deck a beat ahead reads as just behind
-	// rather than a whole beat ahead.
-	if half := beatLen(master.BPM) / 2; half > 0 {
-		for delta > half {
-			delta -= beatLen(master.BPM)
-		}
-		for delta <= -half {
-			delta += beatLen(master.BPM)
-		}
-	}
-	return delta, true
-}
-
-// phaseOf is a position's offset from its nearest beat.
-func phaseOf(pos time.Duration, beat time.Duration) time.Duration {
-	if beat <= 0 {
-		return 0
-	}
-	m := pos % beat
-	if m < 0 {
-		m += beat
-	}
-	if m > beat/2 {
-		m -= beat
-	}
-	return m
+	return time.Duration(d.DeltaMS * float64(time.Millisecond)), true
 }
 
 // RenderDeltaBeat renders the ΔBEAT readout in ms.

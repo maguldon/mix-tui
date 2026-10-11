@@ -20,7 +20,6 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	if inner < 0 {
 		inner = 0
 	}
-
 	if !d.Loaded {
 		title := string(rune('A' + d.Index))
 		if focused {

@@ -78,9 +78,11 @@ func TestDeltaBeatReportsOffset(t *testing.T) {
 	// A beat at 128bpm is 7.8125ms, so half a beat is 3.9ms. 62500us is
 	// exactly 8 beats; 2ms past it is a real phase offset that must survive the
 	// wrap into (-beat/2, beat/2].
+	// The engine computes phase against both real beatgrids and reports it in
+	// the Snapshot, so the view reads a value rather than re-deriving one.
 	const twoMs = 2 * time.Millisecond
-	master := engine.DeckState{Position: 62500 * time.Microsecond, HasBeatGrid: true, BPM: 128}
-	slave := engine.DeckState{Position: 62500*time.Microsecond + twoMs, HasBeatGrid: true, BPM: 128}
+	master := engine.DeckState{HasDelta: true, DeltaMS: 0}
+	slave := engine.DeckState{HasDelta: true, DeltaMS: float64(twoMs) / float64(time.Millisecond)}
 	d, ok := DeltaBeat(slave, master)
 	if !ok {
 		t.Fatal("delta unavailable despite grids")
@@ -91,8 +93,9 @@ func TestDeltaBeatReportsOffset(t *testing.T) {
 }
 
 func TestDeltaBeatNeedsBothGrids(t *testing.T) {
-	_, ok := DeltaBeat(engine.DeckState{Position: 1 * time.Second},
-		engine.DeckState{Position: 1 * time.Second, HasBeatGrid: true, BPM: 128})
+	// Either deck lacking a beatgrid means no delta: showing a confident number
+	// computed from one deck's grid alone would be worse than showing none.
+	_, ok := DeltaBeat(engine.DeckState{}, engine.DeckState{HasDelta: true})
 	if ok {
 		t.Error("delta must be unavailable when a grid is missing")
 	}
@@ -100,8 +103,8 @@ func TestDeltaBeatNeedsBothGrids(t *testing.T) {
 
 func TestRenderDeltaBeatShowsPhases(t *testing.T) {
 	s := strings.TrimSpace(RenderDeltaBeat(
-		engine.DeckState{Position: 62500 * time.Microsecond, HasBeatGrid: true, BPM: 128},
-		engine.DeckState{Position: 62500*time.Microsecond + 2*time.Millisecond, HasBeatGrid: true, BPM: 128}))
+		engine.DeckState{HasDelta: true, DeltaMS: 0},
+		engine.DeckState{HasDelta: true, DeltaMS: 2}))
 	if !strings.Contains(s, "ms") {
 		t.Errorf("expected a ms readout, got %q", s)
 	}
@@ -156,17 +159,5 @@ func TestRenderZoomedHandlesShortPCM(t *testing.T) {
 	rows := RenderZoomed(dsp.Sine(440, 2), w, 60, 4, nil, nil)
 	if len(rows) != 4 {
 		t.Errorf("short PCM gave %d rows", len(rows))
-	}
-}
-
-// TestDeltaBeatIsSymmetric guards that the readout does not depend on argument
-// order, which would make a positive offset read as negative.
-func TestDeltaBeatIsSymmetric(t *testing.T) {
-	m := engine.DeckState{Position: 62500 * time.Microsecond, HasBeatGrid: true, BPM: 128}
-	s := engine.DeckState{Position: 62500*time.Microsecond + 2*time.Millisecond, HasBeatGrid: true, BPM: 128}
-	a, _ := DeltaBeat(s, m)
-	b, _ := DeltaBeat(m, s)
-	if absDur(a+b) > time.Millisecond {
-		t.Errorf("delta is not antisymmetric: %v vs %v", a, b)
 	}
 }

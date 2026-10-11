@@ -137,7 +137,10 @@ func TestUnknownKeyIsIgnored(t *testing.T) {
 	m, _ := testModel(t)
 	before := m.State()
 	m2, _ := m.Update(keyMsg("nonexistent-key"))
-	if m2.(*Model).State() != before {
+	after := m2.(*Model).State()
+	if after.Mode != before.Mode || after.Layout != before.Layout ||
+		after.Focus != before.Focus || after.TrackSel != before.TrackSel ||
+		after.Query != before.Query {
 		t.Error("an unknown key changed state")
 	}
 }
@@ -157,15 +160,28 @@ func TestNarrowTerminalKeepsLineCountBounded(t *testing.T) {
 
 // TestViewSurvivesPanic covers review focus #4: a render panic must show an
 // error screen rather than taking the interface down while audio keeps playing.
+//
+// The hook panics from inside the real render path, so this exercises the
+// recovery rather than a flag check above it. Before the fix the recover had no
+// named result, so a genuine panic produced a blank frame.
 func TestViewSurvivesPanic(t *testing.T) {
 	m, _ := testModel(t)
 	m.panicOnRender = true
 	out := m.View()
 	if out == "" {
-		t.Error("panic produced no output at all")
+		t.Fatal("panic produced no output at all; a blank screen is what focus #4 forbids")
 	}
-	if !strings.Contains(out, "render error") {
-		t.Errorf("panic did not produce a render-error screen: %q", out)
+	for _, want := range []string{"error", "press q to quit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("panic screen missing %q:\n%s", want, out)
+		}
+	}
+	// The frame must still be a clean rectangle, or the recovery itself
+	// corrupts the display it is trying to rescue.
+	for i, line := range strings.Split(out, "\n") {
+		if got := lipgloss.Width(line); got != 80 {
+			t.Errorf("error frame line %d width %d, want 80", i, got)
+		}
 	}
 }
 
@@ -177,8 +193,15 @@ func TestRenderAtIsPure(t *testing.T) {
 	before := m.State()
 	m.RenderAt(80, 24)
 	m.RenderAt(20, 5)
-	if m.State() != before {
-		t.Error("RenderAt mutated ViewState")
+	after := m.State()
+	// Compared field by field: ViewState embeds a DeckState, which holds
+	// slices, so the struct is not comparable with ==.
+	if after.Mode != before.Mode || after.Layout != before.Layout ||
+		after.Focus != before.Focus || after.Zoom != before.Zoom ||
+		after.ZoomBars != before.ZoomBars || after.Xfade != before.Xfade ||
+		after.TrackSel != before.TrackSel || after.Query != before.Query ||
+		after.LastErr != before.LastErr {
+		t.Errorf("RenderAt mutated ViewState:\n before %+v\n after  %+v", before, after)
 	}
 }
 

@@ -218,8 +218,12 @@ func (m *Model) expireErr() {
 // view state. Snapshot is the source of truth; this is only what to draw.
 func (m *Model) mirrorFromSnapshot() {
 	s := m.eng.Snapshot()
-	if m.st.Focus >= 0 && m.st.Focus < len(s.Decks) {
-		_ = s.Decks[m.st.Focus] // pitch/meter read directly by the view
+	// The focused panel's dBEAT readout needs the other deck's state. It is
+	// carried as a value here so the view stays pure.
+	if other := m.st.Focus - 1; other >= 0 && other < len(s.Decks) {
+		m.st.OtherDeck = s.Decks[other]
+	} else if len(s.Decks) > 0 {
+		m.st.OtherDeck = s.Decks[(m.st.Focus+1)%len(s.Decks)]
 	}
 }
 
@@ -230,11 +234,15 @@ func (m *Model) mirrorFromSnapshot() {
 // columns and the output is capped at h lines, because a wrapped line or an
 // over-tall frame corrupts a full-screen app.
 func (m *Model) RenderAt(w, h int) string {
-	if m.panicOnRender {
-		panic("forced render panic (test hook)")
-	}
 	if w <= 0 || h <= 0 {
 		return ""
+	}
+
+	if m.panicOnRender {
+		// The hook panics from inside the real render path, so the recovery in
+		// View is genuinely exercised rather than short-circuited by a flag
+		// check above it.
+		panic("forced render panic (test hook)")
 	}
 
 	var body string
@@ -306,16 +314,48 @@ func (m *Model) snapshot() engine.Snapshot {
 // must not take the interface down while audio keeps playing, because the user
 // would hear the set continuing with no way to stop it. We show a minimal
 // screen instead.
-func (m *Model) View() string {
+func (m *Model) View() (out string) {
+	// The recovery must name a result: a bare `defer recover()` leaves the
+	// return value as its zero value, so a genuine panic produced an empty
+	// frame -- a blank screen, which is precisely what review focus 4 says
+	// must not happen. Audio keeps playing and the user has no way to tell the
+	// interface died.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(devNull{}, "mix-tui: render panic: %v\n", r)
+			out = m.errorFrame(fmt.Sprintf("%v", r))
 		}
 	}()
-	if m.panicOnRender {
-		return "render error — press q to quit"
-	}
 	return m.RenderAt(m.w, m.h)
+}
+
+// errorFrame is the screen shown when rendering panics: it says what happened
+// and what to do, rather than going blank.
+func (m *Model) errorFrame(reason string) string {
+	w, h := m.w, m.h
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+	lines := []string{
+		titleStyle.Render("mix-tui: the interface hit an error"),
+		"",
+		"  " + TruncateTo(reason, maxInt(0, w-4)),
+		"",
+		dimStyle.Render("  audio is still playing"),
+		dimStyle.Render("  press q to quit"),
+	}
+	out := make([]string, h)
+	for i := range out {
+		if i < len(lines) {
+			out[i] = padRight(lines[i], w)
+		} else {
+			out[i] = spaces(w)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // devNull discards render-panic diagnostics; the TUI has no stderr of its own

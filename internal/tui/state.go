@@ -6,7 +6,11 @@
 // testable: assertions run against rendered strings rather than a real terminal.
 package tui
 
-import "time"
+import (
+	"time"
+
+	"github.com/maguldon/mix-tui/internal/engine"
+)
 
 // Mode is the top-level view.
 type Mode int
@@ -50,6 +54,10 @@ type ViewState struct {
 	// authoritative; this is only what the user last asked for.
 	Xfade float64
 	Cued  int
+	// OtherDeck is the non-focused deck's state, carried so the focused panel
+	// can render its dBEAT readout against it. It is a value copy, not a
+	// pointer into engine state.
+	OtherDeck engine.DeckState
 	// TrackSel is the library browser's cursor. Query filters it. They live in
 	// ViewState so leaving the browser and returning restores where the user was,
 	// which is what a DJ expects when they press escape to check something.
