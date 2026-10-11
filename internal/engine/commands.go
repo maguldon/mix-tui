@@ -68,7 +68,13 @@ const commandQueueMask = commandQueueSize - 1
 
 // commandQueue is a bounded lock-free SPSC queue of commands.
 type commandQueue struct {
-	buf   [commandQueueMask]command
+	// The array is commandQueueSize entries while the usable count is
+	// commandQueueMask: the mask wraps an index across the full array, so
+	// sizing the array to the mask rather than the size left one slot short and
+	// w&mask could index past the end. The ring holds mask entries so a full
+	// ring is distinguishable from an empty one; it needs the full size to
+	// address them.
+	buf   [commandQueueSize]command
 	write atomic.Uint32
 	read  atomic.Uint32
 	// droppedCount counts commands lost to a full queue. Exposed through

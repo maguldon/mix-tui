@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 // C4 RED: the command queue's fullness check must agree with its index
 // arithmetic.
@@ -68,4 +71,34 @@ func TestCommandQueueDeliversInOrder(t *testing.T) {
 	if got := q.dropped(); got != 0 {
 		t.Errorf("dropped = %d for a half-full queue, want 0", got)
 	}
+}
+
+// TestCommandQueueNeverIndexesPastItsBuffer covers a real crash: the ring array
+// was sized to commandQueueMask (255) while the index wraps with the same mask,
+// so w&mask could reach 255 and index one past the end. Under a burst of posts
+// from another goroutine that panicked with "index out of range [255] with
+// length 255".
+func TestCommandQueueNeverIndexesPastItsBuffer(t *testing.T) {
+	var q commandQueue
+	if len(q.buf) != commandQueueSize {
+		t.Fatalf("ring buffer holds %d entries, want %d so every masked index is valid",
+			len(q.buf), commandQueueSize)
+	}
+
+	// Post past capacity from one writer and drain from the single reader,
+	// which is the shape the real code uses: Apply posts, the render goroutine
+	// drains. The wrap happens here, which is what indexed past the old buffer.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100_000; i++ {
+			q.post(command{kind: cmdPlay})
+			if i%7 == 0 {
+				q.drain(func(command) {})
+			}
+		}
+	}()
+	wg.Wait()
+	q.drain(func(command) {})
 }

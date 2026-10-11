@@ -277,14 +277,23 @@ func (e *Engine) RenderInto(main, cue *audio.Ring) error {
 	// same address. The copy was a no-op by construction — mix reads the
 	// field, not the local — so removing it removes the race and the
 	// allocation alike.
+	// The mix is performed with the engine mutex held. It previously released
+	// the mutex first, which left cueEnabled, trim and xfader being written by
+	// Apply on the control thread while the audio thread read them: a data race,
+	// so the values read were undefined rather than merely stale.
+	//
+	// mix allocates nothing and does not block, so holding the lock across it
+	// costs only the brief window a control action needs, and a control change
+	// lands on the next block boundary (~11.6ms) -- inaudible, and the reason
+	// the crossfader does not zipper.
 	e.mu.Lock()
 	mainBuf := e.scratchMain
 	cueBuf := e.scratchCue
-	e.mu.Unlock()
-
-	if err := e.mixer.mix(mainBuf, cueBuf); err != nil {
+	if err := e.mixer.mixLocked(mainBuf, cueBuf); err != nil {
+		e.mu.Unlock()
 		return err
 	}
+	e.mu.Unlock()
 
 	// Tee the mixed MAIN block to the recorder, if one is installed. This runs
 	// on the pump goroutine, not the realtime drain, so a recorder that
