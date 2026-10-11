@@ -5,6 +5,7 @@ package pipewire
 import (
 	"fmt"
 	"runtime/cgo"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -94,6 +95,15 @@ type Stream struct {
 	// name is a C string libpipewire borrows for the stream's lifetime, so it
 	// is owned here and freed in Destroy.
 	name *C.char
+	// drainWG is the teardown barrier. drain() holds it for its whole body so
+	// Destroy can wait for any in-flight drain to finish before freeing the
+	// stream — the RT thread must never be inside pw_stream_dequeue_buffer
+	// when pw_stream_destroy runs.
+	drainWG sync.WaitGroup
+	// draining gates new drains. Destroy clears it before waiting, so no new
+	// drain can start once teardown begins.
+	draining atomic.Bool
+
 	// events and hook are C-allocated because libpipewire retains them.
 	// They are owned here and freed in Destroy.
 	events *C.struct_pw_stream_events
@@ -230,6 +240,12 @@ func (s *Stream) Destroy() error {
 	if s == nil || s.stream == nil {
 		return nil
 	}
+	// Close the gate and wait for any in-flight drain. After this returns, no
+	// drain is running and none can start, so freeing the stream cannot race
+	// the RT thread.
+	s.draining.Store(true)
+	s.drainWG.Wait()
+
 	// Only touch the loop while it is alive: locking a destroyed
 	// pw_thread_loop is a use-after-free, and a Stream can outlive its
 	// Context when a caller owns the context itself.
@@ -296,6 +312,16 @@ func (s *Stream) NegotiatedRate() int { return int(s.negotiated.Load()) }
 // a lock-free atomic or nothing. Nothing here may block, allocate, or take a
 // lock (spec §4.3).
 func (s *Stream) drain() {
+	// Enter the teardown barrier. If Destroy has begun, do not start: the
+	// stream may already be freed. The nil check matters independently —
+	// calling into libpipewire with a NULL stream dereferences it and kills
+	// the process.
+	if s == nil || s.draining.Load() || s.stream == nil {
+		return
+	}
+	s.drainWG.Add(1)
+	defer s.drainWG.Done()
+
 	s.callbacks.Add(1)
 
 	buf := C.pw_stream_dequeue_buffer(s.stream)

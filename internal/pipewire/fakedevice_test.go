@@ -104,11 +104,16 @@ func TestPumpNeverStarvesADrainingDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Fill before the device starts. Under -race the whole run is slower, and
+	// a device whose first tick beats the pump's first fill counts a starve
+	// that is a startup artifact rather than a pump that fell behind.
+	p := NewPumper(out, newSilentEngine(44100), PumpConfig{})
+	p.pumpOnce()
+
 	dev := newFakeDevice(out.mainStream.ring, 44100)
 	go dev.run()
 	defer dev.close()
 
-	p := NewPumper(out, newSilentEngine(44100), PumpConfig{})
 	p.runFor(2 * time.Second)
 
 	if s := dev.starve.Load(); s > 0 {

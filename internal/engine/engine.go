@@ -245,20 +245,19 @@ func (e *Engine) RenderInto(main, cue *audio.Ring) error {
 	if main == nil || cue == nil {
 		return nil
 	}
-	// Copy the strip routing decisions under the lock, then release it. The
-	// mixer reads only these copies afterwards.
+	// Snapshot the scratch buffers under the lock, then release it before
+	// mixing. The mix itself reads s.cueEnabled directly, so there is no
+	// routing snapshot to take here.
+	//
+	// There WAS one: it copied s.cueEnabled into a local under the lock and
+	// wrote it straight back outside it, racing Apply's locked write on the
+	// same address. The copy was a no-op by construction — mix reads the
+	// field, not the local — so removing it removes the race and the
+	// allocation alike.
 	e.mu.Lock()
-	routing := make([]bool, len(e.mixer.strips))
-	for i, s := range e.mixer.strips {
-		routing[i] = s.cueEnabled
-	}
 	mainBuf := e.scratchMain
 	cueBuf := e.scratchCue
 	e.mu.Unlock()
-
-	for i, s := range e.mixer.strips {
-		s.cueEnabled = routing[i]
-	}
 
 	if err := e.mixer.mix(mainBuf, cueBuf); err != nil {
 		return err

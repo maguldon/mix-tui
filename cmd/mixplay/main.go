@@ -235,13 +235,18 @@ func runPlayback(ctx context.Context, f flags) error {
 	pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	defer cancelPump()
+	// Apply the scripted controls BEFORE starting the pump. Several of these
+	// (SetLoopBeat, PushRoll, QuantizeToNearestBeat, EngageSync) mutate deck
+	// state directly on this goroutine rather than posting through the command
+	// queue, so running them while the pump is rendering the same decks is a
+	// data race.
+	applyScript(eng, f)
+
 	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
 		_ = pump.Run(pumpCtx)
 	}()
-
-	applyScript(eng, f)
 
 	fmt.Fprintf(os.Stderr, "mixplay: %.1fs at %d Hz\n", f.seconds, out.SampleRate())
 	select {

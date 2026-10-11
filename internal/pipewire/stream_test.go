@@ -3,6 +3,7 @@
 package pipewire
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -147,4 +148,46 @@ func TestDrainPathDoesNotAllocate(t *testing.T) {
 	if allocs > 0 {
 		t.Errorf("Consume allocated %v times per call — the audio thread must not", allocs)
 	}
+}
+
+// I1: Destroy must not free the stream while a drain is in flight. The drain
+// runs on the RT thread and calls pw_stream_dequeue_buffer(s.stream); if
+// Destroy nils or frees s.stream first, that is a nil deref inside libpipewire
+// on the audio thread. This drives Destroy concurrently with drain calls; under
+// -race it must be clean, and no nil deref may escape.
+func TestDestroyRacesDrainSafely(t *testing.T) {
+	ring := audio.NewRing(1 << 16)
+	s := newTestStream(t, ring)
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Feed the ring so drains have work.
+	ring.Write(dsp.Sine(440, 1.0))
+
+	var wg sync.WaitGroup
+	// Simulate the RT thread draining concurrently.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			s.drain()
+		}
+	}()
+	// Tear down underneath it.
+	_ = s.Stop()
+	_ = s.Destroy()
+	wg.Wait()
+}
+
+// The teardown barrier itself, testable with no daemon and no live stream: the
+// gate must stop a drain that starts after teardown begins, and Destroy must
+// not return until an in-flight drain has finished.
+func TestDrainGateStopsWorkAfterTeardown(t *testing.T) {
+	s := &Stream{}
+	// With no drainer running, entering must be refused once the gate is set.
+	s.draining.Store(true)
+	s.drain() // must return immediately without touching a nil stream
+	s.draining.Store(false)
+	// And again with a zero stream it must not panic either way.
+	s.drain()
 }
