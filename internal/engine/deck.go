@@ -119,11 +119,61 @@ func NewDeckAtRate(index, rate int) *Deck {
 }
 
 // Load installs a track and rewinds to the start.
-// InvalidatePeaks drops the cached waveform envelope; called when a new track
-// is loaded so a stale envelope cannot be drawn over new audio.
-func (d *Deck) InvalidatePeaks() { d.peaks.invalidate() }
-
+// Load replaces the deck's audio.
+//
+// It applies immediately, so it is only safe BEFORE the render goroutine starts
+// (or from the render goroutine itself). To replace a track while audio is
+// running, use LoadWith, which posts the mutation through the command queue --
+// Load touches the resampler, the filter and the playhead, all of which the
+// pump reads concurrently.
 func (d *Deck) Load(t *audio.Track) {
+	if t == nil {
+		return
+	}
+	d.loadNow(t)
+}
+
+// LoadWith replaces the deck's audio along with its analysis, as one unit, so
+// a deck never briefly holds new audio with the previous track's tempo.
+func (d *Deck) LoadWith(t *audio.Track, grid *analyze.BeatGrid, key *analyze.Key) {
+	d.post(command{kind: cmdLoad, track: t, beatgrid: grid, key: key})
+}
+
+// LoadNow replaces the deck's audio synchronously.
+//
+// It is only safe before the render goroutine starts, which is the startup
+// path. Once rendering has begun, use Load: mutating here would race the
+// resampler and the filter.
+func (d *Deck) LoadNow(t *audio.Track, grid *analyze.BeatGrid, key *analyze.Key) {
+	if t == nil {
+		return
+	}
+	d.beatgrid, d.key = nil, nil
+	if grid != nil && grid.BPM > 0 {
+		d.beatgrid = grid
+	}
+	d.key = key
+	d.loadNow(t)
+}
+
+// applyLoad is the render-side half of Load, run on the render goroutine.
+func (d *Deck) applyLoad(t *audio.Track, grid *analyze.BeatGrid, key *analyze.Key) {
+	if t == nil {
+		return
+	}
+	// A cached grid measured against the previous track's length would place
+	// beats wrongly, so a load without a grid clears one.
+	if grid != nil && grid.BPM > 0 {
+		d.beatgrid = grid
+	} else {
+		d.beatgrid = nil
+	}
+	d.key = key
+	d.loadNow(t)
+}
+
+// loadNow does the actual mutation. It runs on the render goroutine only.
+func (d *Deck) loadNow(t *audio.Track) {
 	d.track = t
 	d.pos = 0
 	d.playing = false

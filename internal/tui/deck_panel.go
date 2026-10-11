@@ -121,6 +121,20 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 			rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: &okStyle})
 		}
 	}
+	// The dBEAT readout is the headline affordance of the zoom view and the way
+	// a DJ lines two decks up (spec 6.3). It belongs on the focused deck, since
+	// it is measured against the other one. It was computed every frame and then
+	// never rendered, so the whole thing cost work and showed nothing.
+	if focused && d.HasDelta {
+		// The offset text is already styled by RenderDeltaBeat (warn colour when
+		// the error is audible), so it is padded rather than re-styled: styling
+		// the padded string would make lipgloss count the ANSI padding.
+		rows = append(rows, PanelRow{
+			Kind: RowText,
+			Text: padRight(TruncateTo(RenderDeltaBeat(d, st.OtherDeck), inner), inner),
+		})
+	}
+
 	// The title names the deck. A focused deck is marked so the user can tell
 	// which one TAB will act on; hardcoding "A" would mislabel deck B.
 	title := string(rune('A' + d.Index))

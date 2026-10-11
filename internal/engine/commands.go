@@ -1,6 +1,11 @@
 package engine
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/maguldon/mix-tui/internal/analyze"
+	"github.com/maguldon/mix-tui/internal/audio"
+)
 
 // The render goroutine is the ONLY writer of a Deck's audio state. Apply runs
 // on UI and MIDI goroutines and must not touch that state directly, because
@@ -25,6 +30,13 @@ type command struct {
 	kind  cmdKind
 	value float64
 	slot  int
+	// track is set only for cmdLoad. Pointers in a queue are fine because the
+	// decoded track is immutable once handed over.
+	track *audio.Track
+	// beatgrid and key travel with the track so a load is atomic: a deck must
+	// never briefly hold new audio with the previous track's analysis.
+	beatgrid *analyze.BeatGrid
+	key      *analyze.Key
 }
 
 type cmdKind uint8
@@ -43,6 +55,11 @@ const (
 	cmdFilterCutoff
 	cmdFilterReso
 	cmdFilterKind
+	// cmdLoad replaces the deck's audio. It travels through the queue like every
+	// other deck mutation because Load touches render-owned state (the
+	// resampler, the filter, the playhead). Calling it from the TUI goroutine
+	// while the pump renders is a data race.
+	cmdLoad
 )
 
 // commandQueueSize is a power of two so the index wrap is a MASK, not a
@@ -119,6 +136,9 @@ func (q *commandQueue) dropped() uint64 { return q.droppedCount.Load() }
 // only, so it mutates deck state without any lock.
 func (d *Deck) apply(c command) {
 	switch c.kind {
+	case cmdLoad:
+		d.applyLoad(c.track, c.beatgrid, c.key)
+
 	case cmdPlay:
 		d.play()
 	case cmdStop:

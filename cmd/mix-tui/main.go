@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/config"
 	"github.com/maguldon/mix-tui/internal/dsp"
@@ -111,11 +112,14 @@ func run(args appArgs) error {
 		if err != nil {
 			return fmt.Errorf("deck %c: %w", 'A'+byte(i), err)
 		}
-		eng.Deck(i).Load(track)
+		var grid *analyze.BeatGrid
+		var key *analyze.Key
 		if a, ok := cache.Get(path); ok {
-			eng.Deck(i).AttachBeatGrid(beatGridFrom(a, track))
-			eng.Deck(i).AttachKey(keyFrom(a))
+			grid = beatGridFrom(a, track)
+			key = keyFrom(a)
 		}
+		// Nothing is rendering yet, so the immediate path is safe here.
+		eng.Deck(i).LoadNow(track, grid, key)
 	}
 
 	// 5. Controls.
@@ -131,11 +135,16 @@ func run(args appArgs) error {
 		if err != nil {
 			return fmt.Errorf("load: %w", err)
 		}
-		eng.Deck(deck).Load(track)
+		// Posted, not applied: the pump goroutine may be rendering this deck
+		// right now, and Load touches the resampler, the filter and the
+		// playhead. Calling it directly from the UI goroutine is a data race.
+		var grid *analyze.BeatGrid
+		var key *analyze.Key
 		if a, ok := cache.Get(path); ok {
-			eng.Deck(deck).AttachBeatGrid(beatGridFrom(a, track))
-			eng.Deck(deck).AttachKey(keyFrom(a))
+			grid = beatGridFrom(a, track)
+			key = keyFrom(a)
 		}
+		eng.Deck(deck).LoadWith(track, grid, key)
 		return nil
 	}
 	model.SetLoader(loadInto)
