@@ -13,12 +13,17 @@ type DeckState struct {
 	Pitch       float64 // normalized -1..1
 	BPM         float64 // 0 if no beatgrid
 	HasBeatGrid bool
-	Loaded      bool
-	Path        string
-	Title       string
-	Artist      string
-	Level       float64 // linear RMS of the last block
-	Peak        float64
+	// LoopActive and LoopBeatCount expose loop state so the TUI can render a
+	// loop without reaching into the Deck (spec §5: the UI reads state through
+	// Snapshot only).
+	LoopActive    bool
+	LoopBeatCount float64
+	Loaded        bool
+	Path          string
+	Title         string
+	Artist        string
+	Level         float64 // linear RMS of the last block
+	Peak          float64
 }
 
 // Snapshot is a consistent copy of the whole engine state for one UI refresh.

@@ -333,6 +333,9 @@ func (e *Engine) Snapshot() Snapshot {
 		st.Duration = d.Duration()
 		st.Pitch = d.Pitch()
 		st.HasBeatGrid = d.HasBeatGrid()
+		ls := d.Loop()
+		st.LoopActive = ls.Active
+		st.LoopBeatCount = ls.BeatCount
 		if g := d.BeatGrid(); g != nil && st.HasBeatGrid {
 			st.BPM = g.BPM
 		}
