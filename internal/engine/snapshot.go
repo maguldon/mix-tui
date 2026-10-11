@@ -18,12 +18,20 @@ type DeckState struct {
 	// Snapshot only).
 	LoopActive    bool
 	LoopBeatCount float64
-	Loaded        bool
-	Path          string
-	Title         string
-	Artist        string
-	Level         float64 // linear RMS of the last block
-	Peak          float64
+	// KeyCamelot is the detected key in DJ notation ("8A"), or empty when no
+	// key was detected or the confidence was below threshold. KeyConfidence is
+	// the raw 0..1 score. A view must show "unknown" rather than a low-confidence
+	// guess: a displayed key is believed (spec §8).
+	KeyCamelot    string
+	KeyConfidence float64
+	// Cued reports whether the deck is routed to the headphone bus.
+	Cued   bool
+	Loaded bool
+	Path   string
+	Title  string
+	Artist string
+	Level  float64 // linear RMS of the last block
+	Peak   float64
 }
 
 // Snapshot is a consistent copy of the whole engine state for one UI refresh.

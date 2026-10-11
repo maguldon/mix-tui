@@ -89,6 +89,15 @@ func (m *Mixer) SetCuedIndex(i int) {
 	m.cuedIndex = i
 }
 
+// Cued reports whether a deck is routed to the headphone bus, which the TUI
+// shows as the CUE indicator.
+func (m *Mixer) Cued(i int) bool {
+	if i < 0 || i >= len(m.strips) {
+		return false
+	}
+	return m.strips[i].cueEnabled
+}
+
 // crossfadeGains returns the constant-power pair for the current fader
 // position, treating the first strip as left and the cued strip as right.
 //

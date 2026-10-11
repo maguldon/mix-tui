@@ -58,9 +58,9 @@ func renderD(w, h int, s engine.Snapshot, st ViewState) string {
 	}
 
 	panelH := h
-	left := RenderPanel(deckPanel("A", deckW, deckAt(&s, 0), st, 0), panelH)
-	mid := RenderPanel(mixerPanel(mixerW), panelH)
-	right := RenderPanel(deckPanel("B", deckW, deckAt(&s, 1), st, 1), panelH)
+	left := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 0), st, st.Focus == 0), panelH)
+	mid := RenderPanel(renderMixerPanel(mixerW, s, st), panelH)
+	right := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 1), st, st.Focus == 1), panelH)
 
 	cols := RenderColumns([][]string{left, mid, right}, gap, w)
 	// Guarantee exactly h rows for a clean full-screen frame.

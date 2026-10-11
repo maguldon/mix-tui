@@ -334,8 +334,18 @@ func (e *Engine) Snapshot() Snapshot {
 		st.Pitch = d.Pitch()
 		st.HasBeatGrid = d.HasBeatGrid()
 		ls := d.Loop()
+		st.Cued = e.mixer.Cued(i)
 		st.LoopActive = ls.Active
 		st.LoopBeatCount = ls.BeatCount
+		if k := d.Key(); k != nil {
+			// Below the threshold analyze leaves Camelot empty, but gate here
+			// too so a low-confidence key can never reach the view even if a
+			// caller attaches one directly.
+			if k.Confidence >= analyze.KeyConfidenceThreshold {
+				st.KeyCamelot = k.Camelot
+				st.KeyConfidence = k.Confidence
+			}
+		}
 		if g := d.BeatGrid(); g != nil && st.HasBeatGrid {
 			st.BPM = g.BPM
 		}

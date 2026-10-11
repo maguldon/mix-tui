@@ -59,7 +59,11 @@ type Deck struct {
 	// features report analyze.ErrNoBeatGrid and are disabled, while playback,
 	// pitch, EQ, and filters keep working (spec §8).
 	beatgrid *analyze.BeatGrid
-	loopOn   bool
+	// key is the optional detected key. Below analyze.KeyConfidenceThreshold it
+	// carries an empty Camelot, so the view renders "unknown" rather than a
+	// guess it would be believed on.
+	key    *analyze.Key
+	loopOn bool
 
 	// syncedTo is the deck this one is tempo-locked to, or nil. Written and
 	// read on the render goroutine like the rest of the deck's state.
@@ -167,6 +171,13 @@ func (d *Deck) PosFrames() float64 { return d.pos }
 // AttachBeatGrid installs an analysed grid. A nil grid leaves the deck
 // playable with beatgrid-dependent features unavailable (spec §8).
 func (d *Deck) AttachBeatGrid(g *analyze.BeatGrid) { d.beatgrid = g }
+
+// AttachKey stores a detected key for display. The view reads it through the
+// Snapshot, never from the Deck directly.
+func (d *Deck) AttachKey(k *analyze.Key) { d.key = k }
+
+// Key returns the detected key, or nil.
+func (d *Deck) Key() *analyze.Key { return d.key }
 
 // BeatGrid returns the deck's grid, or nil when it has none.
 func (d *Deck) BeatGrid() *analyze.BeatGrid { return d.beatgrid }

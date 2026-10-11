@@ -23,28 +23,22 @@ func renderB(w, h int, s engine.Snapshot, st ViewState) string {
 
 	// Focus picks the big deck; the other becomes the strip. Clamp so an
 	// out-of-range focus cannot index off the end of the snapshot.
+	// Focus selects the expanded deck. It is clamped rather than defaulted:
+	// forcing focus 0 to 1 (which this once did) meant TAB could never return
+	// to the left deck, so the focused layout never actually followed focus.
 	focus := st.Focus
-	if focus < 0 || (focus == 0 && len(s.Decks) > 1) {
-		focus = 1
-	}
-	if len(s.Decks) == 1 {
+	if len(s.Decks) == 0 {
+		focus = 0
+	} else if focus < 0 || focus >= len(s.Decks) {
 		focus = 0
 	}
+	other := 0
+	if focus == 0 && len(s.Decks) > 1 {
+		other = 1
+	}
+	big := RenderPanel(renderDeckPanel(w, deckAt(&s, focus), st, true), bodyH)
 
-	// Label each panel with the deck it actually shows. Labelling both "A" is
-	// the kind of small wrongness that makes a user distrust every other label
-	// on screen.
-	other := 1 - focus
-	big := RenderPanel(deckPanel(string(rune('A'+focus)), w, deckAt(&s, focus), st, focus), bodyH)
-
-	strip := RenderPanel(Panel{
-		Title: string(rune('A' + other)),
-		Width: w,
-		Rows: []PanelRow{
-			{Kind: RowText, Text: titleOrDash(deckAt(&s, other).Title), Style: titleStyle},
-			{Kind: RowText, Text: transportLine(deckAt(&s, other))},
-		},
-	}, stripH)
+	strip := RenderPanel(renderDeckStrip(w, deckAt(&s, other)), stripH)
 
 	return joinLines(append(big, strip...), w)
 }

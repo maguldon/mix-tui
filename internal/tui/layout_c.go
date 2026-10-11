@@ -29,8 +29,8 @@ func renderC(w, h int, s engine.Snapshot, st ViewState) string {
 		topH = maxInt(5, rest-bottomH)
 	}
 
-	top := RenderPanel(deckPanel("A", w, deckAt(&s, 0), st, 0), topH)
-	bottom := RenderPanel(deckPanel("B", w, deckAt(&s, 1), st, 1), bottomH)
+	top := RenderPanel(renderDeckPanel(w, deckAt(&s, 0), st, st.Focus == 0), topH)
+	bottom := RenderPanel(renderDeckPanel(w, deckAt(&s, 1), st, st.Focus == 1), bottomH)
 	footer := RenderPanel(mixerPanel(w), footerH)
 	footer = padColumns(footer, w)
 
