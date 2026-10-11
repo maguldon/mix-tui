@@ -132,7 +132,7 @@ orchestration so it can be tested without a device.
   func Available() bool
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/pipewire/pipewire_test.go`. These are build-tagged because they need a
 daemon; the un-tagged part runs everywhere.
@@ -182,12 +182,12 @@ func TestDefaultRateIsSane(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/pipewire/ -v`
 Expected: FAIL — `undefined: NewContext`, `undefined: Available`.
 
-- [ ] **Step 3: Implement `internal/pipewire/pipewire.go`**
+- [x] **Step 3: Implement `internal/pipewire/pipewire.go`**
 
 ```go
 //go:build linux
@@ -226,19 +226,19 @@ the context before stopping the loop leaves the loop dereferencing freed memory.
 `Available` attempts a connection with a zero-length timeout and returns false on any
 error. Do not cache the result; the daemon can appear or vanish between calls.
 
-- [ ] **Step 4: Implement `internal/pipewire/rate.go`**
+- [x] **Step 4: Implement `internal/pipewire/rate.go`**
 
 Query the registry for the default `Audio/Sink` node's `audio.rate` property, or the
 daemon's `default.clock.rate` setting. `cgo` this through `pw_context` / registry
 enumeration. If any step fails, return `(0, false)` — **this function must never return an
 error**, because its failure mode is "use the default", not "stop".
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `go test ./internal/pipewire/ -v`
 Expected: PASS, or SKIP with "no pipewire daemon".
 
-- [ ] **Step 6: Verify no other package acquired cgo**
+- [x] **Step 6: Verify no other package acquired cgo**
 
 Run:
 ```bash
@@ -246,7 +246,7 @@ go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$'
 ```
 Expected: exactly one line, `github.com/maguldon/mix-tui/internal/pipewire`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/pipewire/
@@ -296,7 +296,7 @@ git commit -m "feat(pipewire): cgo context, thread loop, and daemon rate query"
   func (s *Stream) AsRenderTarget() engine.RenderTarget
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/pipewire/stream_test.go`:
 
@@ -404,12 +404,12 @@ func TestRingTargetNeverBlocksWhenEmpty(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/pipewire/ -run Stream -v`
 Expected: FAIL — `undefined: NewStream`.
 
-- [ ] **Step 3: Implement `internal/pipewire/stream.go` — the callback**
+- [x] **Step 3: Implement `internal/pipewire/stream.go` — the callback**
 
 ```go
 //go:build linux
@@ -470,12 +470,12 @@ plus `audio.format` = `SPA_FORMAT_f32_planar` (or interleaved; pick one and be c
 **interleaved `F32P`**, matching `dsp.Stereo`), `audio.rate`, `audio.channels`,
 `audio.position`. If `cfg.Target` is set, add `node.name`/`node.id` as the connect target.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/pipewire/ -v -race`
 Expected: PASS or SKIP.
 
-- [ ] **Step 5: Verify the drain path allocates nothing**
+- [x] **Step 5: Verify the drain path allocates nothing**
 
 Add to `stream_test.go`:
 ```go
@@ -495,7 +495,7 @@ Run: `go test ./internal/pipewire/ -run DrainPath -v`
 Expected: PASS. This is the single most important test in the plan — an allocating drain
 callback is a dropout generator that only shows up under load.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/pipewire/
@@ -539,7 +539,7 @@ git commit -m "feat(pipewire): playback stream with allocation-free drain callba
   func (o *Output) Underruns() uint64  // summed ring underruns, for Snapshot
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/pipewire/output_test.go`:
 
@@ -620,12 +620,12 @@ func TestOutputStopWithoutStartIsSafe(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/pipewire/ -run Output -v`
 Expected: FAIL — `undefined: NewOutput`.
 
-- [ ] **Step 3: Implement `internal/pipewire/output.go`**
+- [x] **Step 3: Implement `internal/pipewire/output.go`**
 
 ```go
 package pipewire
@@ -656,12 +656,12 @@ remembering to zero the wrong gain.
 streams, destroy both, close the context. **Stopping before destroying is mandatory** —
 destroying a running stream leaves the data loop pointing at freed memory.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/pipewire/ -v -race`
 Expected: PASS or SKIP.
 
-- [ ] **Step 5: Verify the node routing manually**
+- [x] **Step 5: Verify the node routing manually**
 
 Run the app from Task 4 with both streams live, then in another shell:
 ```bash
@@ -670,7 +670,7 @@ pw-top
 Expected: two `pipewire: stream` nodes named `mix-tui: main` and `mix-tui: cue`, each
 with a running timer and no `xrun`. Confirm MAIN and CUE are independent nodes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/pipewire/
@@ -715,7 +715,7 @@ git commit -m "feat(pipewire): independent MAIN and CUE playback streams"
   func (p *Pumper) Stats() PumperStats
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/pipewire/pump_test.go`:
 
@@ -813,12 +813,12 @@ func TestPumperHonoursCancelWhenRingsAreFull(t *testing.T) {
 > as an exported helper in `internal/engine`. It is a legitimate API — loading from memory
 > is real functionality, not only a test convenience.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/pipewire/ -run Pumper -v`
 Expected: FAIL — `undefined: NewPumper`.
 
-- [ ] **Step 3: Implement `internal/pipewire/pump.go`**
+- [x] **Step 3: Implement `internal/pipewire/pump.go`**
 
 ```go
 func (p *Pumper) Run(ctx context.Context) error {
@@ -863,12 +863,12 @@ that number is dominated by scheduler noise and asserting it produces flaky test
 teach nothing. The authoritative signal is ring starvation, which the engine already
 counts and exposes as `Snapshot.Underruns`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/pipewire/ -v -race -count=2`
 Expected: PASS or SKIP.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/pipewire/
@@ -888,7 +888,7 @@ git commit -m "feat(pipewire): render goroutine that keeps rings ahead of the dr
 - Produces: a binary. `go run ./cmd/mixplay -a trackA.mp3 -b trackB.mp3 -play 0 -play 1 -seconds 30 -stats`
   plays to the device.
 
-- [ ] **Step 1: Write the failing smoke test**
+- [x] **Step 1: Write the failing smoke test**
 
 Create `cmd/mixplay/main_test.go`:
 
@@ -918,12 +918,12 @@ func TestFlagRejectsNegativeSeconds(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/mixplay/ -v`
 Expected: FAIL — `undefined: parseFlags`.
 
-- [ ] **Step 3: Implement `cmd/mixplay/main.go`**
+- [x] **Step 3: Implement `cmd/mixplay/main.go`**
 
 Structure it so flag handling is separable from execution — `parseFlags`,
 `validate`, then `run(ctx, cfg)`. Flags:
@@ -943,22 +943,22 @@ Handle `SIGINT`/`SIGTERM` with `signal.NotifyContext` so Ctrl-C tears down in or
 **`-dump` is the verification bridge:** it writes the same audio both offline (milestone 1)
 and to the device. If they diverge, the device path has a bug the offline path cannot have.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./cmd/mixplay/ -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run the whole suite and vet**
+- [x] **Step 5: Run the whole suite and vet**
 
 Run: `go test ./... -race -count=1 && go vet ./... && gofmt -l .`
 Expected: all pass; `gofmt -l` prints nothing.
 
-- [ ] **Step 6: Verify the cgo boundary held**
+- [x] **Step 6: Verify the cgo boundary held**
 
 Run: `go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$'`
 Expected: exactly `github.com/maguldon/mix-tui/internal/pipewire`.
 
-- [ ] **Step 7: Listen to the output**
+- [x] **Step 7: Listen to the output**
 
 Run:
 ```bash
@@ -971,12 +971,12 @@ If `Underruns` is nonzero, do **not** raise the target latency to hide it. Read
 `PumperStats.RenderWallMax` and `TargetMisses` to find whether the producer genuinely
 cannot keep up or whether the drain is misbehaving.
 
-- [ ] **Step 8: Write `cmd/mixplay/README.md`**
+- [x] **Step 8: Write `cmd/mixplay/README.md`**
 
 Document every flag with a one-line example, plus the canonical verification command
 above and a note that `-dump` is the bridge between the offline and device paths.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add cmd/mixplay/
