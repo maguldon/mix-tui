@@ -336,6 +336,7 @@ func (e *Engine) Snapshot() Snapshot {
 		ls := d.LoopSummary()
 		st.Cued = e.mixer.Cued(i)
 		st.PCM = d.PCM()
+		st.Peaks, st.PeaksWidth = d.Peaks()
 		if g := d.BeatGrid(); g != nil {
 			st.BeatTimes = g.Beats
 		}
@@ -347,6 +348,8 @@ func (e *Engine) Snapshot() Snapshot {
 		}
 		st.LoopActive = ls.Active
 		st.LoopBeatCount = ls.BeatCount
+		st.LoopStart = ls.Start
+		st.LoopEnd = ls.End
 		if k := d.Key(); k != nil {
 			// Below the threshold analyze leaves Camelot empty, but gate here
 			// too so a low-confidence key can never reach the view even if a

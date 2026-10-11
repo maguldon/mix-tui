@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/maguldon/mix-tui/internal/dsp"
+	"github.com/maguldon/mix-tui/internal/engine"
 )
 
 // brailleDot maps (column, row) to the bit for U+2800+n. Column 0 is the left
@@ -22,11 +23,9 @@ var brailleDot = [2][4]rune{
 // brailleBase is the empty braille cell.
 const brailleBase = 0x2800
 
-// Peaks is a min/max envelope for a span of audio. There are two entries per
-// cell — one per channel — so len is Width*2 for a stereo waveform.
-type Peaks struct {
-	Min, Max []float32
-}
+// Peaks is an alias for the engine's envelope type, so a view and the engine
+// share one type rather than two structurally identical ones that could drift.
+type Peaks = engine.Peaks
 
 // LoopSpan marks a loop region in cell indices.
 type LoopSpan struct{ Start, End int }
@@ -49,9 +48,9 @@ type WaveSpec struct {
 // Each cell takes two columns (stereo), and within a cell the wider of the two
 // channels' peaks is used for that column so a hard-panned bass note still shows
 // at full height rather than being halved.
-func PeaksFromPCM(pcm dsp.Stereo, width int) Peaks {
+func PeaksFromPCM(pcm dsp.Stereo, width int) engine.Peaks {
 	n := width * 2
-	p := Peaks{Min: make([]float32, n), Max: make([]float32, n)}
+	p := engine.Peaks{Min: make([]float32, n), Max: make([]float32, n)}
 	if width <= 0 || len(pcm) == 0 {
 		return p
 	}

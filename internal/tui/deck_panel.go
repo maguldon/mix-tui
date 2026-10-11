@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -47,10 +48,16 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	}
 	if wave == nil {
 		wave = RenderWave(WaveSpec{
-			Width:   inner,
-			Height:  waveH,
-			Peaks:   PeaksFromPCM(d.PCM, inner),
+			Width:  inner,
+			Height: waveH,
+			// Peaks come from the engine's cache, resampled to this panel's
+			// width. Deriving them here cost ~33ms per frame per deck; at 30fps
+			// that is two CPU-seconds per wall-clock second and it thrashes the
+			// cache the audio thread needs.
+			Peaks:   resamplePeaks(d.Peaks, inner),
 			PlayCol: playCell(d, inner),
+			Cues:    cueCells(d, inner),
+			Loops:   loopSpans(d, inner),
 		})
 	}
 
@@ -105,6 +112,72 @@ func firstLine(lines []string) string {
 		return ""
 	}
 	return lines[0]
+}
+
+// resamplePeaks narrows a cached envelope to w cells.
+//
+// Two entries per cell, matching Peaks' stereo layout. Narrowing an envelope
+// takes the extreme of the samples it collapses, so a transient between cells
+// still shows rather than disappearing.
+func resamplePeaks(p engine.Peaks, w int) Peaks {
+	if w <= 0 || len(p.Max) == 0 {
+		return Peaks{Min: make([]float32, w*2), Max: make([]float32, w*2)}
+	}
+	src := len(p.Max) / 2
+	if src == w {
+		return p // already the right resolution
+	}
+	out := Peaks{Min: make([]float32, w*2), Max: make([]float32, w*2)}
+	for c := 0; c < w*2; c++ {
+		lo := c * src / w
+		hi := (c + 1) * src / w
+		if hi <= lo {
+			hi = lo + 1
+		}
+		if hi > src {
+			hi = src
+		}
+		var mn, mx float32
+		mn, mx = p.Min[lo], p.Max[lo]
+		for i := lo + 1; i < hi; i++ {
+			if p.Min[i] < mn {
+				mn = p.Min[i]
+			}
+			if p.Max[i] > mx {
+				mx = p.Max[i]
+			}
+		}
+		out.Min[c], out.Max[c] = mn, mx
+	}
+	return out
+}
+
+// cueCells maps hotcue times to waveform cells.
+func cueCells(d engine.DeckState, w int) []int {
+	if w <= 0 || d.CueCount == 0 || d.Duration <= 0 {
+		return nil
+	}
+	n := d.CueCount
+	if n > len(d.CueTimes) {
+		n = len(d.CueTimes)
+	}
+	out := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, int(clampFloat(float64(d.CueTimes[i])/float64(d.Duration), 0, 1)*float64(w)))
+	}
+	return out
+}
+
+// loopSpans maps an active loop to waveform cells, so a deck playing past the
+// end of its track visibly reads as looping rather than stalled (spec §6.2.1).
+func loopSpans(d engine.DeckState, w int) []LoopSpan {
+	if w <= 0 || !d.LoopActive || d.Duration <= 0 || d.LoopEnd <= d.LoopStart {
+		return nil
+	}
+	at := func(t time.Duration) int {
+		return int(clampFloat(float64(t)/float64(d.Duration), 0, 1) * float64(w))
+	}
+	return []LoopSpan{{Start: at(d.LoopStart), End: at(d.LoopEnd)}}
 }
 
 // renderDeckStrip renders a deck as a single compact line, for the collapsed

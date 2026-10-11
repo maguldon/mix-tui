@@ -6,6 +6,12 @@ import (
 	"github.com/maguldon/mix-tui/internal/dsp"
 )
 
+// Peaks is a min/max envelope over the loaded audio, with two entries per
+// column (one per channel) so a hard-panned note still shows at full height.
+type Peaks struct {
+	Min, Max []float32
+}
+
 // DeckState is an immutable view of one deck at the instant Snapshot was
 // taken. The UI never reads Deck directly: doing so would race the audio
 // goroutine (spec §5).
@@ -22,6 +28,9 @@ type DeckState struct {
 	// Snapshot only).
 	LoopActive    bool
 	LoopBeatCount float64
+	// LoopStart and LoopEnd bound the active loop in track time.
+	LoopStart time.Duration
+	LoopEnd   time.Duration
 	// KeyCamelot is the detected key in DJ notation ("8A"), or empty when no
 	// key was detected or the confidence was below threshold. KeyConfidence is
 	// the raw 0..1 score. A view must show "unknown" rather than a low-confidence
@@ -36,6 +45,16 @@ type DeckState struct {
 	// allocate megabytes per frame; the slice is immutable once loaded, so a
 	// view may read it safely. This is what lets the TUI draw a real waveform.
 	PCM dsp.Stereo
+	// Peaks is a min/max envelope of the loaded audio at PeaksWidth columns,
+	// computed once when the track loads.
+	//
+	// It lives here rather than being derived in the view because deriving it
+	// costs ~33ms for a five-minute track, and a view runs 30 times a second:
+	// scanning the PCM per frame would burn two CPU-seconds per wall-clock
+	// second and thrash the cache the audio thread depends on (spec §4.1
+	// requires peaks be cached per track and resolution).
+	Peaks      Peaks
+	PeaksWidth int
 	// BeatTimes and CueTimes position the zoom view's markers. BeatTimes is
 	// empty without a beatgrid.
 	BeatTimes []time.Duration

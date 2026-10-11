@@ -59,6 +59,8 @@ type Deck struct {
 	// features report analyze.ErrNoBeatGrid and are disabled, while playback,
 	// pitch, EQ, and filters keep working (spec §8).
 	beatgrid *analyze.BeatGrid
+	// peaks caches the waveform envelope, computed once per loaded track.
+	peaks peaksCache
 	// key is the optional detected key. Below analyze.KeyConfidenceThreshold it
 	// carries an empty Camelot, so the view renders "unknown" rather than a
 	// guess it would be believed on.
@@ -117,10 +119,16 @@ func NewDeckAtRate(index, rate int) *Deck {
 }
 
 // Load installs a track and rewinds to the start.
+// InvalidatePeaks drops the cached waveform envelope; called when a new track
+// is loaded so a stale envelope cannot be drawn over new audio.
+func (d *Deck) InvalidatePeaks() { d.peaks.invalidate() }
+
 func (d *Deck) Load(t *audio.Track) {
 	d.track = t
 	d.pos = 0
 	d.playing = false
+	// The cached envelope belonged to the previous track.
+	d.peaks.invalidate()
 	// A track may be decoded at a different rate than the deck renders at —
 	// a 48k file on a 44.1k deck, or the reverse. The resampler converts
 	// between them so the deck's output rate always matches its declaration.
@@ -190,6 +198,19 @@ func (d *Deck) PCM() dsp.Stereo {
 		return nil // an empty deck has no audio, and Snapshot must not panic
 	}
 	return d.track.PCM
+}
+
+// Peaks returns the waveform envelope for the loaded track, computing it on
+// first use.
+//
+// The envelope is cached: recomputing it per frame costs ~33ms for a five-minute
+// track, and views run 30 times a second.
+func (d *Deck) Peaks() (Peaks, int) {
+	path := ""
+	if d.track != nil {
+		path = d.track.Path
+	}
+	return d.peaks.get(path, d.PCM(), peaksWidth), peaksWidth
 }
 
 // BeatGrid returns the deck's grid, or nil when it has none.
