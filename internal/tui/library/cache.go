@@ -93,8 +93,8 @@ func (c *Cache) Put(path string, a Analysis) error {
 	return os.WriteFile(c.entryPath(path), data, 0o644)
 }
 
-// Stale reports whether the file has changed since its analysis was cached.
-// A file that cannot be stat'ed is treated as stale.
+// Stale reports whether the file has changed since its analysis was cached, so
+// a replaced file cannot silently keep a wrong beatgrid (spec §4.1).
 func (c *Cache) Stale(path string) bool {
 	if c.dir == "" {
 		return true
@@ -109,10 +109,11 @@ func (c *Cache) Stale(path string) bool {
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		// The file cannot be stat'ed, so freshness cannot be disproved. With no
-		// stamp on the entry there is nothing to contradict, so the analysis
-		// stands; once the file appears it will be stat'ed and compared normally.
-		return false
+		// The file cannot be stat'ed. If the entry carries a real stamp, the
+		// analysis was made when it existed and nothing contradicts it; once the
+		// file appears it is stat'ed and compared normally. An entry with no
+		// stamp describes a file we have never seen and cannot be trusted.
+		return a.Size == 0 && a.ModTime.IsZero()
 	}
 	return fi.Size() != a.Size || !fi.ModTime().Equal(a.ModTime)
 }

@@ -28,13 +28,13 @@ func renderMixerPanel(w int, s engine.Snapshot, st ViewState) Panel {
 	// Header labels the two channel columns. Built by padding, not slicing a
 	// shorter string, so it cannot overrun when the panel is narrow.
 	head := padRight("A", barW) + padRight("B", barW)
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(head, inner), Style: dimStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(head, inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(channelBar("A", lvl(0), barW)+channelBar("B", lvl(1), barW), inner)})
 
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("xfade", inner), Style: dimStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("xfade", inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: crossfaderRow(s.Crossfader, inner)})
 
-	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("MASTER", inner), Style: dimStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo("MASTER", inner), Style: &dimStyle})
 	master := 0.0
 	for i := range s.Decks {
 		if lvl(i) > master {

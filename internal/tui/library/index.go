@@ -120,9 +120,14 @@ func Sort(tracks []Track, by SortKey, desc bool) []Track {
 		case SortArtist:
 			return strings.ToLower(a.Artist) < strings.ToLower(b.Artist)
 		case SortAdded:
-			return a.Added.After(b.Added) // newest first
+			// Ascending is oldest-first, so `desc` flips it to newest-first.
+			// Returning newest-first unconditionally meant the toggle inverted
+			// the meaning rather than flipping a defined baseline.
+			return a.Added.Before(b.Added)
 		case SortByKey:
-			return a.KeyCamelot < b.KeyCamelot
+			// Camelot is a wheel lookup, not a string: 10A must sort after 9A,
+			// which lexicographic order gets backwards.
+			return camelLess(a.KeyCamelot, b.KeyCamelot)
 		default: // SortTitle
 			return strings.ToLower(a.Title) < strings.ToLower(b.Title)
 		}
@@ -154,6 +159,42 @@ func stableUndetected(ts []Track, by SortKey) {
 		}
 	}
 	copy(ts, append(detected, undet...))
+}
+
+// camelLess orders Camelot keys around the wheel: numeric part 1-12, then
+// A (minor) before B (major).
+func camelLess(a, b string) bool {
+	an, aa, aok := parseCamelot(a)
+	bn, ba, bok := parseCamelot(b)
+	if aok != bok {
+		return aok // an undetected key sorts last
+	}
+	if !aok {
+		return false
+	}
+	if an != bn {
+		return an < bn
+	}
+	return aa < ba
+}
+
+func parseCamelot(s string) (num int, letter byte, ok bool) {
+	if len(s) < 2 {
+		return 0, 0, false
+	}
+	n := 0
+	digits := 0
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+		digits++
+	}
+	if digits == 0 || (s[len(s)-1] != 'A' && s[len(s)-1] != 'B') {
+		return 0, 0, false
+	}
+	return n, s[len(s)-1], true
 }
 
 // Search filters on filename, title, and artist, case-insensitively. An empty

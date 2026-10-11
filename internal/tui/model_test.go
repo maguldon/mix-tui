@@ -314,6 +314,10 @@ func TestEscapeLeavesAnyMode(t *testing.T) {
 // arrows move the cursor rather than nudging a fader.
 func TestArrowsMoveSelectionInLibrary(t *testing.T) {
 	m, _ := testModel(t)
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/1.wav", Title: "One"})
+	ix.Add(library.Track{Path: "/2.wav", Title: "Two"})
+	m.SetLibrary(ix)
 	m2, _ := m.Update(keyMsg("/"))
 	before := m2.(*Model).State().TrackSel
 	m3, _ := m2.(*Model).Update(keyMsg("down"))
@@ -458,5 +462,69 @@ func TestDebugStatsFuncIsSampled(t *testing.T) {
 	m2, _ := m.Update(tickMsg{t: time.Now()})
 	if got := m2.(*Model).stats.MainCallbacks; got != 42 {
 		t.Errorf("callbacks = %d, want 42; the stats source is not being sampled", got)
+	}
+}
+
+// TestNudgeAppliesToEngine covers I1: the arrow keys moved a mirrored copy of
+// the crossfader and never told the engine, so pressing them did nothing
+// audible and the fader appeared stuck wherever it was last dragged.
+func TestNudgeAppliesToEngine(t *testing.T) {
+	m, f := testModel(t)
+	before := len(f.applied)
+	for i := 0; i < 5; i++ {
+		m2, _ := m.Update(keyMsg("down"))
+		m = m2.(*Model)
+	}
+	if len(f.applied) == before {
+		t.Fatal("arrow keys produced no engine action; the crossfader cannot be moved by keyboard")
+	}
+	found := false
+	for _, a := range f.applied {
+		if a.Kind == engine.MixerCrossfader {
+			found = true
+			if a.Value <= 0 {
+				t.Errorf("crossfader action has value %v, want a positive nudge", a.Value)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no crossfader action among %+v", f.applied)
+	}
+}
+
+// TestCrossfaderMirrorsFromSnapshot covers the other half of I1: a MIDI
+// crossfader move must move what the interface draws. The model used to keep a
+// second copy that drifted.
+func TestCrossfaderMirrorsFromSnapshot(t *testing.T) {
+	m, f := testModel(t)
+	// Simulate a MIDI move landing in the engine's Snapshot.
+	f.snap.Crossfader = 0.75
+	m2, _ := m.Update(tickMsg{t: time.Now()})
+	if got := m2.(*Model).State().Xfade; got != 0.75 {
+		t.Errorf("mirrored crossfader = %v, want 0.75 from the snapshot", got)
+	}
+}
+
+// TestLibraryDownClampsAtBottom covers I8: there was no bottom clamp, so
+// pressing down past the end left the scroll offset beyond the list and every
+// track row blanked. On a one-track library, one press of down showed nothing.
+func TestLibraryDownClampsAtBottom(t *testing.T) {
+	m, _ := testModel(t)
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/only.wav", Title: "Only Track", BPM: 128})
+	m.SetLibrary(ix)
+
+	m2, _ := m.Update(keyMsg("/"))
+	mm := m2.(*Model)
+	for i := 0; i < 5; i++ {
+		next, _ := mm.Update(keyMsg("down"))
+		mm = next.(*Model)
+	}
+	if got := mm.State().TrackSel; got != 0 {
+		t.Errorf("TrackSel = %d after pressing down past the end; want 0", got)
+	}
+	out := mm.RenderAt(140, 20)
+	if !strings.Contains(out, "Only Track") {
+		t.Errorf("the track pane is blank after pressing down:\n%s", out)
 	}
 }

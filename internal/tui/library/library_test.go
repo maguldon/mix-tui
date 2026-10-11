@@ -201,6 +201,28 @@ func TestScanSkipsHiddenDirs(t *testing.T) {
 	}
 }
 
+// TestScanOnlyIndexesDecodableFormats keeps the index in step with audio.Decode.
+// Listing a format the decoder cannot open means every listed track fails on
+// load, which is worse than an absent track.
+func TestScanOnlyIndexesDecodableFormats(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.wav", "b.mp3", "c.flac", "d.ogg",
+		"e.m4a", "f.aiff", "g.aif", "h.mov", "i.wma"} {
+		os.WriteFile(filepath.Join(root, name), []byte("x"), 0o644)
+	}
+	ix := NewIndex()
+	if err := ix.Scan(context.Background(), []string{root}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ix.Len() != 4 {
+		var got []string
+		for _, tr := range ix.Tracks() {
+			got = append(got, filepath.Base(tr.Path))
+		}
+		t.Errorf("indexed %d tracks %v, want the 4 the decoder can open", ix.Len(), got)
+	}
+}
+
 // TestScanIgnoresNonAudio guards against indexing every file in a music folder.
 func TestScanIgnoresNonAudio(t *testing.T) {
 	root := t.TempDir()
@@ -300,12 +322,45 @@ func TestLoadCratesMissingFileYieldsEmpty(t *testing.T) {
 // TestCacheFileNameIsPathSafe guards against a path with separators in it
 // escaping the cache directory.
 func TestCacheFileNameIsPathSafe(t *testing.T) {
-	c := OpenCache(t.TempDir())
-	if err := c.Put("../../escape.wav", Analysis{BPM: 1}); err != nil {
+	dir := t.TempDir()
+	c := OpenCache(dir)
+	// Use a real file so the entry carries a real stamp.
+	path := filepath.Join(dir, "t.wav")
+	os.WriteFile(path, []byte("audio"), 0o644)
+	if err := c.Put(path, Analysis{BPM: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.Get("../../escape.wav"); !ok {
-		t.Error("cache failed to round-trip a path containing separators")
+	if _, ok := c.Get(path); !ok {
+		t.Error("cache failed to round-trip a real path")
+	}
+
+	// A path with separators must hash to a name inside the cache dir, not
+	// escape it.
+	weird := "../../escape.wav"
+	if err := c.Put(weird, Analysis{BPM: 2}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() == "escape.wav" || strings.Contains(e.Name(), "/") {
+			t.Errorf("cache entry %q escaped the cache directory", e.Name())
+		}
+	}
+}
+
+// TestCacheUnstampedEntryIsNotTrusted covers the corrected staleness rule: an
+// entry with no stamp describes a file we have never seen, so it must miss
+// rather than serve an unverifiable beatgrid.
+func TestCacheUnstampedEntryIsNotTrusted(t *testing.T) {
+	d := t.TempDir()
+	c := OpenCache(d)
+	// A path that does not exist, with no stamp recorded.
+	c.Put("/definitely/not/here.wav", Analysis{BPM: 128})
+	if _, ok := c.Get("/definitely/not/here.wav"); ok {
+		t.Error("an unstamped entry for an unseen file was trusted")
 	}
 }
 

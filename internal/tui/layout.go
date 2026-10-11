@@ -17,10 +17,13 @@ const (
 
 // PanelRow is one line of a panel.
 type PanelRow struct {
-	Kind  RowKind
-	Text  string
-	Wave  *WaveSpec
-	Style lipgloss.Style
+	Kind RowKind
+	Text string
+	Wave *WaveSpec
+	// Style is applied to the padded row. It is a pointer so nil means "no
+	// styling": a lipgloss.Style holds a func and cannot be compared, so an
+	// unset value cannot be detected after the fact.
+	Style *lipgloss.Style
 }
 
 // Panel is a titled box drawn at an exact width.
@@ -104,10 +107,10 @@ func RenderPanel(p Panel, height int) []string {
 	content := height - 2
 	for i := 0; i < content; i++ {
 		var body string
-		var st lipgloss.Style
+		var style *lipgloss.Style
 		if i < len(p.Rows) {
 			r := p.Rows[i]
-			st = r.Style
+			style = r.Style
 			switch r.Kind {
 			case RowWave:
 				if r.Wave != nil {
@@ -118,14 +121,22 @@ func RenderPanel(p Panel, height int) []string {
 						body = rows[i]
 					}
 				}
-			case RowMeter:
-				body = r.Text
 			default:
 				body = r.Text
 			}
 		}
-		_ = st
-		lines = append(lines, "│"+padRight(body, inner)+"│")
+		// The row's style is applied. It was previously read and discarded,
+		// so every colour set by a panel builder was a no-op and the palette
+		// reduced to the borders.
+		//
+		// Padding happens BEFORE styling: lipgloss measures the styled string's
+		// visible width, and padding a styled string by byte length would
+		// misalign every coloured cell.
+		padded := padRight(body, inner)
+		if style != nil {
+			padded = style.Render(padded)
+		}
+		lines = append(lines, "│"+padded+"│")
 	}
 	lines = append(lines, borderBox.Render("└"+strings.Repeat("─", inner)+"┘"))
 	return lines

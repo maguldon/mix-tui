@@ -230,32 +230,40 @@ func RenderOverview(peaks Peaks, width, winStart, winEnd, playCell int) string {
 	if width <= 0 {
 		return ""
 	}
-	h := 2
-	half := 1
+	// A one-row strip: with half == 1 the amplitude ladder only reaches 4
+	// levels, all of which land on row 0. The previous two-row version wrote
+	// only row 0 and returned row 1, which was therefore always blank.
+	h := 1
 	cells := make([][]int, h)
 	for i := range cells {
 		cells[i] = make([]int, width)
 	}
-	maxLvl := float64(half*4 - 1)
+	const maxLvl = 3
 	cols := len(peaks.Max)
 	for c := 0; c < cols && c/2 < width; c++ {
 		amp := amplitude(peaks.Min[c], peaks.Max[c])
 		levels := int(amp*maxLvl + 0.5)
+		if levels < 1 && amp > 0.01 {
+			levels = 1 // a quiet but present signal still shows a mark
+		}
+		cell := c / 2
+		col := c % 2
 		for l := 0; l < levels; l++ {
-			cell := c / 2
-			col := c % 2
-			r := 0
-			if l/4 == 1 {
-				r = 1
-			}
-			cells[r][cell] |= int(brailleDot[col][3-l%4])
+			cells[0][cell] |= int(brailleDot[col][3-l%4])
 		}
 	}
-	// Highlight the window and playhead over the strip.
-	for c := 0; c < width; c++ {
-		inWin := c >= winStart && c <= winEnd
-		if inWin {
-			cells[0][c] |= int(brailleDot[0][2])
+	// The window is bracketed rather than filled: filling the window range would
+	// bury the very audio it is meant to locate, and on a silent track it would
+	// draw marks for a track that has none.
+	// The window edges are marked by overwriting the cell with a distinctive
+	// top-dot glyph rather than OR-ing another dot. OR-ing cannot work: at full
+	// amplitude every amplitude dot is already lit, so the marker is invisible
+	// exactly when the track is loud.
+	if winEnd >= winStart {
+		for _, c := range []int{winStart, winEnd} {
+			if c >= 0 && c < width {
+				cells[0][c] = int(brailleDot[0][0]) | int(brailleDot[1][0])
+			}
 		}
 	}
 	if playCell >= 0 && playCell < width {
@@ -263,13 +271,9 @@ func RenderOverview(peaks Peaks, width, winStart, winEnd, playCell int) string {
 			cells[r][playCell] |= int(brailleDot[0][2]) | int(brailleDot[1][2])
 		}
 	}
-	rows := make([]string, h)
-	for r := 0; r < h; r++ {
-		row := make([]rune, width)
-		for c := 0; c < width; c++ {
-			row[c] = rune(brailleBase + cells[r][c])
-		}
-		rows[r] = string(row)
+	row := make([]rune, width)
+	for c := 0; c < width; c++ {
+		row[c] = rune(brailleBase + cells[0][c])
 	}
-	return rows[1] + "" // single-row strip: the lower (negative) half
+	return string(row)
 }

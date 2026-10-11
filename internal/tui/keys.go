@@ -99,7 +99,10 @@ func (m *Model) handleLibraryKey(name string) bool {
 		}
 		return true
 	case "down":
-		m.st.TrackSel++
+		// Clamp at the bottom. Running past the end left scrollOffset beyond the
+		// list, which blanked every row: pressing down on a one-track library
+		// showed no tracks at all.
+		m.st.TrackSel = minInt(m.st.TrackSel+1, maxInt(0, m.trackCount()-1))
 		return true
 	case "left", "backspace":
 		m.st.Query = dropLastRune(m.st.Query)
@@ -157,6 +160,14 @@ func (m *Model) handleOverlayKey(name string) bool {
 	return false
 }
 
+// trackCount is how many tracks the filtered library holds.
+func (m *Model) trackCount() int {
+	if m.lib == nil {
+		return 0
+	}
+	return len(library.Search(m.lib.Tracks(), m.st.Query))
+}
+
 // dropLastRune removes one rune, not one byte. Deleting a byte from a
 // multi-byte query leaves invalid UTF-8, which renders as U+FFFD at one column
 // per byte.
@@ -197,13 +208,19 @@ func (m *Model) moveFocus(delta int) {
 	m.st.Focus = ((m.st.Focus+delta)%n + n) % n
 }
 
-// nudge moves a value by one step in the mix view.
+// nudge moves the crossfader by one step in the mix view.
+//
+// It applies the change to the engine. It previously only moved the mirrored
+// view state, so pressing the key did nothing a DJ could hear and the fader sat
+// visually wherever they last dragged it.
 func (m *Model) nudge(delta int) {
 	if m.st.Mode == ModeLibrary {
 		return
 	}
 	step := 0.02
-	m.st.Xfade = clampFloat(m.st.Xfade+float64(delta)*step, -1, 1)
+	next := clampFloat(m.st.Xfade+float64(delta)*step, -1, 1)
+	m.st.Xfade = next
+	m.eng.Apply(engine.Action{Kind: engine.MixerCrossfader, Value: next})
 }
 
 // toggleMode returns next if currently showing cur, else cur.
@@ -247,4 +264,11 @@ func keyDisplayName(k string) string {
 		return ""
 	}
 	return k
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

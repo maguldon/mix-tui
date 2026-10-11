@@ -218,12 +218,19 @@ func (m *Model) expireErr() {
 // view state. Snapshot is the source of truth; this is only what to draw.
 func (m *Model) mirrorFromSnapshot() {
 	s := m.eng.Snapshot()
+
+	// The crossfader is mirrored from the Snapshot rather than tracked
+	// separately: a MIDI crossfader move arrives as an Action, is applied to the
+	// engine, and comes back through the Snapshot on the next tick. Keeping a
+	// second copy would let it drift and leave two parts of the interface
+	// disagreeing about where the fader is.
+	m.st.Xfade = s.Crossfader
+
 	// The focused panel's dBEAT readout needs the other deck's state. It is
 	// carried as a value here so the view stays pure.
-	if other := m.st.Focus - 1; other >= 0 && other < len(s.Decks) {
+	if len(s.Decks) > 0 {
+		other := (m.st.Focus + 1) % len(s.Decks)
 		m.st.OtherDeck = s.Decks[other]
-	} else if len(s.Decks) > 0 {
-		m.st.OtherDeck = s.Decks[(m.st.Focus+1)%len(s.Decks)]
 	}
 }
 

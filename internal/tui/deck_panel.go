@@ -67,10 +67,10 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	}
 
 	// Progress / playhead bar.
-	rows = append(rows, PanelRow{Kind: RowText, Text: progressBar(d, inner), Style: dimStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: progressBar(d, inner), Style: &dimStyle})
 
 	// Title and artist.
-	rows = append(rows, PanelRow{Kind: RowText, Text: padRight(TruncateTo(titleOrDash(d.Title), inner), inner), Style: titleStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: padRight(TruncateTo(titleOrDash(d.Title), inner), inner), Style: &titleStyle})
 	if d.Artist != "" {
 		rows = append(rows, PanelRow{Kind: RowText, Text: dimStyle.Render(TruncateTo(d.Artist, inner))})
 	}
@@ -81,7 +81,7 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	rows = append(rows, PanelRow{Kind: RowText, Text: metaRow(d, inner)})
 
 	// EQ bars.
-	rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: dimStyle})
+	rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: &dimStyle})
 
 	// Transport.
 	rows = append(rows, PanelRow{Kind: RowText, Text: transportRow(d, inner)})
@@ -90,10 +90,10 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 		rows = append(rows, PanelRow{
 			Kind:  RowText,
 			Text:  TruncateTo(fmt.Sprintf("LOOP %g beats", d.LoopBeatCount), inner),
-			Style: okStyle,
+			Style: &okStyle,
 		})
 	} else if accent := firstLine(RenderArt(inner, 1, "accent")); accent != "" {
-		rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: okStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: &okStyle})
 	}
 	// The title names the deck. A focused deck is marked so the user can tell
 	// which one TAB will act on; hardcoding "A" would mislabel deck B.
@@ -211,7 +211,7 @@ func renderDeckStrip(w int, d engine.DeckState) Panel {
 		}
 	}
 	line := fmt.Sprintf("%-16s %-6s", titleOrDash(d.Title), state)
-	rows := []PanelRow{{Kind: RowText, Text: TruncateTo(line, inner), Style: dimStyle}}
+	rows := []PanelRow{{Kind: RowText, Text: TruncateTo(line, inner), Style: &dimStyle}}
 	return Panel{Title: string(rune('A' + d.Index)), Width: w, Rows: rows}
 }
 
@@ -220,7 +220,7 @@ func emptyDeckRows(inner int) []PanelRow {
 	art := RenderArt(inner, 5, "empty")
 	rows := make([]PanelRow, 0, len(art))
 	for _, l := range art {
-		rows = append(rows, PanelRow{Kind: RowText, Text: l, Style: dimStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: l, Style: &dimStyle})
 	}
 	return rows
 }

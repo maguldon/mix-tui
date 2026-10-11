@@ -201,3 +201,47 @@ func TestRenderPeakHoldNeverShrinksInstantly(t *testing.T) {
 		t.Error("peak hold ignores the held peak")
 	}
 }
+
+// TestRenderOverviewActuallyDraws is the assertion the existing overview test
+// was missing: it checked only the width, which a blank string satisfies. The
+// implementation wrote into one row and returned another, so the strip was
+// always empty.
+func TestRenderOverviewActuallyDraws(t *testing.T) {
+	o := RenderOverview(testPeaks(20, 0.8), 20, 5, 10, -1)
+	lit := 0
+	for _, r := range o {
+		if r != 0x2800 {
+			lit++
+		}
+	}
+	if lit == 0 {
+		t.Errorf("overview strip is blank for a non-silent signal: %q", o)
+	}
+	if lipgloss.Width(o) != 20 {
+		t.Errorf("overview width %d, want 20", lipgloss.Width(o))
+	}
+}
+
+// TestRenderOverviewMarksSilence checks the strip stays blank when there is
+// nothing to show, so a silent track is not drawn as a full block.
+func TestRenderOverviewMarksSilence(t *testing.T) {
+	// No window and no playhead: a silent track must render as an empty strip
+	// rather than a row of marks implying there is audio there.
+	o := RenderOverview(testPeaks(20, 0), 20, -1, -2, -1)
+	for _, r := range o {
+		if r != 0x2800 {
+			t.Fatalf("silence produced a mark: %q", o)
+		}
+	}
+}
+
+// TestRenderOverviewHighlightsWindowRange checks the window highlight moves the
+// marker, which is what tells a DJ where the zoomed window sits in the track.
+func TestRenderOverviewHighlightsWindowRange(t *testing.T) {
+	peaks := testPeaks(20, 0.8)
+	a := RenderOverview(peaks, 20, 0, 4, -1)
+	b := RenderOverview(peaks, 20, 15, 19, -1)
+	if a == b {
+		t.Error("moving the window changed nothing; the overview cannot show where it sits")
+	}
+}

@@ -10,11 +10,14 @@ import (
 	"time"
 )
 
-// audioExts are the formats the decoder accepts. Anything else in a music
-// folder — artwork, .cue files, .log — is not a track.
+// audioExts are the formats the decoder accepts, and only those.
+//
+// This must track audio.Decode exactly. Listing .m4a or .aiff here indexed
+// files that appear in the library and then fail on every load, which is worse
+// than not listing them: the user sees a track and pressing enter produces an
+// error.
 var audioExts = map[string]bool{
 	".wav": true, ".mp3": true, ".flac": true, ".ogg": true,
-	".aif": true, ".aiff": true, ".m4a": true,
 }
 
 // skipDirs are directories never worth walking.

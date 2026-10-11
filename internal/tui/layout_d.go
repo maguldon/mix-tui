@@ -11,10 +11,10 @@ import (
 // mixerPanel builds the centre mixer panel. Task 5 fills in the real faders.
 func mixerPanel(w int) Panel {
 	rows := []PanelRow{
-		{Kind: RowText, Text: "EQ", Style: dimStyle},
+		{Kind: RowText, Text: "EQ", Style: &dimStyle},
 		{Kind: RowText, Text: "A      B"},
 		{Kind: RowText, Text: "||||  ||||"},
-		{Kind: RowMeter, Text: "----cross----", Style: dimStyle},
+		{Kind: RowMeter, Text: "----cross----", Style: &dimStyle},
 		{Kind: RowText, Text: " master"},
 	}
 	return Panel{Title: "MIXER", Width: w, Rows: rows}
@@ -102,7 +102,7 @@ func deckAt(s *engine.Snapshot, i int) engine.DeckState {
 // structure and the column arithmetic.
 func deckPanel(name string, width int, d engine.DeckState, st ViewState, idx int) Panel {
 	rows := []PanelRow{
-		{Kind: RowText, Text: titleOrDash(d.Title), Style: titleStyle},
+		{Kind: RowText, Text: titleOrDash(d.Title), Style: &titleStyle},
 		{Kind: RowText, Text: transportLine(d)},
 		{Kind: RowWave, Wave: &WaveSpec{
 			Width:   24,
@@ -113,13 +113,13 @@ func deckPanel(name string, width int, d engine.DeckState, st ViewState, idx int
 		{Kind: RowText, Text: positionLine(d)},
 	}
 	if d.HasBeatGrid {
-		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("%3.1f BPM  key %s", d.BPM, "-"), Style: dimStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("%3.1f BPM  key %s", d.BPM, "-"), Style: &dimStyle})
 	}
 	if d.LoopActive {
-		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("loop %.0f beats", d.LoopBeatCount), Style: okStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("loop %.0f beats", d.LoopBeatCount), Style: &okStyle})
 	}
 	if idx == st.Focus {
-		rows = append(rows, PanelRow{Kind: RowText, Text: "focus", Style: okStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: "focus", Style: &okStyle})
 	}
 	return Panel{Title: name, Width: width, Rows: rows}
 }
