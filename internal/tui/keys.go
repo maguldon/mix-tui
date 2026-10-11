@@ -16,6 +16,17 @@ import (
 func (m *Model) handleKey(k string) {
 	name := bindingName(k)
 
+	// The error screen's way out. Checked before anything else because the
+	// interface is already broken here: routing q through the keymap would
+	// quantise a deck, since q is bound to Quantize.
+	if m.panicked {
+		switch name {
+		case "q", "ctrl+c":
+			m.quitting = true
+		}
+		return
+	}
+
 	// Universal exits.
 	switch name {
 	case "escape":
@@ -184,6 +195,13 @@ func dropLastRune(s string) string {
 // it mirrors.
 func (m *Model) applyAction(a engine.Action) {
 	switch a.Kind {
+	case engine.Quit:
+		// Handled here rather than in the engine: quitting is a property of
+		// the program, not of the audio engine. The default keymap binds
+		// ctrl+c to Quit, and until this existed the only way out of a live
+		// session was SIGTERM -- ctrl+c did nothing at all.
+		m.quitting = true
+		return
 	case engine.LibraryOpen:
 		m.st.Mode = ModeLibrary
 		return

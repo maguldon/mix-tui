@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/maguldon/mix-tui/internal/config"
@@ -171,7 +172,7 @@ func TestViewSurvivesPanic(t *testing.T) {
 	if out == "" {
 		t.Fatal("panic produced no output at all; a blank screen is what focus #4 forbids")
 	}
-	for _, want := range []string{"error", "press q to quit"} {
+	for _, want := range []string{"error", "press q or ctrl+c to quit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("panic screen missing %q:\n%s", want, out)
 		}
@@ -526,5 +527,81 @@ func TestLibraryDownClampsAtBottom(t *testing.T) {
 	out := mm.RenderAt(140, 20)
 	if !strings.Contains(out, "Only Track") {
 		t.Errorf("the track pane is blank after pressing down:\n%s", out)
+	}
+}
+
+// TestCtrlCQuits. ctrl+c is bound to Quit in the default keymap, and until
+// Quit was handled the only way out of a live session was SIGTERM: pressing
+// ctrl+c did nothing at all, mid-set, with audio playing.
+func TestCtrlCQuits(t *testing.T) {
+	m, _ := testModel(t)
+	m.st.Mode = ModeMix
+
+	m2, cmd := m.Update(keyMsg("ctrl+c"))
+
+	if m2.(*Model).quitting != true {
+		t.Fatal("ctrl+c did not set the quit flag")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c returned no command; the program would not terminate")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("ctrl+c did not produce tea.QuitMsg")
+	}
+}
+
+// TestQuitActionQuits covers the action itself, not just the default binding:
+// Quit is what a MIDI mapping or a custom config would resolve to.
+func TestQuitActionQuits(t *testing.T) {
+	m, f := testModel(t)
+	m.st.Mode = ModeMix
+
+	m.handleKey("ctrl+c")
+
+	if !m.quitting {
+		t.Error("Quit did not set the quit flag")
+	}
+	if len(f.applied) != 0 {
+		t.Errorf("Quit reached the engine as %v; it is a program action, not audio state", f.applied)
+	}
+}
+
+// TestQuitIsNotAppliedWhilePanicking. On the error screen the keymap does not
+// apply, so "q" must exit rather than quantise a deck -- q is bound to
+// Quantize, and the old screen told users to press it.
+func TestQuitIsNotAppliedWhilePanicking(t *testing.T) {
+	m, f := testModel(t)
+	m.panicOnRender = true
+	_ = m.View() // triggers the recovery and sets panicked
+
+	m.handleKey("q")
+
+	if !m.quitting {
+		t.Error("q on the error screen did not quit")
+	}
+	if len(f.applied) != 0 {
+		t.Errorf("q on the error screen applied %v; it must exit, not quantise", f.applied)
+	}
+}
+
+// TestPanickedScreenIgnoresOtherKeys. A broken interface should not act on
+// anything except the exit key; a stray deck nudge would be surprising while
+// the user is reading an error.
+func TestPanickedScreenIgnoresOtherKeys(t *testing.T) {
+	m, f := testModel(t)
+	m.panicOnRender = true
+	_ = m.View()
+
+	for _, k := range []string{" ", "enter", "tab", "x", "s"} {
+		m2, _ := testModel(t)
+		m2.panicOnRender = true
+		_ = m2.View()
+		m2.handleKey(k)
+		if m2.quitting {
+			t.Errorf("key %q quit from the error screen; only q and ctrl+c should", k)
+		}
+	}
+	if len(f.applied) != 0 {
+		t.Errorf("the error screen applied %v", f.applied)
 	}
 }

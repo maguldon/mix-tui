@@ -59,6 +59,16 @@ type Model struct {
 
 	w, h int
 
+	// panicked records that the render path failed, so the key handler can
+	// offer a way out. On the error screen the normal keymap does not apply:
+	// the interface is broken, and "q" is bound to Quantize, so telling the
+	// user to press it would have them nudge a deck instead of leaving.
+	panicked bool
+	// quitting records that the user asked to exit. Update turns it into
+	// tea.Quit. It is a field rather than a direct call because the model has
+	// no reference to the program, and returning a command from Update is the
+	// only way a bubbletea model can ask to terminate.
+	quitting bool
 	// panicOnRender is a test hook: it forces the render path to panic so the
 	// recovery screen can be asserted. Never set in production.
 	panicOnRender bool
@@ -170,6 +180,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keyMsg:
 		m.handleKey(string(msg))
+		if m.quitting {
+			return m, tea.Quit
+		}
 		return m, nil
 
 	default:
@@ -332,6 +345,7 @@ func (m *Model) View() (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(devNull{}, "mix-tui: render panic: %v\n", r)
+			m.panicked = true
 			out = m.errorFrame(fmt.Sprintf("%v", r))
 		}
 	}()
@@ -354,7 +368,7 @@ func (m *Model) errorFrame(reason string) string {
 		"  " + TruncateTo(reason, maxInt(0, w-4)),
 		"",
 		dimStyle.Render("  audio is still playing"),
-		dimStyle.Render("  press q to quit"),
+		dimStyle.Render("  press q or ctrl+c to quit"),
 	}
 	out := make([]string, h)
 	for i := range out {
