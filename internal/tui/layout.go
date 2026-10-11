@@ -111,7 +111,12 @@ func RenderPanel(p Panel, height int) []string {
 			switch r.Kind {
 			case RowWave:
 				if r.Wave != nil {
-					body = r.Wave.Render(inner)
+					rows := RenderWave(*r.Wave)
+					// A waveform row set taller than this line is clipped; a
+					// wave that pushed the box taller would break the layout.
+					if i < len(rows) {
+						body = rows[i]
+					}
 				}
 			case RowMeter:
 				body = r.Text

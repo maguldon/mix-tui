@@ -104,7 +104,12 @@ func deckPanel(name string, width int, d engine.DeckState, st ViewState, idx int
 	rows := []PanelRow{
 		{Kind: RowText, Text: titleOrDash(d.Title), Style: titleStyle},
 		{Kind: RowText, Text: transportLine(d)},
-		{Kind: RowWave, Wave: &WaveSpec{Bars: 4, Playhead: playheadFrac(d)}},
+		{Kind: RowWave, Wave: &WaveSpec{
+			Width:   24,
+			Height:  4,
+			Peaks:   Peaks{},
+			PlayCol: playCell(d, 24),
+		}},
 		{Kind: RowText, Text: positionLine(d)},
 	}
 	if d.HasBeatGrid {
@@ -145,12 +150,14 @@ func positionLine(d engine.DeckState) string {
 	return fmt.Sprintf("%s / %s", mmss(pos), mmss(d.Duration))
 }
 
-func playheadFrac(d engine.DeckState) float64 {
-	if d.Duration <= 0 {
-		return 0
+// playCell converts a deck position into a waveform cell index for a wave of
+// the given width, or -1 when there is nothing loaded.
+func playCell(d engine.DeckState, width int) int {
+	if d.Duration <= 0 || width <= 0 {
+		return -1
 	}
 	f := float64(d.Position) / float64(d.Duration)
-	return clampFloat(f, 0, 1)
+	return int(clampFloat(f, 0, 1) * float64(width))
 }
 
 func clampFloat(v, lo, hi float64) float64 {
