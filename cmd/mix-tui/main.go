@@ -1,0 +1,198 @@
+// Command mix-tui is a terminal DJ application: two decks, a mixer, a library,
+// MIDI and keyboard control, playing to a PipeWire device.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/maguldon/mix-tui/internal/audio"
+	"github.com/maguldon/mix-tui/internal/config"
+	"github.com/maguldon/mix-tui/internal/dsp"
+	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/midi"
+	"github.com/maguldon/mix-tui/internal/pipewire"
+	"github.com/maguldon/mix-tui/internal/tui"
+	"github.com/maguldon/mix-tui/internal/tui/library"
+)
+
+func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+		fmt.Print(flagText())
+		return
+	}
+	args, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mix-tui: %v\n\n%s", err, flagText())
+		os.Exit(2)
+	}
+	if err := run(args); err != nil {
+		fmt.Fprintf(os.Stderr, "mix-tui: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args appArgs) error {
+	// 1. Configuration. Loaded before anything opens a device, so a bad config
+	//    is reported before audio starts.
+	cfgPath := discoverConfig(args.configPath)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	if args.view != "" {
+		cfg.UI.DefaultView = args.view
+	}
+	keys, err := config.NewKeyResolver(cfg)
+	if err != nil {
+		return fmt.Errorf("keybindings: %w", err)
+	}
+
+	// 2. Audio device, so the engine can be built at the rate the device
+	//    actually granted rather than the one we asked for.
+	rate := cfg.Audio.SampleRate
+	var out *pipewire.Output
+	if !args.noAudio {
+		out, err = pipewire.NewOutput(pipewire.OutputConfig{
+			SampleRate: rate,
+			RingFrames: cfg.Audio.RingFrames,
+			MainTarget: cfg.Audio.MainTarget,
+			CueTarget:  cfg.Audio.CueTarget,
+		})
+		if err != nil {
+			// A missing device is not fatal: the interface still runs and can
+			// say why there is no sound (spec §8). Audio simply will not play.
+			fmt.Fprintf(os.Stderr, "mix-tui: no audio device: %v\n", err)
+		} else if rate != 0 && out.SampleRate() != rate {
+			// The device disagreed with the request. Rebuild at its rate rather
+			// than rendering 44.1k into a 48k stream.
+			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
+				out.SampleRate(), rate)
+		}
+	}
+	if out != nil {
+		rate = out.SampleRate()
+	}
+	if rate <= 0 {
+		rate = dsp.SampleRate
+	}
+
+	// 3. Engine at the real rate.
+	eng := engine.New(engine.Config{
+		SampleRate:  rate,
+		BlockFrames: engine.BlockFrames,
+		DeckCount:   2,
+	})
+
+	// 4. Tracks, with cached analysis attached so BPM and key show immediately.
+	lib := library.NewIndex()
+	if root := args.libraryRoot; root != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := lib.Scan(ctx, []string{root}, nil, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "mix-tui: library scan: %v\n", err)
+		}
+		cancel()
+	}
+
+	cache := library.OpenCache(filepath.Join(cacheDir(), "analysis"))
+	for i, path := range []string{args.aPath, args.bPath} {
+		if path == "" {
+			continue
+		}
+		track, err := audio.Decode(path)
+		if err != nil {
+			return fmt.Errorf("deck %c: %w", 'A'+byte(i), err)
+		}
+		eng.Deck(i).Load(track)
+		if a, ok := cache.Get(path); ok {
+			eng.Deck(i).AttachBeatGrid(beatGridFrom(a, track))
+			eng.Deck(i).AttachKey(keyFrom(a))
+		}
+	}
+
+	// 5. Controls.
+	model := tui.New(eng, cfg, keys)
+	model.SetLibrary(lib)
+
+	if !args.noMIDI {
+		handler := model.MIDIHandler()
+		listener, err := midi.OpenListener(handler)
+		if err != nil {
+			// No controller is a normal state, not a failure.
+			fmt.Fprintf(os.Stderr, "mix-tui: no MIDI: %v (keyboard only)\n", err)
+		} else {
+			defer listener.Close()
+			model.AttachMIDI(handler)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 6. Renderer.
+	var pumpDone chan struct{}
+	if out != nil {
+		if err := out.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "mix-tui: audio start: %v\n", err)
+		}
+		pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
+		pumpDone = make(chan struct{})
+		go func() {
+			defer close(pumpDone)
+			_ = pump.Run(ctx)
+		}()
+	}
+
+	// 7. A single frame to a file, without a terminal. This is the one flag
+	//    that makes layout work verifiable in CI.
+	if args.screenshot != "" {
+		w, h := args.width, args.height
+		if w <= 0 {
+			w = 120
+		}
+		if h <= 0 {
+			h = 40
+		}
+		return writeScreenshot(model, args.screenshot, w, h)
+	}
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	_, runErr := p.Run()
+	stop()
+	if pumpDone != nil {
+		<-pumpDone
+	}
+	if out != nil {
+		_ = out.Stop()
+		_ = out.Close()
+	}
+	return runErr
+}
+
+func writeScreenshot(m *tui.Model, path string, w, h int) error {
+	// The default 120x40 is the spec's reference size; -width/-height override it
+	// so layout can be verified at every size that matters without a terminal.
+	out := m.RenderAt(w, h)
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("screenshot: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "mix-tui: wrote %s\n", path)
+	return nil
+}
+
+func cacheDir() string {
+	if base := os.Getenv("XDG_CACHE_HOME"); base != "" {
+		return filepath.Join(base, "mix-tui")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".cache", "mix-tui")
+	}
+	return ".mix-tui-cache"
+}

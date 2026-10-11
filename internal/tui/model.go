@@ -9,6 +9,7 @@ import (
 
 	"github.com/maguldon/mix-tui/internal/config"
 	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/midi"
 	"github.com/maguldon/mix-tui/internal/tui/library"
 	"github.com/maguldon/mix-tui/internal/tui/views"
 )
@@ -39,6 +40,9 @@ type Model struct {
 	lib *library.Index
 	// stats feeds the debug overlay.
 	stats views.DebugStats
+	// midi is attached when a device is opened, so the debug overlay can show
+	// ignored-message counts.
+	midi *midi.Handler
 
 	st ViewState
 
@@ -76,6 +80,25 @@ func New(eng Engine, cfg *config.Config, keys *config.KeyResolver) *Model {
 // State returns the interaction state, for tests.
 func (m *Model) State() ViewState { return m.st }
 
+// SetLibrary attaches a scanned library for the browser and overlay.
+func (m *Model) SetLibrary(ix *library.Index) { m.lib = ix }
+
+// SetStats updates the diagnostic surface shown by the debug overlay.
+func (m *Model) SetStats(s views.DebugStats) { m.stats = s }
+
+// MIDIHandler returns a midi.Handler that applies to this model's engine.
+//
+// The TUI builds the handler rather than receiving one so that a keypress and
+// a controller press converge on exactly the same Action path (spec §5.1).
+func (m *Model) MIDIHandler() *midi.Handler {
+	return midi.NewHandler(nil, m.eng.Apply)
+}
+
+// AttachMIDI points the model at its MIDI handler so the debug overlay can
+// show ignored-message counts. It is separate from MIDIHandler so a headless
+// run never constructs a device.
+func (m *Model) AttachMIDI(h *midi.Handler) { m.midi = h }
+
 // Init starts the render tick.
 func (m *Model) Init() tea.Cmd { return tick() }
 
@@ -94,6 +117,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.expireErr()
+		m.refreshMIDICounts()
 		// Mirror authoritative control values from the snapshot each tick
 		// rather than keeping a second copy that can drift.
 		m.mirrorFromSnapshot()
@@ -121,6 +145,15 @@ func bindingName(k string) string {
 		return "escape"
 	}
 	return k
+}
+
+// refreshMIDICounts copies the MIDI handler's tallies into the debug stats, so
+// the overlay shows why a controller is not behaving (spec §7).
+func (m *Model) refreshMIDICounts() {
+	if m.midi == nil {
+		return
+	}
+	m.stats.MIDIIgnored = m.midi.Counts()
 }
 
 // expireErr clears an error older than errTTL.

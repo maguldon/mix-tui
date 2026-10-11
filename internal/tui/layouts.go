@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/maguldon/mix-tui/internal/engine"
 )
 
@@ -36,6 +38,27 @@ func MinWidth(k LayoutKind) int {
 // mid-set gets a usable layout back instead of a corrupted one (review focus
 // #1), and a user who is simply too narrow is told what to do (#2).
 func Render(w, h int, s engine.Snapshot, st ViewState) string {
+	out := renderOne(w, h, s, st)
+	// Graceful degradation: if the chosen layout does not fit, fall back to the
+	// most spacious one that does rather than refusing to draw.
+	//
+	// 80x24 is the standard terminal size and layout D needs 90 columns. Showing
+	// a "too small" notice there means the common case gets no interface at
+	// all, which is worse than showing a layout the user did not pick. The
+	// notice is still shown when nothing fits.
+	if strings.Contains(out, "too small") {
+		for _, alt := range []LayoutKind{LayoutC, LayoutB, LayoutA} {
+			try := st
+			try.Layout = alt
+			if cand := renderOne(w, h, s, try); !strings.Contains(cand, "too small") {
+				return cand
+			}
+		}
+	}
+	return out
+}
+
+func renderOne(w, h int, s engine.Snapshot, st ViewState) string {
 	switch st.Layout {
 	case LayoutA:
 		return renderA(w, h, s, st)

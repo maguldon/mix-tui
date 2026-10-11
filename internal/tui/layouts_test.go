@@ -152,3 +152,34 @@ func TestAllLayoutsNeverPanicAcrossSizes(t *testing.T) {
 
 // displayWidth is lipgloss.Width under a shorter name for readability here.
 func displayWidth(s string) int { return lipgloss.Width(s) }
+
+// TestRenderFallsBackWhenTooNarrow pins the degradation rule: 80x24 is the
+// standard terminal size and layout D needs 90 columns, so refusing there would
+// leave the common case with no interface at all. A layout that fits is better
+// than a notice telling the user to resize.
+func TestRenderFallsBackWhenTooNarrow(t *testing.T) {
+	for _, w := range []int{80, 70, 90} {
+		out := Render(w, 24, snapTwoDecks(), ViewState{Layout: LayoutD})
+		if strings.Contains(out, "too small") {
+			t.Errorf("w=%d refused instead of falling back:\n%s", w, out)
+		}
+	}
+}
+
+// TestRenderStillRefusesWhenNothingFits keeps the honest notice for terminals
+// too narrow for any layout.
+func TestRenderStillRefusesWhenNothingFits(t *testing.T) {
+	out := Render(40, 12, snapTwoDecks(), ViewState{Layout: LayoutD})
+	if !strings.Contains(out, "too small") {
+		t.Errorf("a 40-col terminal must say so rather than draw nonsense:\n%s", out)
+	}
+}
+
+// TestFallbackRendersAllDecks checks the fallback is a usable interface, not
+// just something that avoids the words "too small".
+func TestFallbackRendersAllDecks(t *testing.T) {
+	out := Render(80, 24, snapTwoDecks(), ViewState{Layout: LayoutD})
+	if !strings.Contains(out, "Track A") || !strings.Contains(out, "Track B") {
+		t.Errorf("fallback lost a deck:\n%s", out)
+	}
+}
