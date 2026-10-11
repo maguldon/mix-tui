@@ -66,6 +66,28 @@ type Engine struct {
 	// the audio goroutine and must not allocate (spec §4.3).
 	scratchMain dsp.Stereo
 	scratchCue  dsp.Stereo
+
+	// recorder captures the mixed MAIN block for offline comparison. Nil
+	// unless SetRecorder was called, so the production device path pays
+	// nothing: recording is the -dump verification bridge, not a runtime
+	// feature. Guarded by recMu because it is set before the pump starts but
+	// read on every render.
+	recMu    sync.Mutex
+	recorder Recorder
+}
+
+// Recorder captures rendered audio for later comparison against an offline
+// render. Implementations receive a block that RenderInto is finished with and
+// must copy anything they intend to keep: the buffer is reused next block.
+type Recorder interface {
+	RecordMain(block dsp.Stereo)
+}
+
+// SetRecorder installs a recorder, or nil to remove one.
+func (e *Engine) SetRecorder(r Recorder) {
+	e.recMu.Lock()
+	e.recorder = r
+	e.recMu.Unlock()
 }
 
 // New builds an engine with cfg's deck count.
@@ -261,6 +283,16 @@ func (e *Engine) RenderInto(main, cue *audio.Ring) error {
 
 	if err := e.mixer.mix(mainBuf, cueBuf); err != nil {
 		return err
+	}
+
+	// Tee the mixed MAIN block to the recorder, if one is installed. This runs
+	// on the pump goroutine, not the realtime drain, so a recorder that
+	// allocates is acceptable here — but never on the drain thread.
+	e.recMu.Lock()
+	rec := e.recorder
+	e.recMu.Unlock()
+	if rec != nil {
+		rec.RecordMain(mainBuf)
 	}
 	// A short write means the ring was FULL, which is the opposite failure to
 	// the underrun the Ring itself counts (a read finding it empty). The

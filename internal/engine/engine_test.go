@@ -325,3 +325,46 @@ func TestOverrunFillsWhenConsumerStalls(t *testing.T) {
 		t.Error("a stalled consumer produced no overruns")
 	}
 }
+
+// TestRecorderCapturesMainMix verifies the -dump bridge taps the mixed MAIN
+// block. The recorder receives the post-mix buffer, so a dump of a real render
+// is directly comparable to an offline mixrender of the same script.
+func TestRecorderCapturesMainMix(t *testing.T) {
+	eng := New(Config{SampleRate: 44100, DeckCount: 2})
+	main := audio.NewRing(1 << 16)
+	cue := audio.NewRing(1 << 16)
+
+	rec := &countingRecorder{}
+	eng.SetRecorder(rec)
+
+	// Render a few blocks; the recorder should see each MAIN block once.
+	for i := 0; i < 3; i++ {
+		if err := eng.RenderInto(main, cue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec.calls != 3 {
+		t.Fatalf("expected 3 recorded blocks, got %d", rec.calls)
+	}
+	if rec.samples == 0 {
+		t.Fatal("recorded block had no samples")
+	}
+
+	// Detaching stops capture.
+	eng.SetRecorder(nil)
+	before := rec.calls
+	_ = eng.RenderInto(main, cue)
+	if rec.calls != before {
+		t.Fatal("recorder captured after being detached")
+	}
+}
+
+type countingRecorder struct {
+	calls   int
+	samples int
+}
+
+func (c *countingRecorder) RecordMain(block dsp.Stereo) {
+	c.calls++
+	c.samples += len(block)
+}

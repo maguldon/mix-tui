@@ -19,6 +19,7 @@ import (
 
 	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
+	"github.com/maguldon/mix-tui/internal/dsp"
 	"github.com/maguldon/mix-tui/internal/engine"
 	"github.com/maguldon/mix-tui/internal/pipewire"
 )
@@ -232,6 +233,23 @@ func runPlayback(ctx context.Context, f flags) error {
 		return err
 	}
 
+	// -dump is the verification bridge between the device path and the offline
+	// path: it records the exact MAIN mix the device received, so if it diverges
+	// from a mixrender of the same script the bug is in the device path, which
+	// the offline render cannot have.
+	if f.dump != "" {
+		rec := &engineRecorder{w: audio.NewWAVWriter(rate)}
+		eng.SetRecorder(rec)
+		defer func() {
+			eng.SetRecorder(nil)
+			if err := rec.w.Close(f.dump); err != nil {
+				fmt.Fprintf(os.Stderr, "mixplay: dump: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "mixplay: wrote %s\n", f.dump)
+			}
+		}()
+	}
+
 	pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
 	pumpCtx, cancelPump := context.WithCancel(ctx)
 	defer cancelPump()
@@ -352,3 +370,12 @@ func printStats(eng *engine.Engine, out *pipewire.Output, pump *pipewire.Pumper)
 		ps.BlocksRendered, ps.RenderWallMax.Round(time.Microsecond),
 		ps.TargetMisses, ps.CancelClean)
 }
+
+// engineRecorder adapts a WAVWriter to the engine's Recorder interface.
+//
+// RecordMain runs on the pump goroutine, never the realtime drain, so growing
+// the output buffer here is safe. The block is consumed synchronously before
+// the next mix overwrites the scratch buffer it points at.
+type engineRecorder struct{ w *audio.WAVWriter }
+
+func (r *engineRecorder) RecordMain(block dsp.Stereo) { r.w.WriteStereo(block) }
