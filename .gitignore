@@ -4,3 +4,6 @@
 /mix-tui
 /mixplay
 /mixrender
+
+# Test binaries
+*.test
