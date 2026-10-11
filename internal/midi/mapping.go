@@ -88,7 +88,9 @@ type DeviceMapping struct {
 	Raw yaml.Node
 }
 
-// ModSet is the set of currently-held modifier names.
+// ModSet is the set of currently-held modifier names. The zero value (a nil
+// map) reads as an empty set, so an uninitialised ModSet behaves correctly
+// rather than panicking. Methods are in resolver.go.
 type ModSet map[string]bool
 
 // msgKey identifies a physical message within a table.
