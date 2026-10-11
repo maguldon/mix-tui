@@ -227,11 +227,16 @@ func (s *Stream) Stop() error {
 // Destroy releases the stream. It must not be called while the drain callback
 // can still fire.
 func (s *Stream) Destroy() error {
-	if s == nil {
+	if s == nil || s.stream == nil {
 		return nil
 	}
-	s.ctx.lock()
-	defer s.ctx.unlock()
+	// Only touch the loop while it is alive: locking a destroyed
+	// pw_thread_loop is a use-after-free, and a Stream can outlive its
+	// Context when a caller owns the context itself.
+	if s.ctx != nil && s.ctx.alive() {
+		s.ctx.lock()
+		defer s.ctx.unlock()
+	}
 	if s.stream != nil {
 		C.pw_stream_destroy(s.stream)
 		s.stream = nil

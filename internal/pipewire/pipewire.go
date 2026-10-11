@@ -152,6 +152,9 @@ func NewContext(name string) (*Context, error) {
 // object segfaults on first use. Since our loop is driven by a thread
 // PipeWire owns, locking from Go is how we enter that thread's world
 // synchronously.
+// alive reports whether the loop is still usable.
+func (c *Context) alive() bool { return c != nil && c.loop != nil }
+
 func (c *Context) lock() {
 	if c == nil || c.loop == nil {
 		return
