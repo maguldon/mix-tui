@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/dsp"
@@ -186,7 +187,6 @@ func TestDestroyRacesDrainSafely(t *testing.T) {
 // not return until an in-flight drain has finished.
 func TestDrainGateStopsWorkAfterTeardown(t *testing.T) {
 	s := &Stream{}
-	s.teardown.init()
 	// With no drainer running, entering must be refused once the gate is set.
 	s.teardown.closeAndWait()
 	s.drain() // must return immediately without touching a nil stream
@@ -222,4 +222,74 @@ func TestStreamReconnectsAfterStop(t *testing.T) {
 	}
 	_ = s.Stop()
 	_ = s.Destroy()
+}
+
+// TestDrainGateIsLockFree pins the realtime-safety property of the teardown
+// gate. Spec §4.3 forbids locks in the PipeWire process callback. This does not
+// try to prove the absence of a mutex (hard to assert directly); it pins the
+// behaviour that makes the property matter — the gate admits and releases
+// drains without any coordination primitive that could block the audio thread,
+// and it correctly refuses new drains once closed.
+func TestDrainGateIsLockFree(t *testing.T) {
+	var someInt int
+	var g drainGate
+
+	// Open: enters are admitted. The gate only carries the pointer through, so
+	// any non-nil value is fine.
+	nonNil := unsafe.Pointer(&someInt)
+	if _, ok := g.enter(func() unsafe.Pointer { return nonNil }); !ok {
+		t.Fatal("enter refused on an open gate")
+	}
+	// A second concurrent drain is admitted too (count 2).
+	if _, ok := g.enter(func() unsafe.Pointer { return nonNil }); !ok {
+		t.Fatal("enter refused a concurrent drain")
+	}
+
+	g.leave()
+	g.leave()
+
+	// Closing must wait for nothing (count is 0) and must then refuse enters.
+	g.closeAndWait()
+	if _, ok := g.enter(func() unsafe.Pointer { return nil }); ok {
+		t.Fatal("enter admitted after closeAndWait")
+	}
+	// closeAndWait is idempotent.
+	g.closeAndWait()
+}
+
+// TestDrainGateCloseWaitsForActiveDrain checks closeAndWait actually waits
+// rather than returning immediately while a drain is still inside the callback.
+// If it returned early, Destroy would free the stream underneath an in-flight
+// drain — the use-after-free this gate exists to prevent.
+func TestDrainGateCloseWaitsForActiveDrain(t *testing.T) {
+	var someInt int
+	var g drainGate
+	if _, ok := g.enter(func() unsafe.Pointer { return unsafe.Pointer(&someInt) }); !ok {
+		t.Fatal("enter refused")
+	}
+
+	released := make(chan struct{})
+	waited := make(chan struct{})
+	go func() {
+		g.closeAndWait() // must block: one drain is still active
+		close(waited)
+	}()
+	// Give closeAndWait a chance to (incorrectly) return.
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-waited:
+		t.Fatal("closeAndWait returned while a drain was still active")
+	default:
+	}
+	// Now let the drain leave; closeAndWait must then finish.
+	go func() {
+		g.leave()
+		close(released)
+	}()
+	<-released
+	select {
+	case <-waited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closeAndWait did not return after the last drain left")
+	}
 }

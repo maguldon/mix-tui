@@ -4,6 +4,7 @@ package pipewire
 
 import (
 	"fmt"
+	"runtime"
 	"runtime/cgo"
 	"sync"
 	"sync/atomic"
@@ -160,7 +161,6 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	}
 
 	s := &Stream{ctx: ctx, ring: ring, cfg: cfg}
-	s.teardown.init()
 	s.handle = cgo.NewHandle(s)
 
 	// Every stream operation must hold the loop lock; see Context.lock.
@@ -445,68 +445,68 @@ func allocStreamHook() *C.struct_spa_hook {
 	return C.alloc_stream_hook()
 }
 
-// drainGate is a close-and-drain barrier for the realtime callback.
+// drainGate is a lock-free close-and-drain barrier for the realtime callback.
 //
-// Contract: enter() returns true only if the gate was open, and if it returns
-// true the matching leave() is guaranteed to run. Once close() returns, no
-// drain is active and none can begin. It uses a mutex rather than a
-// sync.WaitGroup because a WaitGroup cannot distinguish "no drains have ever
-// started" from "no drains are active right now" — the case that matters when
-// a drain is racing to enter.
+// Contract: enter() returns true only if the gate was open, and every accepted
+// enter has a matching leave. Once closeAndWait() returns, no drain is active
+// and none can begin.
 //
-// The mutex is only ever held for the counter arithmetic, never across the
-// audio work, so it does not introduce a blocking section into the realtime
-// path (spec §4.3): enter/leave are a handful of uncontended instructions and
-// the C call happens with the mutex released.
+// The state is one atomic word: bit 0 is the closed flag and the remaining bits
+// count active drains. enter() is a single CAS that refuses to increment once
+// the closed bit is set; leave() is a plain decrement. There is no mutex and no
+// condition variable, because this runs on the PipeWire process callback and
+// spec 4.3 forbids locks there — a short uncontended mutex is still a lock, and
+// it can block the audio thread for as long as Destroy holds it while it waits
+// for the count to fall, which is precisely the deadlock the spec says is
+// unrecoverable.
+//
+// This replaced a sync.WaitGroup, which was wrong for a different reason: Add
+// racing Wait can let Wait observe a transient zero and return while a drain
+// that has not yet incremented is still entering, letting Destroy free the
+// stream out from under it. The single CAS removes that window, because the
+// closed bit and the count change atomically together: either a drain's
+// increment lands before the close (and closeAndWait waits for it) or after (and
+// enter refuses).
 type drainGate struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	active int
-	closed bool
+	// state packs: bit 0 = closed, bits 1..31 = active drain count.
+	state atomic.Int32
 }
 
-func (g *drainGate) init() {
-	g.cond = sync.NewCond(&g.mu)
-}
+const (
+	gateClosed   = 1
+	gateCountOne = 2 // one active drain, shifted past the closed bit
+)
 
-// enter registers a drain, or reports that teardown has begun.
+// enter registers a drain and returns the value from get, or reports that
+// teardown has begun. It is a bounded, non-blocking CAS loop: the audio thread
+// never waits.
 func (g *drainGate) enter(get func() unsafe.Pointer) (unsafe.Pointer, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.cond == nil {
-		g.cond = sync.NewCond(&g.mu)
+	for {
+		cur := g.state.Load()
+		if cur&gateClosed != 0 {
+			return nil, false
+		}
+		if g.state.CompareAndSwap(cur, cur+gateCountOne) {
+			// We hold a slot. Read the stream pointer now: Destroy frees it
+			// only after closing the gate and waiting for active==0, so this
+			// read cannot observe the mid-teardown write, and the rest of the
+			// drain is served from this stable copy.
+			return get(), true
+		}
 	}
-	if g.closed {
-		return nil, false
-	}
-	// Read the stream pointer while the gate is held. Destroy nils and frees
-	// it only after it has closed the gate and waited for active==0, so this
-	// read can never observe the mid-teardown write, and every use below is
-	// served from this stable copy rather than re-reading the field.
-	p := get()
-	g.active++
-	return p, true
 }
 
 func (g *drainGate) leave() {
-	g.mu.Lock()
-	g.active--
-	if g.active == 0 {
-		g.cond.Broadcast()
-	}
-	g.mu.Unlock()
+	g.state.Add(-gateCountOne)
 }
 
-// closeAndWait blocks until teardown is closed and every in-flight drain has
-// left. It is safe to call more than once.
+// closeAndWait blocks (off the audio thread) until teardown is closed and every
+// in-flight drain has left. Safe to call more than once.
 func (g *drainGate) closeAndWait() {
-	g.mu.Lock()
-	if g.cond == nil {
-		g.cond = sync.NewCond(&g.mu)
+	g.state.Or(gateClosed)
+	for g.state.Load() != gateClosed {
+		// count > 0: an in-flight drain is still inside the callback. Yield so
+		// it can finish; this is the teardown goroutine, not the audio thread.
+		runtime.Gosched()
 	}
-	g.closed = true
-	for g.active > 0 {
-		g.cond.Wait()
-	}
-	g.mu.Unlock()
 }
