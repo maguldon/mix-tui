@@ -94,10 +94,24 @@ func TestOverlayFiltersAsYouType(t *testing.T) {
 	}
 }
 
+// TestOverlayShowsDeckBehind.
+//
+// RenderOverlay draws only the box; it takes no snapshot and cannot show a deck.
+// The deck appears because the model composites the box over the deck view, so
+// asserting on RenderOverlay alone -- which is what this test used to do, and
+// what its name claimed -- proves nothing about the deck being visible.
+//
+// The real assertion lives in TestOverlayKeepsTheDecksVisible, which renders a
+// model. This test covers the box on its own.
 func TestOverlayShowsDeckBehind(t *testing.T) {
 	out := RenderOverlay(120, 40, testIndex(), "", 0)
 	if !strings.Contains(out, "LOAD TRACK") {
 		t.Error("overlay frame missing")
+	}
+	// The box must fit the frame it was given: a full-screen app whose frame
+	// overflows its terminal scrolls and corrupts the display.
+	if n := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); n > 40 {
+		t.Errorf("overlay is %d rows for a 40-row frame", n)
 	}
 }
 

@@ -282,7 +282,15 @@ func (m *Model) RenderAt(w, h int) string {
 	case ModeLibrary:
 		body = views.RenderLibrary(w, h, m.libOrEmpty(), m.libState())
 	case ModeOverlay:
-		body = views.RenderOverlay(w, h, m.libOrEmpty(), m.st.Query, m.st.TrackSel)
+		// The overlay is drawn OVER the decks, not instead of them (spec 6.5):
+		// during a set the deck view must stay visible and playing, because
+		// the whole point is choosing a replacement while hearing the current
+		// one. It used to replace the body outright, so the decks vanished
+		// behind a box -- exactly what an overlay must not do.
+		base := splitLines(Render(w, h, m.snapshot(), m.st))
+		box, offset := views.OverlayRows(w, h, m.libOrEmpty(), m.st.Query, m.st.TrackSel)
+		base = compositeOverlay(base, box, offset)
+		body = strings.Join(base, "\n")
 	case ModeHelp:
 		var bindings []string
 		if m.keys != nil {
@@ -420,4 +428,27 @@ func splitLines(s string) []string {
 		return nil
 	}
 	return strings.Split(s, "\n")
+}
+
+// compositeOverlay draws the overlay box over the deck lines.
+//
+// Lines the box covers are replaced; everything else is untouched. There is no
+// dimming: lipgloss styling the lines behind would cost a pass over the whole
+// frame every frame, and a bordered box is already unambiguous about what is
+// in front.
+func compositeOverlay(base, box []string, offset int) []string {
+	if len(box) == 0 {
+		return base
+	}
+	out := make([]string, len(base))
+	copy(out, base)
+
+	for i, line := range box {
+		row := offset + i
+		if row < 0 || row >= len(out) {
+			continue
+		}
+		out[row] = line
+	}
+	return out
 }

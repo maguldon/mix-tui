@@ -19,8 +19,22 @@ const maxOverlayResults = 8
 // (spec §6.5), so a DJ can see what is still playing while choosing a
 // replacement.
 func RenderOverlay(w, h int, ix *library.Index, query string, sel int) string {
+	rows, _ := OverlayRows(w, h, ix, query, sel)
+	return strings.Join(rows, "\n")
+}
+
+// OverlayRows returns the box rows and the row index at which the box starts.
+//
+// It exists so the box can be composited OVER the deck view rather than
+// replacing it. Spec 6.5: during a set the deck view must not disappear, and
+// the deck staying visible is the entire point of an overlay. The caller used
+// to discard the deck entirely, leaving a floating box on an empty screen.
+//
+// The offset is a plain top-anchored row count: a mid-set box sits over the
+// waveform rather than centred, because the eye is already there.
+func OverlayRows(w, h int, ix *library.Index, query string, sel int) ([]string, int) {
 	if w <= 0 || h <= 0 {
-		return ""
+		return nil, 0
 	}
 
 	matches := library.Search(ix.Tracks(), query)
@@ -80,7 +94,13 @@ func RenderOverlay(w, h int, ix *library.Index, query string, sel int) string {
 		out = append(out, pad(l, w))
 	}
 	out = append(out, rule)
-	return strings.Join(out, "\n")
+	// Leave at least one row of deck visible above and below where possible, so
+	// the box never fills a short terminal completely.
+	offset := maxInt(0, (h-len(out))/2)
+	if len(out)+offset > h {
+		offset = maxInt(0, h-len(out))
+	}
+	return out, offset
 }
 
 // padTo pads a styled string to exactly w visible columns.
