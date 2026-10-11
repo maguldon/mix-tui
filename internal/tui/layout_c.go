@@ -32,8 +32,20 @@ func renderC(w, h int, s engine.Snapshot, st ViewState) string {
 	// indicator at all, which is worse than a smaller waveform.
 	const deckRows = 11
 	avail := h - footerH
-	panelH := (avail - 2) / 2 // two panels, one border row each
+	// Split the available rows between the two decks, giving the odd row to
+	// the top deck so the layout uses the whole terminal.
+	//
+	// This used to be (avail-2)/2, which silently discarded the remainder:
+	// at the standard 80x24 it produced 21 lines of 24 and gave each deck six
+	// content rows. Six rows is exactly the height at which deck_panel drops
+	// the waveform, so the stacked layout -- the one designed for an 80-column
+	// terminal -- showed no waveform at all while leaving three rows blank.
+	panelH := avail / 2
 	content := panelH - 2
+	if avail%2 == 1 {
+		panelH++
+		content++
+	}
 	if content < 5 {
 		panelH = 7
 		content = 5
