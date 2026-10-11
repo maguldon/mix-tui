@@ -198,9 +198,12 @@ func overlayMarkers(cells [][]int, spec WaveSpec, w, h int) {
 		}
 	}
 
-	// Beats: a short tick at the centre line.
+	// Beats: a full-height tick. A centre-line dot is invisible against a dense
+	// waveform, which is exactly when beats matter most.
 	for _, b := range spec.Beats {
-		setCol(b, h/2, int(brailleDot[0][2]))
+		for r := 0; r < h; r++ {
+			setCol(b, r, int(brailleDot[0][2]))
+		}
 	}
 	// Downbeats: a full-height tick.
 	for _, b := range spec.Downbeats {

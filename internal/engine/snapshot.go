@@ -1,6 +1,10 @@
 package engine
 
-import "time"
+import (
+	"time"
+
+	"github.com/maguldon/mix-tui/internal/dsp"
+)
 
 // DeckState is an immutable view of one deck at the instant Snapshot was
 // taken. The UI never reads Deck directly: doing so would race the audio
@@ -27,11 +31,25 @@ type DeckState struct {
 	// Cued reports whether the deck is routed to the headphone bus.
 	Cued   bool
 	Loaded bool
-	Path   string
-	Title  string
-	Artist string
-	Level  float64 // linear RMS of the last block
-	Peak   float64
+	// PCM is the loaded track's audio, shared with the Deck rather than copied.
+	// A Snapshot is taken ~30 times a second, so copying audio into it would
+	// allocate megabytes per frame; the slice is immutable once loaded, so a
+	// view may read it safely. This is what lets the TUI draw a real waveform.
+	PCM dsp.Stereo
+	// BeatTimes and CueTimes position the zoom view's markers. BeatTimes is
+	// empty without a beatgrid.
+	BeatTimes []time.Duration
+	// CueTimes is a fixed-size buffer rather than a slice: Snapshot runs ~30
+	// times a second, and appending into a fresh slice every call allocated
+	// ~11KB per frame, which feeds the GC continuously during a set. The view
+	// reads CueCount entries of it.
+	CueTimes [numHotcues]time.Duration
+	CueCount int
+	Path     string
+	Title    string
+	Artist   string
+	Level    float64 // linear RMS of the last block
+	Peak     float64
 }
 
 // Snapshot is a consistent copy of the whole engine state for one UI refresh.

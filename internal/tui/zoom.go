@@ -1,0 +1,198 @@
+package tui
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/maguldon/mix-tui/internal/dsp"
+	"github.com/maguldon/mix-tui/internal/engine"
+)
+
+// ZoomWindow is the sliding time window shown when Zoom is on (spec §6.3).
+type ZoomWindow struct {
+	Start time.Duration
+	// Length is how much time the window spans.
+	Length time.Duration
+	// Playhead is where the playhead sits within the window, 0..1.
+	Playhead float64
+}
+
+// DefaultZoomBars is bars visible when zoom is first enabled.
+const DefaultZoomBars = 4
+
+// ZoomBarOptions are the selectable bar counts, coarse to fine.
+var ZoomBarOptions = []int{2, 4, 8, 16, 32}
+
+// PlayX keeps the playhead left of centre so upcoming bars are visible. At 0.5
+// the user cannot see what is coming, which is the whole point of the view.
+const PlayX = 0.30
+
+// WindowFor returns the zoom window for a position, bar count, and tempo.
+//
+// A missing or nonsensical tempo falls back to 128 rather than dividing by zero:
+// a deck without a beatgrid must still show a usable window, not a panic.
+func WindowFor(pos time.Duration, bars int, bpm float64) ZoomWindow {
+	if bpm <= 0 {
+		bpm = 128
+	}
+	if bars <= 0 {
+		bars = DefaultZoomBars
+	}
+	beat := time.Duration(float64(time.Second) / bpm)
+	length := time.Duration(bars*4) * beat
+	// The window starts PlayX of its length before the playhead so what is
+	// coming is visible.
+	start := pos - time.Duration(float64(length)*PlayX)
+	if start < 0 {
+		start = 0
+	}
+	return ZoomWindow{Start: start, Length: length, Playhead: PlayX}
+}
+
+// ZoomIndex advances a zoom index to the next option, wrapping.
+func ZoomIndex(i int) int { return (i + 1) % len(ZoomBarOptions) }
+
+// RenderZoomed draws the waveform for a window, with beat and cue markers that
+// fall inside it.
+//
+// Markers outside [Start, Start+Length] are filtered out: a cue twenty minutes
+// away must not appear in the middle of the view.
+func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int,
+	beats []time.Duration, cues []time.Duration) []string {
+
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+
+	// Slice the PCM to the window, tolerating a window that runs past the end.
+	startFrame := int(w.Start.Seconds() * dsp.SampleRate)
+	if startFrame < 0 {
+		startFrame = 0
+	}
+	endFrame := startFrame + int(w.Length.Seconds()*float64(dsp.SampleRate))
+	var slice dsp.Stereo
+	if startFrame*2 < len(pcm) {
+		if endFrame*2 > len(pcm) {
+			endFrame = len(pcm) / 2
+		}
+		if endFrame > startFrame {
+			slice = pcm[startFrame*2 : endFrame*2]
+		}
+	}
+
+	// Map marker times to cell indices within the window.
+	toCell := func(t time.Duration) int {
+		if t < w.Start {
+			return -1
+		}
+		rel := float64(t-w.Start) / float64(w.Length)
+		if rel > 1 || w.Length <= 0 {
+			return -1
+		}
+		return int(rel * float64(width))
+	}
+	var cellBeats, cellCues []int
+	for _, b := range beats {
+		if c := toCell(b); c >= 0 {
+			cellBeats = append(cellBeats, c)
+		}
+	}
+	for _, c := range cues {
+		if i := toCell(c); i >= 0 {
+			cellCues = append(cellCues, i)
+		}
+	}
+
+	playCell := int(w.Playhead * float64(width))
+	if playCell < 0 {
+		playCell = 0
+	}
+	if playCell >= width {
+		playCell = width - 1
+	}
+
+	return RenderWave(WaveSpec{
+		Peaks:     PeaksFromPCM(slice, width),
+		Width:     width,
+		Height:    height,
+		PlayCol:   playCell,
+		Beats:     cellBeats,
+		Cues:      cellCues,
+		Downbeats: nil,
+		Loops:     nil,
+	})
+}
+
+// absDur is the absolute value of a duration.
+func absDur(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// beatLen is the beat period for a tempo, guarding a missing grid.
+func beatLen(bpm float64) time.Duration {
+	if bpm <= 0 {
+		bpm = 128
+	}
+	return time.Duration(float64(time.Second) / bpm)
+}
+
+// DeltaBeat reports how far a deck sits from the master in beat phase.
+//
+// It returns false when either deck lacks a beatgrid: a ΔBEAT readout computed
+// from one deck's grid alone would be meaningless, and showing a confident
+// number that is wrong is worse than showing none (spec §8).
+func DeltaBeat(d, master engine.DeckState) (time.Duration, bool) {
+	if !d.HasBeatGrid || !master.HasBeatGrid || d.BPM <= 0 || master.BPM <= 0 {
+		return 0, false
+	}
+	dPh := phaseOf(d.Position, beatLen(d.BPM))
+	mPh := phaseOf(master.Position, beatLen(master.BPM))
+	delta := dPh - mPh
+	// Wrap into (-beat/2, beat/2] so a deck a beat ahead reads as just behind
+	// rather than a whole beat ahead.
+	if half := beatLen(master.BPM) / 2; half > 0 {
+		for delta > half {
+			delta -= beatLen(master.BPM)
+		}
+		for delta <= -half {
+			delta += beatLen(master.BPM)
+		}
+	}
+	return delta, true
+}
+
+// phaseOf is a position's offset from its nearest beat.
+func phaseOf(pos time.Duration, beat time.Duration) time.Duration {
+	if beat <= 0 {
+		return 0
+	}
+	m := pos % beat
+	if m < 0 {
+		m += beat
+	}
+	if m > beat/2 {
+		m -= beat
+	}
+	return m
+}
+
+// RenderDeltaBeat renders the ΔBEAT readout in ms.
+func RenderDeltaBeat(d, master engine.DeckState) string {
+	delta, ok := DeltaBeat(d, master)
+	if !ok {
+		return dimStyle.Render("dBEAT --")
+	}
+	sign := "+"
+	if delta < 0 {
+		sign = "-"
+	}
+	ms := float64(absDur(delta)) / float64(time.Millisecond)
+	style := labelStyle
+	if ms > 5 {
+		style = warnStyle // audibly off; worth flagging
+	}
+	return style.Render(fmt.Sprintf("dBEAT %s%.0fms", sign, ms))
+}

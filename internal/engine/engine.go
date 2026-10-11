@@ -333,8 +333,18 @@ func (e *Engine) Snapshot() Snapshot {
 		st.Duration = d.Duration()
 		st.Pitch = d.Pitch()
 		st.HasBeatGrid = d.HasBeatGrid()
-		ls := d.Loop()
+		ls := d.LoopSummary()
 		st.Cued = e.mixer.Cued(i)
+		st.PCM = d.PCM()
+		if g := d.BeatGrid(); g != nil {
+			st.BeatTimes = g.Beats
+		}
+		for slot := 1; slot <= numHotcues; slot++ {
+			if at, ok := d.Hotcue(slot); ok {
+				st.CueTimes[st.CueCount] = at
+				st.CueCount++
+			}
+		}
 		st.LoopActive = ls.Active
 		st.LoopBeatCount = ls.BeatCount
 		if k := d.Key(); k != nil {

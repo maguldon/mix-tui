@@ -32,12 +32,27 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	if inner < 40 {
 		waveH = 2 // a compact panel cannot afford 4 waveform rows
 	}
-	wave := RenderWave(WaveSpec{
-		Width:   inner,
-		Height:  waveH,
-		Peaks:   Peaks{},
-		PlayCol: playCell(d, inner),
-	})
+
+	// Zoom replaces the full-track wave with a sliding window when this deck is
+	// focused, which is the CDJ behaviour the spec asks for. The unfocused deck
+	// keeps the whole track, so a zoom never hides the other deck's context.
+	var wave []string
+	if focused && st.Zoom && d.HasBeatGrid {
+		zwin := WindowFor(d.Position, st.ZoomBars, d.BPM)
+		rows := RenderZoomed(d.PCM, zwin, inner, waveH, d.BeatTimes, d.CueTimes[:d.CueCount])
+		for i := range rows {
+			rows[i] = padRight(rows[i], inner)
+		}
+		wave = rows
+	}
+	if wave == nil {
+		wave = RenderWave(WaveSpec{
+			Width:   inner,
+			Height:  waveH,
+			Peaks:   PeaksFromPCM(d.PCM, inner),
+			PlayCol: playCell(d, inner),
+		})
+	}
 
 	rows := make([]PanelRow, 0, 10)
 	for i, r := range wave {

@@ -69,6 +69,30 @@ type rollFrame struct {
 }
 
 // Loop returns the deck's current loop state.
+// LoopSummary is the loop state a view needs, without the saved-slot map.
+//
+// Loop() deep-copies that map, which allocates on every call — and Snapshot
+// runs ~30 times a second, so using it there fed the GC continuously during a
+// set. The map is only for callers that genuinely need the saved slots.
+type LoopSummary struct {
+	Active    bool
+	Start     time.Duration
+	End       time.Duration
+	BeatCount float64
+	Rolled    bool
+}
+
+// LoopSummary returns the allocation-free view of loop state.
+func (d *Deck) LoopSummary() LoopSummary {
+	return LoopSummary{
+		Active:    d.loop.active,
+		Start:     d.framesToDuration(d.loop.start),
+		End:       d.framesToDuration(d.loop.end),
+		BeatCount: d.loop.beatCount,
+		Rolled:    d.loop.rolled,
+	}
+}
+
 func (d *Deck) Loop() LoopState {
 	slots := make(map[int]SavedLoop, len(d.savedLoop))
 	for k, v := range d.savedLoop {

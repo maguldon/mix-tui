@@ -179,6 +179,19 @@ func (d *Deck) AttachKey(k *analyze.Key) { d.key = k }
 // Key returns the detected key, or nil.
 func (d *Deck) Key() *analyze.Key { return d.key }
 
+// PCM returns the loaded audio. The slice is immutable once loaded, so a
+// Snapshot can share it with a view without copying megabytes every frame.
+//
+// It takes no lock: the Deck's state is owned by the render goroutine and
+// Snapshot() is called under the engine mutex, which is already the
+// serialisation point for a consistent read.
+func (d *Deck) PCM() dsp.Stereo {
+	if d.track == nil {
+		return nil // an empty deck has no audio, and Snapshot must not panic
+	}
+	return d.track.PCM
+}
+
 // BeatGrid returns the deck's grid, or nil when it has none.
 func (d *Deck) BeatGrid() *analyze.BeatGrid { return d.beatgrid }
 
