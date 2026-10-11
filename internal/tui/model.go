@@ -80,6 +80,10 @@ func New(eng Engine, cfg *config.Config, keys *config.KeyResolver) *Model {
 // State returns the interaction state, for tests.
 func (m *Model) State() ViewState { return m.st }
 
+// Engine returns the engine interface, so a caller (the binary) can seed state
+// that a MIDI message would normally produce.
+func (m *Model) Engine() Engine { return m.eng }
+
 // SetLibrary attaches a scanned library for the browser and overlay.
 func (m *Model) SetLibrary(ix *library.Index) { m.lib = ix }
 

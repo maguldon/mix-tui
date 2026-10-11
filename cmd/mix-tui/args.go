@@ -22,6 +22,9 @@ type appArgs struct {
 	// width and height override the render size for -screenshot. Zero means
 	// the terminal's real size, or the 120x40 reference when headless.
 	width, height int
+	// xfade sets the crossfader at startup, so a scripted performance can start
+	// from a known position rather than centre.
+	xfade float64
 }
 
 // parseArgs parses and validates the command line.
@@ -42,6 +45,7 @@ func parseArgs(argv []string) (appArgs, error) {
 	fs.BoolVar(&a.noAudio, "no-audio", false, "render without opening an audio device")
 	fs.BoolVar(&a.seedTestMIDI, "seed-test-midi", false, "replay a mapping without hardware")
 	fs.StringVar(&a.screenshot, "screenshot", "", "render one frame to this file and exit")
+	fs.Float64Var(&a.xfade, "xf", 0, "crossfader position, -1..1")
 	fs.IntVar(&a.width, "width", 0, "render width for -screenshot (default 120)")
 	fs.IntVar(&a.height, "height", 0, "render height for -screenshot (default 40)")
 
@@ -53,6 +57,9 @@ func parseArgs(argv []string) (appArgs, error) {
 	}
 	if a.bPath != "" && a.aPath == "" {
 		return a, fmt.Errorf("-b given without -a: both decks are loaded together")
+	}
+	if a.xfade < -1 || a.xfade > 1 {
+		return a, fmt.Errorf("invalid -xf %v: want -1..1", a.xfade)
 	}
 	if a.view != "" {
 		switch strings.ToUpper(a.view) {
@@ -78,6 +85,7 @@ func flagText() string {
 	fs.BoolVar(&a.noAudio, "no-audio", false, "render without opening an audio device")
 	fs.BoolVar(&a.seedTestMIDI, "seed-test-midi", false, "replay a mapping without hardware")
 	fs.StringVar(&a.screenshot, "screenshot", "", "render one frame to this file and exit")
+	fs.Float64Var(&a.xfade, "xf", 0, "crossfader position, -1..1")
 	fs.IntVar(&a.width, "width", 0, "render width for -screenshot (default 120)")
 	fs.IntVar(&a.height, "height", 0, "render height for -screenshot (default 40)")
 	var b strings.Builder

@@ -133,6 +133,13 @@ func run(args appArgs) error {
 		}
 	}
 
+	// Scripted input, applied before the first frame so the screenshot shows the
+	// settled state rather than a race between seeding and rendering.
+	applyCrossfader(model, args.xfade)
+	if args.seedTestMIDI {
+		model.AttachMIDI(seedMIDI(model))
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -153,6 +160,17 @@ func run(args appArgs) error {
 	// 7. A single frame to a file, without a terminal. This is the one flag
 	//    that makes layout work verifiable in CI.
 	if args.screenshot != "" {
+		// Drain the engine's command queue before capturing.
+		//
+		// Deck actions do not mutate state directly: they are posted and applied
+		// at the start of the next render block (milestone 1's realtime design).
+		// Without a render, a seeded performance changes nothing visible and the
+		// screenshot would show the pre-performance state.
+		for i := 0; i < 4; i++ {
+			if err := eng.RenderInto(audio.NewRing(1<<16), audio.NewRing(1<<16)); err != nil {
+				return err
+			}
+		}
 		w, h := args.width, args.height
 		if w <= 0 {
 			w = 120
