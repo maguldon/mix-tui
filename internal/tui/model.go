@@ -134,6 +134,10 @@ func (m *Model) MIDIHandler() *midi.Handler {
 	return midi.NewHandler(nil, m.eng.Apply)
 }
 
+// MIDIHandlerIfAny returns the handler when a device was opened, so the binary
+// can attach the mapping watcher to it only when MIDI is in play.
+func (m *Model) MIDIHandlerIfAny() *midi.Handler { return m.midi }
+
 // AttachMIDI points the model at its MIDI handler so the debug overlay can
 // show ignored-message counts. It is separate from MIDIHandler so a headless
 // run never constructs a device.

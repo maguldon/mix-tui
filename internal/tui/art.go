@@ -13,12 +13,15 @@ import (
 // centred.
 var art = map[string][]string{
 	// The empty-deck prompt. Deliberately small so it fits a narrow deck panel.
+	// Every line carries the same two-space indent. One line lacked it, and
+	// because centre() aligns each line independently the box rendered with its
+	// left wall a column out and the prompt sitting outside it.
 	"empty": {
 		"  .--------.  ",
 		"  |  EMPTY  |  ",
-		"|   DECK   |  ",
+		"  |   DECK   |  ",
 		"  `--------'  ",
-		"  press L    ",
+		"   press L    ",
 	},
 	// A short accent shown under a playing deck.
 	"accent": {

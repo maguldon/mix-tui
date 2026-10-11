@@ -113,8 +113,13 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 			Text:  TruncateTo(fmt.Sprintf("LOOP %g beats", d.LoopBeatCount), inner),
 			Style: &okStyle,
 		})
-	} else if accent := firstLine(RenderArt(inner, 1, "accent")); accent != "" {
-		rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: &okStyle})
+	} else if d.Playing {
+		// The accent marks a playing deck. It used to show whenever no loop was
+		// active, which included every stopped deck -- so a row of arrows sat
+		// under an idle deck implying something was happening.
+		if accent := firstLine(RenderArt(inner, 1, "accent")); accent != "" {
+			rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: &okStyle})
+		}
 	}
 	// The title names the deck. A focused deck is marked so the user can tell
 	// which one TAB will act on; hardcoding "A" would mislabel deck B.

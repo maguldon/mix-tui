@@ -162,6 +162,24 @@ func run(args appArgs) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Hot-reload the mapping table. Without this the watcher existed but was
+	// never started, so editing a mapping mid-set did nothing -- while the README
+	// told users it would take effect within two seconds.
+	if handler := model.MIDIHandlerIfAny(); handler != nil {
+		dir := filepath.Join(configDir(), "mappings")
+		if _, err := os.ReadDir(dir); err == nil {
+			w := midi.NewWatcher(dir, handler, func(f string, a ...any) {
+				fmt.Fprintf(os.Stderr, f+"\n", a...)
+			})
+			if _, errs := w.ReloadOnce(); len(errs) > 0 {
+				fmt.Fprintf(os.Stderr, "mix-tui: %d mapping error(s) at startup\n", len(errs))
+			} else if n, _ := w.ReloadOnce(); n > 0 {
+				fmt.Fprintf(os.Stderr, "mix-tui: loaded %d mapping(s)\n", n)
+			}
+			go w.Run(ctx)
+		}
+	}
+
 	// 6. Renderer.
 	var pumpDone chan struct{}
 	if out != nil {
@@ -239,6 +257,17 @@ func writeScreenshot(m *tui.Model, path string, w, h int) error {
 	}
 	fmt.Fprintf(os.Stderr, "mix-tui: wrote %s\n", path)
 	return nil
+}
+
+// configDir is where mix-tui keeps config and mappings.
+func configDir() string {
+	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
+		return filepath.Join(base, "mix-tui")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".config", "mix-tui")
+	}
+	return ".mix-tui"
 }
 
 func cacheDir() string {

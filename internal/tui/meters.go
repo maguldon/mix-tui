@@ -37,25 +37,6 @@ func RenderMeter(v float64, width int) string {
 	return string(b)
 }
 
-// peakDecay is how fast the held peak falls toward the current level, per
-// frame. It is deliberately slow: a peak hold that drops instantly is
-// invisible, which defeats the point of showing a transient for about a second.
-const peakDecay = 0.92
-
-// DecayPeak moves a held peak toward the current value. Call once per rendered
-// frame.
-func DecayPeak(peak, current float64) float64 {
-	current = clampFloat(current, 0, 1)
-	if current > peak {
-		return current // a new peak snaps up immediately
-	}
-	p := peak * peakDecay
-	if p < current {
-		return current // never fall below the live level
-	}
-	return p
-}
-
 // RenderPeakHold draws the held peak as a marker within a level bar.
 func RenderPeakHold(peak, current float64, width int) string {
 	if width <= 0 {

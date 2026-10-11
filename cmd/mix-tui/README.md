@@ -38,6 +38,8 @@ mix-tui -a trackA.mp3 -b trackB.mp3
 | `-no-audio` | Run the interface without opening a device. |
 | `-screenshot PATH` | Render one frame to a file and exit. |
 | `-width N` / `-height N` | Render size for `-screenshot`. Defaults to 120×40. |
+| `-seed-test-midi` | Replay a scripted performance through the real MIDI path. |
+| `-xf N` | Crossfader position at startup, -1..1. |
 
 The sample rate is negotiated with the device at startup. If the device grants a
 different rate than the config asked for, the engine is rebuilt at the device's
@@ -86,9 +88,10 @@ controls:
     slot: 1
 ```
 
-Mappings hot-reload: edit a file mid-set and it is picked up within two seconds.
-A parse error keeps the last valid table and logs the file and line — a typo
-must never kill a live performance.
+Mappings hot-reload while a device is connected: edit a file mid-set and it is
+picked up within two seconds. A parse error keeps the last valid table and logs
+the file and line — a typo must never kill a live performance. With `-no-midi`
+there is no device, so nothing to reload against.
 
 To see what a mapping file actually defines:
 

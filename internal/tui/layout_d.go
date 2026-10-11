@@ -97,59 +97,6 @@ func deckAt(s *engine.Snapshot, i int) engine.DeckState {
 	return s.Decks[i]
 }
 
-// deckPanel builds the placeholder panel for one deck. Task 5 fills in the real
-// waveform, transport, EQ, and hotcues; what this task delivers is the panel
-// structure and the column arithmetic.
-func deckPanel(name string, width int, d engine.DeckState, st ViewState, idx int) Panel {
-	rows := []PanelRow{
-		{Kind: RowText, Text: titleOrDash(d.Title), Style: &titleStyle},
-		{Kind: RowText, Text: transportLine(d)},
-		{Kind: RowWave, Wave: &WaveSpec{
-			Width:   24,
-			Height:  4,
-			Peaks:   Peaks{},
-			PlayCol: playCell(d, 24),
-		}},
-		{Kind: RowText, Text: positionLine(d)},
-	}
-	if d.HasBeatGrid {
-		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("%3.1f BPM  key %s", d.BPM, "-"), Style: &dimStyle})
-	}
-	if d.LoopActive {
-		rows = append(rows, PanelRow{Kind: RowText, Text: fmt.Sprintf("loop %.0f beats", d.LoopBeatCount), Style: &okStyle})
-	}
-	if idx == st.Focus {
-		rows = append(rows, PanelRow{Kind: RowText, Text: "focus", Style: &okStyle})
-	}
-	return Panel{Title: name, Width: width, Rows: rows}
-}
-
-func titleOrDash(s string) string {
-	if s == "" {
-		return "--"
-	}
-	return s
-}
-
-func transportLine(d engine.DeckState) string {
-	if !d.Loaded {
-		return "empty"
-	}
-	state := "stop"
-	if d.Playing {
-		state = "PLAY"
-	}
-	return state
-}
-
-func positionLine(d engine.DeckState) string {
-	if !d.Loaded || d.Duration <= 0 {
-		return "--:-- / --:--"
-	}
-	pos := d.Position
-	return fmt.Sprintf("%s / %s", mmss(pos), mmss(d.Duration))
-}
-
 // playCell converts a deck position into a waveform cell index for a wave of
 // the given width, or -1 when there is nothing loaded.
 func playCell(d engine.DeckState, width int) int {
@@ -178,4 +125,11 @@ func mmss(d time.Duration) string {
 	m := int(d / time.Minute)
 	s := int((d % time.Minute) / time.Second)
 	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+func titleOrDash(s string) string {
+	if s == "" {
+		return "--"
+	}
+	return s
 }

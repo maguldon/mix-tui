@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"strings"
-
 	"github.com/maguldon/mix-tui/internal/engine"
 	"github.com/maguldon/mix-tui/internal/tui/library"
 	"github.com/maguldon/mix-tui/internal/tui/views"
@@ -246,14 +244,6 @@ func modeFooter(m Mode) string {
 	default:
 		return "tab focus   v layout   z zoom   / library   ? help   ` debug"
 	}
-}
-
-// keyDisplayName normalises a bubbletea key string for display.
-func keyDisplayName(k string) string {
-	if strings.TrimSpace(k) == "" {
-		return ""
-	}
-	return k
 }
 
 func minInt(a, b int) int {
