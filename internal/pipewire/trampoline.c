@@ -113,6 +113,11 @@ struct pw_properties *make_stream_props(const char *node_name,
 	pw_properties_setf(props, "audio.rate", "%d", rate);
 	pw_properties_setf(props, "audio.channels", "%d", channels);
 
+	/* Without autoconnect the graph has no reason to link the stream to a
+	 * sink, so it sits connected but never processes and the drain callback
+	 * is never invoked. */
+	pw_properties_set(props, "node.autoconnect", "true");
+
 	if (target != NULL && target[0] != '\0')
 		pw_properties_set(props, "target.object", target);
 
@@ -133,16 +138,18 @@ void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
 /* Build the EnumFormat parameter a playback stream connects with.
  *
  * A stream with no format parameter cannot negotiate, and pw_stream_connect
- * then segfaults on the half-built object. Setting "audio.format" as a
- * property is not enough: spa wants an EnumFormat pod listing the formats the
- * stream will accept.
+ * fails on the half-built object. Setting "audio.format" as a property is not
+ * enough: spa wants an EnumFormat pod listing the formats the stream accepts.
  *
- * The caller owns the returned spa_pod and must free it with
- * free_connect_params. */
-struct spa_pod **make_connect_params(int rate, int channels,
-                                      struct spa_pod **storage)
+ * Everything here is C-owned and C-lifetime: the pod lives in a static buffer
+ * and the pointer array is static too. Handing connect a Go-allocated array
+ * meant C wrote a pointer into Go memory that C then read back across the
+ * boundary, which corrupted the heap. The result is only valid until the next
+ * call, which is exactly its lifetime — connect consumes it synchronously. */
+struct spa_pod **make_connect_params(int rate, int channels)
 {
 	static uint8_t buf[1024];
+	static struct spa_pod *storage[1];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
 	struct spa_pod_frame f[1];
 
@@ -158,10 +165,39 @@ struct spa_pod **make_connect_params(int rate, int channels,
 	return storage;
 }
 
-void free_connect_params(struct spa_pod **params)
+/* --- listener storage ----------------------------------------------------- */
+
+/* The events struct and the spa_hook must be allocated in C, not Go.
+ *
+ * libpipewire retains both pointers for the life of the listener and calls
+ * through them. Go-allocated versions are legal to *pass* for the duration of
+ * a call, but these outlive the call, so they must be C memory the collector
+ * cannot move or free. A Go-allocated events struct as a local in NewStream
+ * produced a use-after-free that surfaced much later as a segfault inside
+ * pw_stream_connect. */
+
+struct pw_stream_events *alloc_stream_events(void)
 {
-	/* The pod lives in the builder's static buffer, so there is nothing to
-	 * free; the array itself is the caller's. Kept as a symbol so the
-	 * lifetime is stated in one place rather than implied. */
-	(void)params;
+	struct pw_stream_events *ev = calloc(1, sizeof(*ev));
+
+	if (ev == NULL)
+		return NULL;
+
+	ev->version = PW_VERSION_STREAM_EVENTS;
+	ev->state_changed = stream_state_trampoline;
+	ev->param_changed = stream_param_trampoline;
+	ev->process = stream_process_trampoline;
+	return ev;
+}
+
+struct spa_hook *alloc_stream_hook(void)
+{
+	return calloc(1, sizeof(struct spa_hook));
+}
+
+/* pw_stream_connect leaves the stream paused; it must be made active before
+ * the graph drives it and the drain callback runs. */
+int set_stream_active(struct pw_stream *stream, int active)
+{
+	return pw_stream_set_active(stream, active ? true : false);
 }

@@ -28,8 +28,13 @@ extern void stream_process_trampoline(void *data);
 extern void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
                                 struct pw_stream_events *ev, uintptr_t handle);
 
-extern struct spa_pod **make_connect_params(int rate, int channels,
-                                            struct spa_pod **storage);
+// allocStreamEvents / allocStreamHook hand back C memory, because
+// libpipewire retains both for the life of the listener.
+struct pw_stream_events *alloc_stream_events(void);
+struct spa_hook *alloc_stream_hook(void);
+extern int set_stream_active(struct pw_stream *stream, int active);
+
+extern struct spa_pod **make_connect_params(int rate, int channels);
 
 
 extern struct pw_properties *make_stream_props(const char *node_name,
@@ -86,9 +91,20 @@ type Stream struct {
 	frames    atomic.Uint64
 	starves   atomic.Uint64
 
-	hook    C.struct_spa_hook
-	started atomic.Bool
-	stopped atomic.Bool
+	// name is a C string libpipewire borrows for the stream's lifetime, so it
+	// is owned here and freed in Destroy.
+	name *C.char
+	// events and hook are C-allocated because libpipewire retains them.
+	// They are owned here and freed in Destroy.
+	events *C.struct_pw_stream_events
+	hook   *C.struct_spa_hook
+	// state and stateErr record the last state the daemon reported, so a
+	// stream that connects but never processes can be diagnosed from outside
+	// rather than guessed at.
+	state    atomic.Int64
+	stateErr atomic.Pointer[C.char]
+	started  atomic.Bool
+	stopped  atomic.Bool
 	// negotiated records the rate the daemon actually gave us, which may
 	// differ from the requested one.
 	negotiated atomic.Int64
@@ -119,23 +135,36 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	defer ctx.unlock()
 
 	props := buildStreamProps(cfg)
-	defer C.pw_properties_free(props)
 
-	s.stream = C.pw_stream_new(ctx.pwcore(), C.CString("Audio/Source"), props)
+	// pw_stream_new TAKES OWNERSHIP of props. Freeing it here as well is a
+	// double free: the stream keeps the pointer, so it dangles, and the
+	// resulting heap corruption surfaced as an alternating segfault and
+	// "unaligned tcache chunk" abort inside pw_stream_connect.
+	//
+	// The name, by contrast, is only borrowed — pw_stream_get_name hands it
+	// back — so it must outlive the stream and is freed in Destroy.
+	s.name = C.CString("Audio/Source")
+	s.stream = C.pw_stream_new(ctx.pwcore(), s.name, props)
 	if s.stream == nil {
+		// Ownership was not taken on the failure path, so free here.
+		C.pw_properties_free(props)
+		C.free(unsafe.Pointer(s.name))
+		s.name = nil
 		s.handle.Delete()
 		return nil, fmt.Errorf("pipewire: pw_stream_new returned NULL")
 	}
 	// User data attaches to the LISTENER, not the stream: this version has no
 	// pw_stream_set_user_data. The handle travels as the listener's data and
 	// reaches every callback.
-	events := C.struct_pw_stream_events{
-		version:       C.uint32_t(C.PW_VERSION_STREAM_EVENTS),
-		state_changed: (*[0]byte)(unsafe.Pointer(C.stream_state_trampoline)),
-		param_changed: (*[0]byte)(unsafe.Pointer(C.stream_param_trampoline)),
-		process:       (*[0]byte)(unsafe.Pointer(C.stream_process_trampoline)),
-	}
-	C.add_stream_listener(s.stream, &s.hook, &events, C.uintptr_t(s.handle))
+	// The events struct and the hook must live in C MEMORY, not on the Go
+	// heap. libpipewire retains both for the life of the listener and calls
+	// through them; a Go-allocated `events` is a local here, so once
+	// NewStream returns nothing references it, the collector frees it, and
+	// the next callback jumps through freed memory. This is the same cgo
+	// pointer rule as the user-data handle, one object over.
+	s.events = allocStreamEvents()
+	s.hook = allocStreamHook()
+	C.add_stream_listener(s.stream, s.hook, s.events, C.uintptr_t(s.handle))
 	s.negotiated.Store(int64(cfg.SampleRate))
 	return s, nil
 }
@@ -165,19 +194,18 @@ func (s *Stream) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return nil // idempotent
 	}
-	// A stream must declare the formats it accepts or the graph has nothing
-	// to negotiate against and connect fails on a half-built object.
-	storage := make([]*C.struct_spa_pod, 1)
-	params := C.make_connect_params(C.int(s.cfg.SampleRate), C.int(s.cfg.Channels),
-		(**C.struct_spa_pod)(unsafe.Pointer(&storage[0])))
-
 	// PW_DIRECTION_OUTPUT: a playback stream PRODUCES audio into the graph.
 	s.ctx.lock()
 	defer s.ctx.unlock()
 	if rc := C.pw_stream_connect(s.stream, C.PW_DIRECTION_OUTPUT, C.PW_ID_ANY,
-		0, (**C.struct_spa_pod)(unsafe.Pointer(params)), 1); rc != 0 {
+		0, nil, 0); rc != 0 {
 		return fmt.Errorf("pipewire: pw_stream_connect failed with code %d", int(rc))
 	}
+	// Connect alone does not start processing: the stream must be made active
+	// before the graph drives it, otherwise it sits in "paused" and the drain
+	// callback never fires.
+	C.set_stream_active(s.stream, 1)
+
 	s.stopped.Store(false)
 	return nil
 }
@@ -208,6 +236,18 @@ func (s *Stream) Destroy() error {
 		C.pw_stream_destroy(s.stream)
 		s.stream = nil
 	}
+	if s.events != nil {
+		C.free(unsafe.Pointer(s.events))
+		s.events = nil
+	}
+	if s.hook != nil {
+		C.free(unsafe.Pointer(s.hook))
+		s.hook = nil
+	}
+	if s.name != nil {
+		C.free(unsafe.Pointer(s.name))
+		s.name = nil
+	}
 	if s.handle != 0 {
 		s.handle.Delete()
 		s.handle = 0
@@ -229,6 +269,16 @@ func (s *Stream) Stats() Stats {
 
 // AsRenderTarget adapts the stream to the engine's consumer interface.
 func (s *Stream) AsRenderTarget() engine.RenderTarget { return engine.RingTarget(s.ring) }
+
+// State returns the last pw_stream_state the daemon reported, and any error
+// string it supplied. Zero is pw_stream_state_unconnected.
+func (s *Stream) State() (int32, string) {
+	msg := ""
+	if p := s.stateErr.Load(); p != nil {
+		msg = cstr(unsafe.Pointer(p))
+	}
+	return int32(s.state.Load()), msg
+}
 
 // NegotiatedRate reports the rate the daemon actually granted, or 0 if it has
 // not said yet.
@@ -293,4 +343,19 @@ func (s *Stream) drain() {
 	}
 
 	C.pw_stream_queue_buffer(s.stream, buf)
+}
+
+// allocStreamEvents returns a zeroed events struct in C memory, pre-wired to
+// the exported Go trampolines.
+//
+// C.malloc is used deliberately rather than a Go variable: libpipewire keeps
+// this pointer and calls through it long after this function returns, so Go
+// memory would be collected out from under it.
+func allocStreamEvents() *C.struct_pw_stream_events {
+	return C.alloc_stream_events()
+}
+
+// allocStreamHook returns a zeroed hook in C memory, for the same reason.
+func allocStreamHook() *C.struct_spa_hook {
+	return C.alloc_stream_hook()
 }

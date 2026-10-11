@@ -113,22 +113,30 @@ func NewContext(name string) (*Context, error) {
 		return nil, fmt.Errorf("pipewire: pw_context_new returned NULL (no daemon reachable?)")
 	}
 
+	// The loop thread must be RUNNING before the core is created.
+	// pw_context_connect marshals a handshake through the loop and waits for
+	// the reply, so with no loop thread to service it the call blocks
+	// forever. pw_thread_loop_start returns an int status, not NULL.
+	if rc := C.pw_thread_loop_start(loop); rc != 0 {
+		C.pw_context_destroy(ctx)
+		C.pw_thread_loop_destroy(loop)
+		releasePkg()
+		return nil, fmt.Errorf("pipewire: pw_thread_loop_start failed with code %d", int(rc))
+	}
+
+	// The core is a PROXY. Creating it marshals through the loop, so it must
+	// run with the loop lock held; without it libpipewire reports
+	// "impl_ext_end_proxy called from wrong context" and returns a core that
+	// never completes its handshake, leaving every stream stuck PAUSED with no
+	// error anywhere.
+	C.pw_thread_loop_lock(loop)
 	core := C.pw_context_connect(ctx, nil, 0)
+	C.pw_thread_loop_unlock(loop)
 	if core == nil {
 		C.pw_context_destroy(ctx)
 		C.pw_thread_loop_destroy(loop)
 		releasePkg()
 		return nil, fmt.Errorf("pipewire: pw_context_connect returned NULL (no daemon reachable?)")
-	}
-
-	// pw_thread_loop_start returns an int error code, not NULL. Reading it as
-	// a pointer would compile and silently compare a status against nothing.
-	if rc := C.pw_thread_loop_start(loop); rc != 0 {
-		C.pw_core_disconnect(core)
-		C.pw_context_destroy(ctx)
-		C.pw_thread_loop_destroy(loop)
-		releasePkg()
-		return nil, fmt.Errorf("pipewire: pw_thread_loop_start failed with code %d", int(rc))
 	}
 
 	return &Context{loop: loop, ctx: ctx, core: core}, nil
@@ -199,7 +207,9 @@ func (c *Context) Close() error {
 	// Disconnect the core before destroying its context, mirroring the loop
 	// ordering above: teardown runs strictly outermost-first.
 	if c.core != nil {
+		C.pw_thread_loop_lock(c.loop)
 		C.pw_core_disconnect(c.core)
+		C.pw_thread_loop_unlock(c.loop)
 		c.core = nil
 	}
 	if c.ctx != nil {
@@ -236,14 +246,16 @@ func Available() bool {
 
 	// pw_context_connect returns a pw_core*, NULL on failure. Comparing it to
 	// an int would treat a non-NULL pointer as an error code.
+	C.pw_thread_loop_lock(loop)
 	core := C.pw_context_connect(ctx, nil, 0)
 	if core == nil {
+		C.pw_thread_loop_unlock(loop)
 		C.pw_context_destroy(ctx)
 		C.pw_thread_loop_destroy(loop)
 		return false
 	}
-
 	C.pw_core_disconnect(core)
+	C.pw_thread_loop_unlock(loop)
 	C.pw_context_destroy(ctx)
 	C.pw_thread_loop_destroy(loop)
 	return true

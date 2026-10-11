@@ -64,6 +64,16 @@ func rateProbeProperty(data unsafe.Pointer, subject uint32, key, typ, prop unsaf
 //export streamStateChanged
 func streamStateChanged(data unsafe.Pointer, old, state int32, errs unsafe.Pointer) {
 	defer func() { _ = recover() }()
+	s, ok := streamFromHandle(cgo.Handle(uintptr(data)))
+	if !ok || s == nil {
+		return
+	}
+	s.state.Store(int64(state))
+	if errs != nil {
+		// Copied into C memory: the daemon's pointer is only valid for this
+		// callback, but the value is read later from State().
+		s.stateErr.Store(C.CString(cstr(errs)))
+	}
 }
 
 // streamParamChanged is where the negotiated format is captured.
