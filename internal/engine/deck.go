@@ -550,6 +550,22 @@ func (d *Deck) seekFrames(frame float64) {
 // exposing it as a user action would bypass the modifier and mapping layers.
 func (d *Deck) Seek(target time.Duration) { d.seek(target) }
 
+// NudgeSeconds moves the playhead by a number of seconds.
+//
+// It is the time-domain counterpart to NudgeBeats: a jog or pitch-bend wheel
+// sends a fraction of a second per tick, and has no grid to be musical about.
+func (d *Deck) NudgeSeconds(sec float64) {
+	d.post(command{kind: cmdNudge, value: sec})
+}
+
+// nudgeSeconds applies a time nudge on the render goroutine.
+func (d *Deck) nudgeSeconds(sec float64) {
+	if d.track == nil || math.IsNaN(sec) || sec == 0 {
+		return
+	}
+	d.seekFrames(d.pos + sec*float64(d.rate))
+}
+
 // SeekNormalized moves the playhead to a normalized 0..1 position of the
 // track.
 //

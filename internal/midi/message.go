@@ -157,14 +157,26 @@ var actionNames = map[string]engine.ActionKind{
 	"DeckEQHigh":       engine.DeckEQHigh,
 	"DeckFilterKind":   engine.DeckFilterKind,
 	"DeckFilterCutoff": engine.DeckFilterCutoff,
+	"DeckFilterReso":   engine.DeckFilterReso,
+	"DeckNudge":        engine.DeckNudge,
 	"DeckSeek":         engine.DeckSeek,
 	"DeckHotcueSet":    engine.DeckHotcueSet,
 	"DeckHotcueJump":   engine.DeckHotcueJump,
 	"DeckHotcueDelete": engine.DeckHotcueDelete,
+	"MixerChannelGain": engine.MixerChannelGain,
+	"MixerCrossfader":  engine.MixerCrossfader,
+	"MixerCueMix":      engine.MixerCueMix,
+	"MixerMasterGain":  engine.MixerMasterGain,
+	"FocusNext":        engine.FocusNext,
+	"NudgeBeats":       engine.NudgeBeats,
 	"CrossfaderSet":    engine.MixerCrossfader,
+	"ChannelGain":      engine.MixerChannelGain,
+	"CueMix":           engine.MixerCueMix,
 	"MasterGain":       engine.MixerMasterGain,
 	"ZoomToggle":       engine.ZoomToggle,
 	"ZoomLevel":        engine.ZoomIn,
+	"ZoomIn":           engine.ZoomIn,
+	"ZoomOut":          engine.ZoomOut,
 	"ViewNext":         engine.ViewNext,
 	"ViewPrev":         engine.ViewPrev,
 	"FocusDeck":        engine.FocusNext,
@@ -183,6 +195,8 @@ var actionNames = map[string]engine.ActionKind{
 	"LibraryLoad":      engine.LibraryLoad,
 	"LibrarySearch":    engine.LibrarySearch,
 	"LibrarySort":      engine.LibrarySort,
+	"LibraryFocusNext": engine.LibraryFocusNext,
+	"HelpToggle":       engine.HelpToggle,
 	"DebugToggle":      engine.DebugToggle,
 	"Quit":             engine.Quit,
 }
@@ -193,11 +207,17 @@ var actionKinds = func() map[engine.ActionKind]string {
 		m[kind] = name
 	}
 	// A kind can have more than one accepted spelling (CueAssign and
-	// DeckCueAssign both drive engine.DeckCueAssign). Round-trip needs one
-	// canonical output, so prefer the name that matches the engine identifier.
-	for kind, name := range m {
+	// DeckCueAssign both drive engine.DeckCueAssign; so do MasterGain and
+	// MixerMasterGain). Round-trip needs one canonical output, so prefer the
+	// name that matches the engine identifier.
+	//
+	// This must be a full second pass rather than a fixup while building the
+	// map: iteration order is random, so whichever alias happened to be
+	// visited last used to win, and FormatActionKind returned a different name
+	// from one run to the next.
+	for kind := range m {
 		engineName := engine.FormatActionKind(kind)
-		if engineName == "Unknown" || engineName == name {
+		if engineName == "Unknown" {
 			continue
 		}
 		if k2, ok := actionNames[engineName]; ok && k2 == kind {

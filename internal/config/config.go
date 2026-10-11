@@ -38,6 +38,10 @@ type UIConfig struct {
 type KeyBinding struct {
 	Action string `yaml:"action"`
 	Target int    `yaml:"target"`
+	// Slot is the hotcue or loop slot for actions that take one. Without it no
+	// hotcue, loop or roll is reachable from the keyboard at all, since MIDI
+	// mappings carry a slot and key bindings could not.
+	Slot int `yaml:"slot"`
 	// Value is "toggle", "inc", "dec", or a literal number.
 	Value string `yaml:"value"`
 	// Repeat allows the binding to fire on auto-repeat while held.

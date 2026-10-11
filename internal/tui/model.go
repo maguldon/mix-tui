@@ -59,6 +59,14 @@ type Model struct {
 
 	w, h int
 
+	// rollActive tracks a loop roll engaged from the keyboard.
+	//
+	// A loop roll is a momentary control: on a MIDI pad it starts on press and
+	// returns on release. There is no key-release event here, so the keyboard
+	// binding toggles instead -- press to roll, press again to return. Without
+	// this the roll would engage on the first press and stay engaged, leaving
+	// the deck stuck in a one-beat loop.
+	rollActive bool
 	// panicked records that the render path failed, so the key handler can
 	// offer a way out. On the error screen the normal keymap does not apply:
 	// the interface is broken, and "q" is bound to Quantize, so telling the

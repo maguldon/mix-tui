@@ -10,12 +10,15 @@ func TestActionKindRoundTrip(t *testing.T) {
 	names := []string{
 		"DeckPlay", "DeckCue", "DeckPitch", "DeckEQLow", "DeckEQMid", "DeckEQHigh",
 		"DeckFilterKind", "DeckFilterCutoff", "DeckSeek", "DeckHotcueSet",
-		"DeckHotcueJump", "DeckHotcueDelete", "CrossfaderSet", "MasterGain",
-		"ZoomToggle", "ZoomLevel", "ViewNext", "ViewPrev", "FocusDeck",
+		"DeckHotcueJump", "DeckHotcueDelete", "MixerCrossfader", "MixerMasterGain",
+		"ZoomToggle", "ZoomIn", "ViewNext", "ViewPrev", "FocusNext",
 		"LoopBeat", "LoopIn", "LoopOut", "LoopSave", "LoopRecall", "LoopRelease",
 		"LoopRoll", "Sync", "SyncToggle", "Quantize", "LibraryOpen", "LibraryClose",
 		"LibraryLoad", "LibrarySearch", "LibrarySort", "DebugToggle", "Quit",
 	}
+	// The list holds canonical names only. An alias cannot round-trip to
+	// itself: MasterGain and MixerMasterGain are the same ActionKind, so
+	// FormatActionKind has to pick one, and it picks the engine's spelling.
 	for _, n := range names {
 		k, err := ParseActionKind(n)
 		if err != nil {
@@ -24,6 +27,56 @@ func TestActionKindRoundTrip(t *testing.T) {
 		}
 		if got := FormatActionKind(k); got != n {
 			t.Errorf("round trip: %q -> %v -> %q", n, k, got)
+		}
+	}
+}
+
+// TestActionKindAliasesResolve covers the accepted alternative spellings. Each
+// must parse to the same kind as its canonical name, so an existing mapping
+// file keeps working after a rename.
+func TestActionKindAliasesResolve(t *testing.T) {
+	for alias, canonical := range map[string]string{
+		"CueAssign":     "DeckCueAssign",
+		"MasterGain":    "MixerMasterGain",
+		"ChannelGain":   "MixerChannelGain",
+		"CueMix":        "MixerCueMix",
+		"ZoomLevel":     "ZoomIn",
+		"FocusDeck":     "FocusNext",
+		"CrossfaderSet": "MixerCrossfader",
+	} {
+		ak, err := ParseActionKind(alias)
+		if err != nil {
+			t.Errorf("ParseActionKind(%q): %v", alias, err)
+			continue
+		}
+		ck, err := ParseActionKind(canonical)
+		if err != nil {
+			t.Errorf("ParseActionKind(%q): %v", canonical, err)
+			continue
+		}
+		if ak != ck {
+			t.Errorf("alias %q resolves to %v, canonical %q to %v", alias, ak, canonical, ck)
+		}
+	}
+}
+
+// TestFormatActionKindIsDeterministic guards the alias canonicaliser. It used
+// to fix up the map while building it, so iteration order decided which
+// spelling won and FormatActionKind could return a different name from one run
+// to the next.
+func TestFormatActionKindIsDeterministic(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		for _, alias := range []string{"MasterGain", "MixerMasterGain", "ZoomLevel", "ZoomIn"} {
+			k, err := ParseActionKind(alias)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := FormatActionKind(k)
+			for j := 0; j < 5; j++ {
+				if got := FormatActionKind(k); got != first {
+					t.Fatalf("FormatActionKind(%v) returned %q then %q", k, first, got)
+				}
+			}
 		}
 	}
 }

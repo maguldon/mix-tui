@@ -66,6 +66,8 @@ const (
 	// command rather than a direct write because analysis finishes long after
 	// the load, while the pump is rendering.
 	cmdAnalysis
+	// cmdNudge moves the playhead by a fraction of a second.
+	cmdNudge
 )
 
 // commandQueueSize is a power of two so the index wrap is a MASK, not a
@@ -142,6 +144,8 @@ func (q *commandQueue) dropped() uint64 { return q.droppedCount.Load() }
 // only, so it mutates deck state without any lock.
 func (d *Deck) apply(c command) {
 	switch c.kind {
+	case cmdNudge:
+		d.nudgeSeconds(c.value)
 	case cmdAnalysis:
 		d.applyAnalysis(c.grid, c.key)
 	case cmdLoad:

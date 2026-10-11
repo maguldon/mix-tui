@@ -49,7 +49,35 @@ func DefaultKeys() map[string]KeyBinding {
 		"v":      {Action: "ViewNext"},
 		"/":      {Action: "LibraryOpen"},
 		"escape": {Action: "LibraryClose"},
-		"r":      {Action: "LoopRoll"},
+		"r":      {Action: "LoopRoll", Value: "1"}, // toggled by the TUI; see rollActive
+
+		// Hotcues. Without these no cue point was reachable from the keyboard:
+		// MIDI mappings carry a slot and key bindings could not, so the whole
+		// hotcue feature was keyboard-invisible.
+		"1": {Action: "DeckHotcueSet", Slot: 0},
+		"2": {Action: "DeckHotcueJump", Slot: 0},
+		"3": {Action: "DeckHotcueSet", Slot: 1},
+		"4": {Action: "DeckHotcueJump", Slot: 1},
+		"5": {Action: "DeckHotcueSet", Slot: 2},
+		"6": {Action: "DeckHotcueJump", Slot: 2},
+		"7": {Action: "DeckHotcueSet", Slot: 3},
+		"8": {Action: "DeckHotcueJump", Slot: 3},
+
+		// Loops.
+		"9":  {Action: "LoopIn"},
+		"0":  {Action: "LoopOut"},
+		"w":  {Action: "LoopBeat", Value: "2"},
+		"e":  {Action: "LoopBeat", Value: "4"},
+		"y":  {Action: "LoopBeat", Value: "8"},
+		"u":  {Action: "LoopBeat", Value: "16"},
+		"i":  {Action: "LoopSave", Slot: 0},
+		"o":  {Action: "LoopRecall", Slot: 0},
+		"\\": {Action: "LoopRelease"},
+
+		// Mixer.
+		"m": {Action: "CueMix", Value: "toggle"},
+		"-": {Action: "MasterGain", Value: "dec"},
+		"=": {Action: "MasterGain", Value: "inc"},
 	}
 }
 
@@ -87,6 +115,11 @@ func compileBinding(name string, kb KeyBinding) (compiled, error) {
 	c := compiled{
 		action: kind,
 		target: kb.Target,
+		// Slot was declared on compiled and never assigned, so a keybinding
+		// could not name a hotcue or loop slot. Every slot-taking action was
+		// therefore MIDI-only, and the README's claim that every action is
+		// reachable from the keyboard was false for all of them.
+		slot:   kb.Slot,
 		repeat: kb.Repeat,
 	}
 	switch strings.ToLower(strings.TrimSpace(kb.Value)) {
@@ -140,7 +173,7 @@ func (r *KeyResolver) Resolve(key string) (engine.Action, bool) {
 	if c.dec {
 		value = -1
 	}
-	return engine.Action{Kind: c.action, Target: c.target, Value: value}, true
+	return engine.Action{Kind: c.action, Target: c.target, Value: value, Slot: c.slot}, true
 }
 
 // Repeats reports whether a binding should fire on auto-repeat while held.

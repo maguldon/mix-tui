@@ -221,6 +221,29 @@ func (e *Engine) Apply(a Action) {
 		_ = d.SetLoopOut()
 	case LoopRelease:
 		d.ReleaseLoop()
+	case DeckNudge:
+		// Value is seconds. A nudge nudges the playhead; it is distinct from
+		// NudgeBeats, which is the same idea expressed in musical time and so
+		// needs a beatgrid.
+		d.NudgeSeconds(a.Value)
+	case LoopSave:
+		_ = d.SaveLoop(a.Slot)
+	case LoopRecall:
+		_ = d.RecallLoop(a.Slot)
+	case LoopRoll:
+		// Momentary: a press rolls (PushRoll), a release returns (PopRoll).
+		// The MIDI layer sends Value 0 on release, which is how a momentary
+		// control reaches here. The default keymap binds "r", and until this
+		// existed pressing it did nothing at all.
+		if a.Value > 0 {
+			_ = d.PushRoll(a.Value)
+		} else {
+			_ = d.PopRoll()
+		}
+	case MixerCueMix:
+		e.mixer.cueMix = clampUnit(a.Value)
+	case MixerMasterGain:
+		e.mixer.masterGain = clampUnit(a.Value)
 	}
 }
 

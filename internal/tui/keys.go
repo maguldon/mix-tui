@@ -208,6 +208,15 @@ func (m *Model) applyAction(a engine.Action) {
 	case engine.LibraryClose:
 		m.st.Mode = ModeMix
 		return
+	case engine.LoopRoll:
+		// Toggle rather than engage: there is no key-release to trigger the
+		// PopRoll a momentary pad would send.
+		if m.rollActive {
+			a.Value = 0 // returns to whatever was playing
+		}
+		m.rollActive = !m.rollActive
+		m.eng.Apply(a)
+		return
 	case engine.ZoomToggle:
 		m.st.Zoom = !m.st.Zoom
 	case engine.ViewNext:

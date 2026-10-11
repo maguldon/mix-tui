@@ -43,6 +43,15 @@ type Mixer struct {
 	cue       dsp.Stereo
 	limiter   *dsp.Limiter
 
+	// cueMix is the headphone-monitor blend, 0..1: 0 is cue-only, 1 is
+	// program-only. A DJ blends between them to cue a track against the
+	// running one without losing the running one.
+	cueMix float64
+	// masterGain scales the output bus. It sits after the crossfader and the
+	// channel faders so it is genuinely a master control, and before the
+	// limiter so a hot mix is still caught.
+	masterGain float64
+
 	// masterLevel and masterPeak feed the snapshot.
 	masterLevel float64
 	masterPeak  float64
@@ -62,12 +71,17 @@ func NewMixer(decks []*Deck, blockFrames, rate int) *Mixer {
 		rate = dsp.SampleRate
 	}
 	m := &Mixer{
-		strips:     make([]*strip, len(decks)),
-		limiter:    dsp.NewLimiter(rate, 1.0, 1.0),
-		master:     make(dsp.Stereo, blockFrames*2),
-		cue:        make(dsp.Stereo, blockFrames*2),
-		cuedIndex:  0,
-		xfader:     0,
+		strips:    make([]*strip, len(decks)),
+		limiter:   dsp.NewLimiter(rate, 1.0, 1.0),
+		master:    make(dsp.Stereo, blockFrames*2),
+		cue:       make(dsp.Stereo, blockFrames*2),
+		cuedIndex: 0,
+		xfader:    0,
+		// Unity defaults. cueMix is program-leaning rather than cue-leaning
+		// because a freshly started session should sound like the mix, not like
+		// headphones full of the deck the user has not cued yet.
+		cueMix:     1,
+		masterGain: 1,
 		masterPeak: 0,
 	}
 	for i, d := range decks {
@@ -187,6 +201,27 @@ func (m *Mixer) mixWith(outMain, outCue dsp.Stereo) error {
 			for i := range m.cue {
 				m.cue[i] += post[i]
 			}
+		}
+	}
+
+	// masterGain scales the program bus before the limiter, so pulling it down
+	// stops the limiter working as hard on material the DJ already judged to
+	// be the right level.
+	if m.masterGain != 1 {
+		g := float32(m.masterGain)
+		for i := range m.master {
+			m.master[i] *= g
+		}
+	}
+
+	// cueMix blends the headphone bus between program and cue. It reads both
+	// buses after summing, so a DJ can hear the track they are mixing in
+	// against the one they are cueing.
+	if m.cueMix > 0 && m.cueMix < 1 {
+		pg := float32(1 - m.cueMix)
+		cg := float32(m.cueMix)
+		for i := range m.cue {
+			m.cue[i] = m.cue[i]*cg + m.master[i]*pg
 		}
 	}
 

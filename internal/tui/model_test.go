@@ -605,3 +605,29 @@ func TestPanickedScreenIgnoresOtherKeys(t *testing.T) {
 		t.Errorf("the error screen applied %v", f.applied)
 	}
 }
+
+// TestLoopRollTogglesFromTheKeyboard. A loop roll is momentary: a MIDI pad
+// sends a press and a release. There is no key-release event here, so a direct
+// binding would engage the roll and leave the deck stuck in it. Pressing again
+// must return.
+func TestLoopRollTogglesFromTheKeyboard(t *testing.T) {
+	m, f := testModel(t)
+	m.st.Mode = ModeMix
+
+	m.handleKey("r")
+	if !m.rollActive {
+		t.Fatal("first press did not engage the roll")
+	}
+	if len(f.applied) != 1 || f.applied[0].Value <= 0 {
+		t.Fatalf("first press applied %v, want a positive roll length", f.applied)
+	}
+
+	m.handleKey("r")
+	if m.rollActive {
+		t.Error("second press did not release the roll")
+	}
+	last := f.applied[len(f.applied)-1]
+	if last.Value != 0 {
+		t.Errorf("release applied Value %v, want 0", last.Value)
+	}
+}
