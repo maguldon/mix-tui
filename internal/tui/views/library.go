@@ -153,10 +153,34 @@ func colWidths(w int) (title, artist int) {
 }
 
 // trackHeader labels the columns using the same widths as the rows.
+//
+// It takes the FULL pane width, not the post-cursor width the rows use, and
+// subtracts the cursor itself. Computing these separately is how every column
+// ends up one to the left of its header.
 func trackHeader(w int) string {
-	tw, aw := colWidths(w)
-	s := "  " + fmt.Sprintf("%-*s %-*s %7s %4s %6s ", tw, "TITLE", aw, "ARTIST", "BPM", "KEY", "TIME")
-	return truncate(s, w)
+	tw, aw := colWidths(w - cursorW)
+	return padRight("  "+cell(tw, "TITLE")+" "+cell(aw, "ARTIST")+" "+right("BPM", 7)+" "+right("KEY", 4)+" "+right("TIME", 6), w)
+}
+
+// cursorW is the width reserved for the selection cursor.
+const cursorW = 2
+
+// cell renders s in exactly w display columns, truncating if too wide.
+//
+// This exists because fmt's %-*s pads by RUNE COUNT, not display width. A CJK
+// title then overruns its column by one column per character and every column
+// after it drifts right -- exactly the bug wide-character alignment is meant to
+// prevent.
+func cell(w int, s string) string { return padRight(truncate(s, w), w) }
+
+// right renders s right-aligned in w display columns, for numeric columns.
+func right(s string, w int) string {
+	s = truncate(s, w)
+	gap := w - lipgloss.Width(s)
+	if gap <= 0 {
+		return s
+	}
+	return spaces(gap) + s
 }
 
 // trackLine renders one track row, dropping the duration bar first when space
@@ -177,10 +201,9 @@ func trackLine(t library.Track, w int) string {
 
 	tw, aw := colWidths(w)
 	if aw == 0 {
-		return truncate(fmt.Sprintf("%-*s %7s %4s %6s", tw, t.Title, bpm, key, dur), w)
+		return padRight(cell(tw, t.Title)+" "+right(bpm, 7)+" "+right(key, 4)+" "+right(dur, 6), w)
 	}
-	return truncate(fmt.Sprintf("%-*s %-*s %7s %4s %6s ",
-		tw, t.Title, aw, t.Artist, bpm, key, dur), w)
+	return padRight(cell(tw, t.Title)+" "+cell(aw, t.Artist)+" "+right(bpm, 7)+" "+right(key, 4)+" "+right(dur, 6), w)
 }
 
 // crateRows renders the left pane: crate names plus the scan summary.

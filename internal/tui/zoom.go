@@ -58,18 +58,26 @@ func ZoomIndex(i int) int { return (i + 1) % len(ZoomBarOptions) }
 // Markers outside [Start, Start+Length] are filtered out: a cue twenty minutes
 // away must not appear in the middle of the view.
 func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int,
-	beats []time.Duration, cues []time.Duration) []string {
+	beats []time.Duration, cues []time.Duration, sampleRate int) []string {
 
 	if width <= 0 || height <= 0 {
 		return nil
 	}
+	// The sample rate is a parameter, not the dsp.SampleRate constant: a device
+	// may grant 48k, and converting with the 44.1k constant puts every window
+	// 8.8% out -- the zoomed wave is drawn from the wrong region of the audio
+	// and the playhead does not match what is drawn (spec 4.2, rate-agnostic).
+	if sampleRate <= 0 {
+		sampleRate = dsp.SampleRate
+	}
+	rate := float64(sampleRate)
 
 	// Slice the PCM to the window, tolerating a window that runs past the end.
-	startFrame := int(w.Start.Seconds() * dsp.SampleRate)
+	startFrame := int(w.Start.Seconds() * rate)
 	if startFrame < 0 {
 		startFrame = 0
 	}
-	endFrame := startFrame + int(w.Length.Seconds()*float64(dsp.SampleRate))
+	endFrame := startFrame + int(w.Length.Seconds()*rate)
 	var slice dsp.Stereo
 	if startFrame*2 < len(pcm) {
 		if endFrame*2 > len(pcm) {

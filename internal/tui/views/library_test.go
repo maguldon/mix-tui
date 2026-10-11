@@ -194,3 +194,76 @@ func TestLibraryNarrowPaneDropsDurationBarFirst(t *testing.T) {
 		t.Errorf("120-col render dropped the title entirely:\n%s", narrow)
 	}
 }
+
+// TestColumnsAlignWithHeader is the test the review said was missing: the
+// header and the rows computed their widths from different inputs, so every
+// column sat one to the left of its heading while the "fits within width" tests
+// passed.
+//
+// It compares where each right-aligned value ENDS against where its heading
+// ENDS, which is what a reader aligns on. Rows are identified by the selection
+// cursor so the crate pane's lines are not mistaken for track rows.
+func TestColumnsAlignWithHeader(t *testing.T) {
+	out := RenderLibrary(140, 12, testIndex(), LibraryState{})
+	lines := strings.Split(out, "\n")
+
+	var header, row string
+	for _, l := range lines {
+		if strings.Contains(l, "TITLE") && header == "" {
+			header = l
+		}
+		// The selected track row carries the cursor.
+		if strings.Contains(l, "> Inner Speaker") {
+			row = l
+		}
+	}
+	if header == "" || row == "" {
+		t.Fatalf("header or track row not found:\n%s", out)
+	}
+
+	for _, c := range []struct{ heading, value string }{
+		{"BPM", "128.00"},
+		{"KEY", "8A"},
+		{"TIME", "3:34"},
+	} {
+		hi := strings.Index(header, c.heading)
+		vi := strings.Index(row, c.value)
+		if hi < 0 || vi < 0 {
+			t.Fatalf("%s: heading at %d, value at %d\n%s", c.heading, hi, vi, out)
+		}
+		if hi+len(c.heading) != vi+len(c.value) {
+			t.Errorf("%s value ends at column %d but its heading ends at %d",
+				c.heading, vi+len(c.value), hi+len(c.heading))
+		}
+	}
+}
+
+// TestColumnsAlignWithWideGlyphs is spec review focus #3 and the bug the
+// width-aware padding exists to prevent: fmt's %-*s pads by rune count, so a
+// CJK title pushed every column after it to the right.
+func TestColumnsAlignWithWideGlyphs(t *testing.T) {
+	ascii := library.NewIndex()
+	ascii.Add(library.Track{Path: "/a.wav", Title: "Inner Speaker", Artist: "Safras", BPM: 128, Duration: 214e9})
+	cjk := library.NewIndex()
+	cjk.Add(library.Track{Path: "/b.wav", Title: "日本語のトラック名です", Artist: "アーティスト", BPM: 128, Duration: 214e9})
+
+	// Measure in DISPLAY COLUMNS, not bytes: a CJK rune is three bytes, so
+	// strings.Index would report a difference that is not an alignment
+	// difference and would hide a real one elsewhere.
+	bpmCol := func(frame string) int {
+		for _, l := range strings.Split(frame, "\n") {
+			if strings.Contains(l, "128.00") && strings.Contains(l, ">") {
+				return lipgloss.Width(l[:strings.Index(l, "128.00")])
+			}
+		}
+		return -1
+	}
+	ai, bi := bpmCol(RenderLibrary(140, 12, ascii, LibraryState{})),
+		bpmCol(RenderLibrary(140, 12, cjk, LibraryState{}))
+	if ai < 0 || bi < 0 {
+		t.Fatalf("BPM value not found in a track row (ascii=%d cjk=%d)", ai, bi)
+	}
+	if ai != bi {
+		t.Errorf("BPM at column %d for an ASCII title but %d for a CJK title", ai, bi)
+	}
+}

@@ -23,6 +23,10 @@ type DeckState struct {
 	Pitch       float64 // normalized -1..1
 	BPM         float64 // 0 if no beatgrid
 	HasBeatGrid bool
+	// SampleRate is the deck's output rate, which may differ from the file's
+	// when a resampler is converting. A view converting time to frames must use
+	// this, not a package constant.
+	SampleRate int
 	// LoopActive and LoopBeatCount expose loop state so the TUI can render a
 	// loop without reaching into the Deck (spec §5: the UI reads state through
 	// Snapshot only).

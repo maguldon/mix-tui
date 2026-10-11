@@ -344,6 +344,7 @@ func (e *Engine) Snapshot() Snapshot {
 		st.Duration = d.Duration()
 		st.Pitch = d.Pitch()
 		st.HasBeatGrid = d.HasBeatGrid()
+		st.SampleRate = d.SampleRate()
 		ls := d.LoopSummary()
 		st.Cued = e.mixer.Cued(i)
 		st.PCM = d.PCM()

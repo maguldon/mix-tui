@@ -54,7 +54,7 @@ func TestZoomIndexCycles(t *testing.T) {
 
 func TestRenderZoomedDimensions(t *testing.T) {
 	w := WindowFor(30*time.Second, 4, 128)
-	rows := RenderZoomed(dsp.Sine(440, 60), w, 60, 4, nil, nil)
+	rows := RenderZoomed(dsp.Sine(440, 60), w, 60, 4, nil, nil, dsp.SampleRate)
 	if len(rows) != 4 {
 		t.Errorf("got %d rows", len(rows))
 	}
@@ -67,8 +67,8 @@ func TestRenderZoomedShowsBeatsInWindow(t *testing.T) {
 	for i := range beats {
 		beats[i] = w.Start + time.Duration(i)*w.Length/200
 	}
-	withBeats := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, beats, nil)
-	without := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, nil, nil)
+	withBeats := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, beats, nil, dsp.SampleRate)
+	without := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, nil, nil, dsp.SampleRate)
 	if strings.Join(withBeats, "\n") == strings.Join(without, "\n") {
 		t.Error("beat markers changed nothing inside the window")
 	}
@@ -117,7 +117,7 @@ func TestRenderZoomedIsBounded(t *testing.T) {
 	w := WindowFor(30*time.Second, 4, 128)
 	for _, width := range []int{0, 1, 2, 10, 40, 120} {
 		for _, height := range []int{0, 1, 2, 4, 8} {
-			rows := RenderZoomed(pcm, w, width, height, nil, nil)
+			rows := RenderZoomed(pcm, w, width, height, nil, nil, dsp.SampleRate)
 			// A zero width has nothing to draw into, so no rows is correct.
 			if width > 0 && height > 0 && len(rows) != height {
 				t.Errorf("width %d height %d gave %d rows", width, height, len(rows))
@@ -140,13 +140,13 @@ func TestRenderZoomedIgnoresMarkersOutsideWindow(t *testing.T) {
 	for i := range inWindow {
 		inWindow[i] = w.Start + time.Duration(i)*time.Second/128
 	}
-	withIn := RenderZoomed(pcm, w, 60, 2, inWindow, nil)
-	none := RenderZoomed(pcm, w, 60, 2, nil, nil)
+	withIn := RenderZoomed(pcm, w, 60, 2, inWindow, nil, dsp.SampleRate)
+	none := RenderZoomed(pcm, w, 60, 2, nil, nil, dsp.SampleRate)
 	if strings.Join(withIn, "\n") == strings.Join(none, "\n") {
 		t.Error("in-window beats changed nothing")
 	}
 	outside := []time.Duration{5 * time.Hour, -2 * time.Hour}
-	same := RenderZoomed(pcm, w, 60, 2, outside, nil)
+	same := RenderZoomed(pcm, w, 60, 2, outside, nil, dsp.SampleRate)
 	if strings.Join(same, "\n") != strings.Join(none, "\n") {
 		t.Error("markers outside the window were drawn inside it")
 	}
@@ -156,8 +156,46 @@ func TestRenderZoomedIgnoresMarkersOutsideWindow(t *testing.T) {
 // which happens when the user zooms near the end of a track.
 func TestRenderZoomedHandlesShortPCM(t *testing.T) {
 	w := WindowFor(50*time.Second, 4, 128)
-	rows := RenderZoomed(dsp.Sine(440, 2), w, 60, 4, nil, nil)
+	rows := RenderZoomed(dsp.Sine(440, 2), w, 60, 4, nil, nil, dsp.SampleRate)
 	if len(rows) != 4 {
 		t.Errorf("short PCM gave %d rows", len(rows))
+	}
+}
+
+// TestRenderZoomedRespectsSampleRate pins spec §4.2's rate-agnostic requirement.
+// Converting window times with the dsp.SampleRate constant put every window
+// 8.8% out at 48kHz, so the zoomed waveform was drawn from the wrong region of
+// the audio and the playhead did not match what was drawn.
+func TestRenderZoomedRespectsSampleRate(t *testing.T) {
+	// A 1Hz click every second, at 48k. The window must pick out the region
+	// around 30s regardless of the rate passed.
+	const rate = 48000
+	sec := 40
+	pcm := make(dsp.Stereo, 0, sec*rate*2)
+	for i := 0; i < sec*rate; i++ {
+		v := float32(0)
+		if i%rate == 0 {
+			v = 1
+		}
+		pcm = append(pcm, v, v)
+	}
+
+	w := WindowFor(30*time.Second, 2, 128)
+	at48 := RenderZoomed(pcm, w, 60, 4, nil, nil, rate)
+	if len(at48) != 4 {
+		t.Fatalf("got %d rows", len(at48))
+	}
+
+	// The window start must land near 30s. Passing 44100 for a 48k signal
+	// shifts it by 8.8%, which is about 2.6s here -- far enough to miss the
+	// click at 30s entirely.
+	startFrame := int(w.Start.Seconds() * float64(rate))
+	if want := int(29 * rate); startFrame < want || startFrame > 31*rate {
+		t.Fatalf("window start frame %d (%.2fs) is nowhere near 30s", startFrame, float64(startFrame)/rate)
+	}
+
+	// A non-positive rate falls back to the default rather than dividing by zero.
+	if got := RenderZoomed(pcm, w, 60, 4, nil, nil, 0); len(got) != 4 {
+		t.Error("a zero sample rate must fall back, not fail")
 	}
 }

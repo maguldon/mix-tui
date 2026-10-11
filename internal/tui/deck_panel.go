@@ -39,7 +39,7 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool) Pane
 	var wave []string
 	if focused && st.Zoom && d.HasBeatGrid {
 		zwin := WindowFor(d.Position, st.ZoomBars, d.BPM)
-		rows := RenderZoomed(d.PCM, zwin, inner, waveH, d.BeatTimes, d.CueTimes[:d.CueCount])
+		rows := RenderZoomed(d.PCM, zwin, inner, waveH, d.BeatTimes, cueSlice(d), d.SampleRate)
 		for i := range rows {
 			rows[i] = padRight(rows[i], inner)
 		}
@@ -149,6 +149,20 @@ func resamplePeaks(p engine.Peaks, w int) Peaks {
 		out.Min[c], out.Max[c] = mn, mx
 	}
 	return out
+}
+
+// cueSlice bounds CueCount before slicing. CueCount is a plain exported int on
+// DeckState, so a value beyond the array length panics -- and a panic in a view
+// takes the interface down.
+func cueSlice(d engine.DeckState) []time.Duration {
+	n := d.CueCount
+	if n < 0 {
+		n = 0
+	}
+	if n > len(d.CueTimes) {
+		n = len(d.CueTimes)
+	}
+	return d.CueTimes[:n]
 }
 
 // cueCells maps hotcue times to waveform cells.
