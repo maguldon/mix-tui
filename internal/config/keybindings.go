@@ -1,0 +1,158 @@
+package config
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/midi"
+)
+
+// KeyResolver maps a key name to an engine.Action. It shares the Action output
+// with the MIDI path, so a key and a controller button converge on the same
+// behaviour (spec §5.1).
+type KeyResolver struct {
+	bindings map[string]compiled
+	toggles  map[string]bool
+}
+
+type compiled struct {
+	action engine.ActionKind
+	target int
+	slot   int
+	repeat bool
+	// strategy is how Value is produced: a literal, or a toggle that alternates.
+	toggle  bool
+	inc     bool
+	dec     bool
+	literal float64
+}
+
+// DefaultKeys is the shipped keymap. It is merged under the user's file, so a
+// user rebinding one of these keys overrides it rather than colliding.
+func DefaultKeys() map[string]KeyBinding {
+	play := KeyBinding{Action: "DeckPlay"}
+	cue := KeyBinding{Action: "DeckCue", Value: "toggle"}
+	return map[string]KeyBinding{
+		"space":  play,
+		"c":      cue,
+		"s":      {Action: "SyncToggle"},
+		"q":      {Action: "Quantize"},
+		"[":      {Action: "DeckPitch", Target: 0, Value: "dec"},
+		"]":      {Action: "DeckPitch", Target: 0, Value: "inc"},
+		"ctrl+c": {Action: "Quit"},
+		"z":      {Action: "ZoomToggle"},
+		"v":      {Action: "ViewNext"},
+		"/":      {Action: "LibraryOpen"},
+		"escape": {Action: "LibraryClose"},
+		"r":      {Action: "LoopRoll"},
+	}
+}
+
+// NewKeyResolver compiles a config's keybindings into a resolver.
+//
+// The defaults are merged first and the user's file second, so a user
+// rebinding a shipped key overrides it. A key bound twice *within the user's own
+// map* is a mistake worth reporting rather than silently resolving to one of
+// them.
+func NewKeyResolver(cfg *Config) (*KeyResolver, error) {
+	merged := DefaultKeys()
+	for k, v := range cfg.Keys {
+		merged[k] = v
+	}
+
+	r := &KeyResolver{
+		bindings: make(map[string]compiled, len(merged)),
+		toggles:  make(map[string]bool),
+	}
+	for name, kb := range merged {
+		c, err := compileBinding(name, kb)
+		if err != nil {
+			return nil, err
+		}
+		r.bindings[name] = c
+	}
+	return r, nil
+}
+
+func compileBinding(name string, kb KeyBinding) (compiled, error) {
+	kind, err := parseAction(kb.Action)
+	if err != nil {
+		return compiled{}, fmt.Errorf("key %q: %w", name, err)
+	}
+	c := compiled{
+		action: kind,
+		target: kb.Target,
+		repeat: kb.Repeat,
+	}
+	switch strings.ToLower(strings.TrimSpace(kb.Value)) {
+	case "":
+		c.literal = 1
+	case "toggle":
+		c.toggle = true
+	case "inc":
+		c.inc = true
+	case "dec":
+		c.dec = true
+	default:
+		v, err := strconv.ParseFloat(kb.Value, 64)
+		if err != nil {
+			return compiled{}, fmt.Errorf("key %q: value %q is not toggle/inc/dec or a number", name, kb.Value)
+		}
+		c.literal = v
+	}
+	return c, nil
+}
+
+// parseAction maps a config action name to an engine.ActionKind via the midi
+// vocabulary, so keys and controllers speak exactly one language and cannot
+// drift apart.
+func parseAction(name string) (engine.ActionKind, error) {
+	return midi.ParseAction(name)
+}
+
+// Resolve returns the Action for a key press, advancing any toggle state.
+//
+// An unbound key reports false rather than a zero action, so a caller can tell
+// "no such binding" from "bound to nothing".
+func (r *KeyResolver) Resolve(key string) (engine.Action, bool) {
+	c, ok := r.bindings[key]
+	if !ok {
+		return engine.Action{}, false
+	}
+	value := c.literal
+	if c.toggle {
+		// Alternate 1/0 per press so a cue does not stick on.
+		r.toggles[key] = !r.toggles[key]
+		if r.toggles[key] {
+			value = 1
+		} else {
+			value = 0
+		}
+	}
+	if c.inc {
+		value = 1
+	}
+	if c.dec {
+		value = -1
+	}
+	return engine.Action{Kind: c.action, Target: c.target, Value: value}, true
+}
+
+// Repeats reports whether a binding should fire on auto-repeat while held.
+func (r *KeyResolver) Repeats(key string) bool {
+	c, ok := r.bindings[key]
+	return ok && c.repeat
+}
+
+// Bindings returns the bound key names, sorted, for a help view.
+func (r *KeyResolver) Bindings() []string {
+	out := make([]string, 0, len(r.bindings))
+	for k := range r.bindings {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

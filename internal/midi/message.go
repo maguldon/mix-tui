@@ -219,6 +219,11 @@ func ParseActionKind(s string) (engine.ActionKind, error) {
 	return k, nil
 }
 
+// ParseAction is an alias for ParseActionKind, exported under a shorter name for
+// callers outside this package (notably internal/config) that share the action
+// vocabulary. One table, so keys and controllers cannot drift apart.
+func ParseAction(s string) (engine.ActionKind, error) { return ParseActionKind(s) }
+
 // FormatActionKind renders a kind as its YAML spelling. An unmapped kind
 // returns a visible marker rather than an empty string, so a debug overlay
 // shows that something is wrong instead of printing nothing.
