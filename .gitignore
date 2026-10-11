@@ -1,1 +1,6 @@
 .superpowers/
+
+# Built binaries
+/mix-tui
+/mixplay
+/mixrender
