@@ -149,6 +149,8 @@ func (c Counts) Snapshot() map[string]uint64 {
 var actionNames = map[string]engine.ActionKind{
 	"DeckPlay":         engine.DeckPlay,
 	"DeckCue":          engine.DeckCue,
+	"CueAssign":        engine.DeckCueAssign,
+	"DeckCueAssign":    engine.DeckCueAssign,
 	"DeckPitch":        engine.DeckPitch,
 	"DeckEQLow":        engine.DeckEQLow,
 	"DeckEQMid":        engine.DeckEQMid,
@@ -189,6 +191,18 @@ var actionKinds = func() map[engine.ActionKind]string {
 	m := make(map[engine.ActionKind]string, len(actionNames))
 	for name, kind := range actionNames {
 		m[kind] = name
+	}
+	// A kind can have more than one accepted spelling (CueAssign and
+	// DeckCueAssign both drive engine.DeckCueAssign). Round-trip needs one
+	// canonical output, so prefer the name that matches the engine identifier.
+	for kind, name := range m {
+		engineName := engine.FormatActionKind(kind)
+		if engineName == "Unknown" || engineName == name {
+			continue
+		}
+		if k2, ok := actionNames[engineName]; ok && k2 == kind {
+			m[kind] = engineName
+		}
 	}
 	return m
 }()

@@ -1,0 +1,52 @@
+# A generic 2-deck controller mapping. Exercises latching and toggle modifier
+# modes, which the Xone map does not.
+device: "Generic 2 Deck"
+match: exact
+
+modifiers:
+  shift:
+    kind: note
+    chan: 1
+    num: 49
+    mode: latching
+  sync:
+    kind: cc
+    chan: 1
+    num: 70
+    pressed: 127
+    released: 0
+    mode: toggle
+
+controls:
+  - midi: {kind: note, chan: 1, num: 36}
+    action: {kind: DeckPlay, target: 0}
+    mode: momentary
+  - midi: {kind: note, chan: 1, num: 37}
+    action: {kind: DeckPlay, target: 1}
+    mode: momentary
+
+  # Cue pads, momentary so they spring back.
+  - midi: {kind: note, chan: 1, num: 38}
+    action: {kind: DeckCue, target: 0}
+    momentary: true
+  - midi: {kind: note, chan: 1, num: 39}
+    action: {kind: DeckCue, target: 1}
+    momentary: true
+
+  # shift+pad deletes the hotcue; bare pad jumps.
+  - midi: {kind: note, chan: 1, num: 40}
+    action: {kind: DeckHotcueJump, target: 0}
+    slot: 1
+  - midi: {kind: note, chan: 1, num: 40}
+    mods: [shift]
+    action: {kind: DeckHotcueDelete, target: 0}
+    slot: 1
+
+  # Transport.
+  - midi: {kind: note, chan: 1, num: 41}
+    action: {kind: SyncToggle}
+  - midi: {kind: note, chan: 1, num: 42}
+    action: {kind: Quantize}
+  - midi: {kind: note, chan: 1, num: 43}
+    action: {kind: LoopBeat, target: 0}
+    mode: toggle

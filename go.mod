@@ -6,6 +6,7 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/mewkiz/flac v1.0.14
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
