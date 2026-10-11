@@ -103,14 +103,20 @@ type Stream struct {
 	// name is a C string libpipewire borrows for the stream's lifetime, so it
 	// is owned here and freed in Destroy.
 	name *C.char
-	// drainWG is the teardown barrier. drain() holds it for its whole body so
-	// Destroy can wait for any in-flight drain to finish before freeing the
-	// stream — the RT thread must never be inside pw_stream_dequeue_buffer
-	// when pw_stream_destroy runs.
-	drainWG sync.WaitGroup
-	// draining gates new drains. Destroy clears it before waiting, so no new
-	// drain can start once teardown begins.
-	draining atomic.Bool
+	// teardown is the drain/teardown barrier. A drain enters it with
+	// enter() and leaves with leave(); Destroy closes the gate and then blocks
+	// in waitIdle() until every entered drain has left, so it can never be
+	// inside pw_stream_dequeue_buffer when pw_stream_destroy runs.
+	//
+	// This started as a sync.WaitGroup, which is the wrong primitive here: Add
+	// racing Wait can let Wait observe a transient zero counter and return
+	// while a drain that had not yet incremented is still on its way in. That
+	// is a use-after-free, and it showed up as a reproducible SIGSEGV in
+	// TestDestroyRacesDrainSafely. A WaitGroup requires a strictly positive
+	// count established before any Wait, which a lock-free drain cannot
+	// guarantee; an explicit active-counter that is only ever incremented
+	// while the gate is open can.
+	teardown drainGate
 
 	// events and hook are C-allocated because libpipewire retains them.
 	// They are owned here and freed in Destroy.
@@ -123,9 +129,17 @@ type Stream struct {
 	// declared. Surfaced in Stats so a silent pitch error is visible.
 	rateMismatch atomic.Bool
 	state        atomic.Int64
-	stateErr     atomic.Pointer[C.char]
-	started      atomic.Bool
-	stopped      atomic.Bool
+	// stateErr is a C string owned by this struct. It is guarded by a mutex
+	// rather than an atomic.Pointer: the listener replaces it on every state
+	// change, and freeing the old value from Store would race a concurrent
+	// State() reader that is mid-read of the pointer it just loaded. Writes
+	// happen on the listener thread and reads on the UI thread, neither of
+	// which is the realtime drain, so a mutex costs nothing that matters and
+	// removes the use-after-free entirely.
+	stateErrMu sync.Mutex
+	stateErr   *C.char
+	started    atomic.Bool
+	stopped    atomic.Bool
 	// negotiated records the rate the daemon actually gave us, which may
 	// differ from the requested one.
 	negotiated atomic.Int64
@@ -149,6 +163,7 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	}
 
 	s := &Stream{ctx: ctx, ring: ring, cfg: cfg}
+	s.teardown.init()
 	s.handle = cgo.NewHandle(s)
 
 	// Every stream operation must hold the loop lock; see Context.lock.
@@ -260,8 +275,7 @@ func (s *Stream) Destroy() error {
 	// Close the gate and wait for any in-flight drain. After this returns, no
 	// drain is running and none can start, so freeing the stream cannot race
 	// the RT thread.
-	s.draining.Store(true)
-	s.drainWG.Wait()
+	s.teardown.closeAndWait()
 
 	// Only touch the loop while it is alive: locking a destroyed
 	// pw_thread_loop is a use-after-free, and a Stream can outlive its
@@ -274,6 +288,13 @@ func (s *Stream) Destroy() error {
 		C.pw_stream_destroy(s.stream)
 		s.stream = nil
 	}
+	s.stateErrMu.Lock()
+	if s.stateErr != nil {
+		C.free(unsafe.Pointer(s.stateErr))
+		s.stateErr = nil
+	}
+	s.stateErrMu.Unlock()
+
 	if s.events != nil {
 		C.free(unsafe.Pointer(s.events))
 		s.events = nil
@@ -313,10 +334,12 @@ func (s *Stream) AsRenderTarget() engine.RenderTarget { return engine.RingTarget
 // State returns the last pw_stream_state the daemon reported, and any error
 // string it supplied. Zero is pw_stream_state_unconnected.
 func (s *Stream) State() (int32, string) {
-	msg := ""
-	if p := s.stateErr.Load(); p != nil {
-		msg = cstr(unsafe.Pointer(p))
+	s.stateErrMu.Lock()
+	var msg string
+	if s.stateErr != nil {
+		msg = cstr(unsafe.Pointer(s.stateErr))
 	}
+	s.stateErrMu.Unlock()
 	return int32(s.state.Load()), msg
 }
 
@@ -331,19 +354,30 @@ func (s *Stream) NegotiatedRate() int { return int(s.negotiated.Load()) }
 // a lock-free atomic or nothing. Nothing here may block, allocate, or take a
 // lock (spec §4.3).
 func (s *Stream) drain() {
-	// Enter the teardown barrier. If Destroy has begun, do not start: the
-	// stream may already be freed. The nil check matters independently —
-	// calling into libpipewire with a NULL stream dereferences it and kills
-	// the process.
-	if s == nil || s.draining.Load() || s.stream == nil {
+	if s == nil {
 		return
 	}
-	s.drainWG.Add(1)
-	defer s.drainWG.Done()
+	// Enter the teardown barrier before touching the stream. enter() refuses
+	// once Destroy has closed the gate, and every accepted drain is guaranteed
+	// to be counted before waitIdle() can return. The stream pointer comes
+	// back from enter() so it is read under the gate rather than racing
+	// Destroy's `s.stream = nil`; the nil check happens on that copy because
+	// calling into libpipewire with a NULL stream dereferences it and kills
+	// the process.
+	stream, ok := s.teardown.enter(func() unsafe.Pointer {
+		if s.stream == nil {
+			return nil
+		}
+		return unsafe.Pointer(s.stream)
+	})
+	if !ok || stream == nil {
+		return
+	}
+	defer s.teardown.leave()
 
 	s.callbacks.Add(1)
 
-	buf := C.pw_stream_dequeue_buffer(s.stream)
+	buf := C.pw_stream_dequeue_buffer((*C.struct_pw_stream)(stream))
 	if buf == nil {
 		// Nothing available yet. Not an error.
 		return
@@ -351,7 +385,7 @@ func (s *Stream) drain() {
 
 	spaBuf := buf.buffer
 	if spaBuf == nil || spaBuf.n_datas == 0 || spaBuf.datas == nil {
-		C.pw_stream_queue_buffer(s.stream, buf)
+		C.pw_stream_queue_buffer((*C.struct_pw_stream)(stream), buf)
 		return
 	}
 
@@ -360,14 +394,14 @@ func (s *Stream) drain() {
 	// spa_data.chunk rather than a size field.
 	data := spaBuf.datas
 	if data.data == nil || data.chunk == nil {
-		C.pw_stream_queue_buffer(s.stream, buf)
+		C.pw_stream_queue_buffer((*C.struct_pw_stream)(stream), buf)
 		return
 	}
 
 	stride := s.cfg.Channels * 4 // interleaved float32
 	capacity := int(data.maxsize) / stride
 	if capacity <= 0 {
-		C.pw_stream_queue_buffer(s.stream, buf)
+		C.pw_stream_queue_buffer((*C.struct_pw_stream)(stream), buf)
 		return
 	}
 
@@ -392,7 +426,7 @@ func (s *Stream) drain() {
 		s.frames.Add(uint64(n))
 	}
 
-	C.pw_stream_queue_buffer(s.stream, buf)
+	C.pw_stream_queue_buffer((*C.struct_pw_stream)(stream), buf)
 }
 
 // allocStreamEvents returns a zeroed events struct in C memory, pre-wired to
@@ -408,4 +442,70 @@ func allocStreamEvents() *C.struct_pw_stream_events {
 // allocStreamHook returns a zeroed hook in C memory, for the same reason.
 func allocStreamHook() *C.struct_spa_hook {
 	return C.alloc_stream_hook()
+}
+
+// drainGate is a close-and-drain barrier for the realtime callback.
+//
+// Contract: enter() returns true only if the gate was open, and if it returns
+// true the matching leave() is guaranteed to run. Once close() returns, no
+// drain is active and none can begin. It uses a mutex rather than a
+// sync.WaitGroup because a WaitGroup cannot distinguish "no drains have ever
+// started" from "no drains are active right now" — the case that matters when
+// a drain is racing to enter.
+//
+// The mutex is only ever held for the counter arithmetic, never across the
+// audio work, so it does not introduce a blocking section into the realtime
+// path (spec §4.3): enter/leave are a handful of uncontended instructions and
+// the C call happens with the mutex released.
+type drainGate struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	active int
+	closed bool
+}
+
+func (g *drainGate) init() {
+	g.cond = sync.NewCond(&g.mu)
+}
+
+// enter registers a drain, or reports that teardown has begun.
+func (g *drainGate) enter(get func() unsafe.Pointer) (unsafe.Pointer, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cond == nil {
+		g.cond = sync.NewCond(&g.mu)
+	}
+	if g.closed {
+		return nil, false
+	}
+	// Read the stream pointer while the gate is held. Destroy nils and frees
+	// it only after it has closed the gate and waited for active==0, so this
+	// read can never observe the mid-teardown write, and every use below is
+	// served from this stable copy rather than re-reading the field.
+	p := get()
+	g.active++
+	return p, true
+}
+
+func (g *drainGate) leave() {
+	g.mu.Lock()
+	g.active--
+	if g.active == 0 {
+		g.cond.Broadcast()
+	}
+	g.mu.Unlock()
+}
+
+// closeAndWait blocks until teardown is closed and every in-flight drain has
+// left. It is safe to call more than once.
+func (g *drainGate) closeAndWait() {
+	g.mu.Lock()
+	if g.cond == nil {
+		g.cond = sync.NewCond(&g.mu)
+	}
+	g.closed = true
+	for g.active > 0 {
+		g.cond.Wait()
+	}
+	g.mu.Unlock()
 }

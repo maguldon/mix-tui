@@ -158,14 +158,16 @@ func TestDrainPathDoesNotAllocate(t *testing.T) {
 func TestDestroyRacesDrainSafely(t *testing.T) {
 	ring := audio.NewRing(1 << 16)
 	s := newTestStream(t, ring)
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	// Feed the ring so drains have work.
-	ring.Write(dsp.Sine(440, 1.0))
 
 	var wg sync.WaitGroup
-	// Simulate the RT thread draining concurrently.
+	// Drive drains concurrently with teardown.
+	//
+	// Deliberately NOT calling Start(): an activated stream is driven by the
+	// real PipeWire loop thread, and this test would then have two goroutines
+	// inside pw_stream_dequeue_buffer on one stream. That corrupts libpipewire
+	// and segfaults for reasons unrelated to the gate under test. Leaving the
+	// stream inactive means the only drainer is this goroutine, which is
+	// exactly the race the barrier has to survive.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -184,10 +186,10 @@ func TestDestroyRacesDrainSafely(t *testing.T) {
 // not return until an in-flight drain has finished.
 func TestDrainGateStopsWorkAfterTeardown(t *testing.T) {
 	s := &Stream{}
+	s.teardown.init()
 	// With no drainer running, entering must be refused once the gate is set.
-	s.draining.Store(true)
+	s.teardown.closeAndWait()
 	s.drain() // must return immediately without touching a nil stream
-	s.draining.Store(false)
 	// And again with a zero stream it must not panic either way.
 	s.drain()
 }

@@ -74,8 +74,17 @@ func streamStateChanged(data unsafe.Pointer, old, state int32, errs unsafe.Point
 	s.state.Store(int64(state))
 	if errs != nil {
 		// Copied into C memory: the daemon's pointer is only valid for this
-		// callback, but the value is read later from State().
-		s.stateErr.Store(C.CString(cstr(errs)))
+		// callback, but the value is read later from State(). The previous
+		// copy is freed here rather than at Destroy, because a stream that
+		// reconnects reports several states and would otherwise accumulate one
+		// leaked string per transition.
+		s.stateErrMu.Lock()
+		old := s.stateErr
+		s.stateErr = C.CString(cstr(errs))
+		s.stateErrMu.Unlock()
+		if old != nil {
+			C.free(unsafe.Pointer(old))
+		}
 	}
 }
 
