@@ -17,9 +17,9 @@ func TestAcceptanceFullMix(t *testing.T) {
 	// Two tracks with known grids.
 	d0, d1 := e.Deck(0), e.Deck(1)
 	d0.Load(memTrack(dsp.Sine(220, 60)))
-	d0.AttachBeatGrid(testGrid(128.0, 120))
+	d0.AttachAnalysisNow(testGrid(128.0, 120), nil)
 	d1.Load(memTrack(dsp.Sine(330, 60)))
-	d1.AttachBeatGrid(testGrid(124.0, 120))
+	d1.AttachAnalysisNow(testGrid(124.0, 120), nil)
 
 	e.Apply(Action{Kind: DeckPlay, Target: 0})
 	e.Apply(Action{Kind: DeckPlay, Target: 1})
@@ -75,9 +75,9 @@ func TestAcceptanceLoopRollSyncSequence(t *testing.T) {
 		RingFrames: 44100, DeckCount: 2})
 	m, s := e.Deck(0), e.Deck(1)
 	m.Load(memTrack(dsp.Sine(220, 60)))
-	m.AttachBeatGrid(testGrid(128, 120))
+	m.AttachAnalysisNow(testGrid(128, 120), nil)
 	s.Load(memTrack(dsp.Sine(330, 60)))
-	s.AttachBeatGrid(testGrid(124, 120))
+	s.AttachAnalysisNow(testGrid(124, 120), nil)
 	e.Apply(Action{Kind: DeckPlay, Target: 0})
 	e.Apply(Action{Kind: DeckPlay, Target: 1})
 
@@ -149,7 +149,7 @@ func TestAcceptanceLoopRollSyncSequence(t *testing.T) {
 func TestAcceptanceLoopOutlivesTrackEnd(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 2.0)))
-	d.AttachBeatGrid(testGrid(120.0, 8))
+	d.AttachAnalysisNow(testGrid(120.0, 8), nil)
 	d.Play()
 	if err := d.SetLoopBeat(1); err != nil {
 		t.Fatal(err)

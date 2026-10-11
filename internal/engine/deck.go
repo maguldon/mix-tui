@@ -241,12 +241,37 @@ func (d *Deck) Pos() time.Duration {
 func (d *Deck) PosFrames() float64 { return d.pos }
 
 // AttachBeatGrid installs an analysed grid. A nil grid leaves the deck
-// playable with beatgrid-dependent features unavailable (spec §8).
-func (d *Deck) AttachBeatGrid(g *analyze.BeatGrid) { d.beatgrid = g }
+// playable with beatgrid-dependent features unavailable (spec 8).
+//
+// Analysis arrives long after the track loaded -- it runs in the background
+// over the whole file -- so this is called while the pump is rendering. It
+// posts through the command queue for the same reason Load does: writing
+// d.beatgrid directly raced both the render path and Snapshot.
+func (d *Deck) AttachBeatGrid(g *analyze.BeatGrid) { d.post(command{kind: cmdAnalysis, grid: g}) }
 
 // AttachKey stores a detected key for display. The view reads it through the
 // Snapshot, never from the Deck directly.
-func (d *Deck) AttachKey(k *analyze.Key) { d.key = k }
+func (d *Deck) AttachKey(k *analyze.Key) { d.post(command{kind: cmdAnalysis, key: k}) }
+
+// AttachAnalysisNow installs a grid and key immediately rather than queueing.
+//
+// It is only safe before the render goroutine starts, or from that goroutine.
+// It exists for the same reason LoadNow does: tests and the startup path need
+// a deck populated synchronously, and forcing them all through the queue would
+// mean forcing them all to drain a render loop they do not have.
+func (d *Deck) AttachAnalysisNow(grid *analyze.BeatGrid, key *analyze.Key) {
+	d.applyAnalysis(grid, key)
+}
+
+// applyAnalysis is the render-side half of AttachBeatGrid/AttachKey. The grid
+// and key arrive together so a deck never shows a BPM without its beats.
+func (d *Deck) applyAnalysis(grid *analyze.BeatGrid, key *analyze.Key) {
+	// Both fields are assigned unconditionally, so a nil result clears the
+	// previous one. Re-analysis that finds nothing must not leave the deck
+	// claiming a grid belonging to the track it just replaced.
+	d.beatgrid = grid
+	d.key = key
+}
 
 // Key returns the detected key, or nil.
 func (d *Deck) Key() *analyze.Key { return d.key }

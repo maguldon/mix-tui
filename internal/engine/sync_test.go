@@ -11,10 +11,10 @@ import (
 func TestSyncMatchesTempos(t *testing.T) {
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 30)))
-	master.AttachBeatGrid(testGrid(128.0, 60))
+	master.AttachAnalysisNow(testGrid(128.0, 60), nil)
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 30)))
-	slave.AttachBeatGrid(testGrid(124.0, 60))
+	slave.AttachAnalysisNow(testGrid(124.0, 60), nil)
 	if err := slave.EngageSync(master); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestSyncMatchesTempos(t *testing.T) {
 func TestSyncRequiresBothGrids(t *testing.T) {
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 10)))
-	master.AttachBeatGrid(testGrid(128, 20))
+	master.AttachAnalysisNow(testGrid(128, 20), nil)
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 10)))
 	// no grid on the slave
@@ -47,7 +47,7 @@ func TestSyncWithoutMasterGridErrors(t *testing.T) {
 	m.Load(memTrack(dsp.Sine(440, 10)))
 	s := NewDeck(1)
 	s.Load(memTrack(dsp.Sine(440, 10)))
-	s.AttachBeatGrid(testGrid(128, 20))
+	s.AttachAnalysisNow(testGrid(128, 20), nil)
 	if err := s.EngageSync(m); err == nil {
 		t.Error("expected error")
 	}
@@ -56,7 +56,7 @@ func TestSyncWithoutMasterGridErrors(t *testing.T) {
 func TestQuantizeSnapsToNearestBeat(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 20)))
-	d.AttachBeatGrid(testGrid(120.0, 40))
+	d.AttachAnalysisNow(testGrid(120.0, 40), nil)
 	d.seek(1050 * time.Millisecond) // beat is at 1000ms; 50ms late
 	if err := d.QuantizeToNearestBeat(); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestQuantizeSnapsToNearestBeat(t *testing.T) {
 func TestQuantizeIsClickFree(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 20)))
-	d.AttachBeatGrid(testGrid(120.0, 40))
+	d.AttachAnalysisNow(testGrid(120.0, 40), nil)
 	d.Play()
 	tmp := make(dsp.Stereo, 512*2)
 	for i := 0; i < 100; i++ {
@@ -98,11 +98,11 @@ func TestQuantizeWithoutGridErrors(t *testing.T) {
 func TestDeltaBeatReportsOffset(t *testing.T) {
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 30)))
-	master.AttachBeatGrid(testGrid(128.0, 60))
+	master.AttachAnalysisNow(testGrid(128.0, 60), nil)
 	master.seek(4 * time.Second) // exactly on a beat
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 30)))
-	slave.AttachBeatGrid(testGrid(128.0, 60))
+	slave.AttachAnalysisNow(testGrid(128.0, 60), nil)
 	slave.seek(4*time.Second + 40*time.Millisecond)
 	delta, err := slave.DeltaBeat(master)
 	if err != nil {
@@ -117,10 +117,10 @@ func TestSyncDoesNotRelayLoops(t *testing.T) {
 	// Sync retunes the deck but must NOT move the loop (spec §5.6).
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 40)))
-	master.AttachBeatGrid(testGrid(128.0, 80))
+	master.AttachAnalysisNow(testGrid(128.0, 80), nil)
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 40)))
-	slave.AttachBeatGrid(testGrid(128.0, 80))
+	slave.AttachAnalysisNow(testGrid(128.0, 80), nil)
 	slave.Play()
 	if err := slave.SetLoopBeat(4); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestSyncDoesNotRelayLoops(t *testing.T) {
 func TestNudgeBeats(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 20)))
-	d.AttachBeatGrid(testGrid(128.0, 40))
+	d.AttachAnalysisNow(testGrid(128.0, 40), nil)
 	d.seek(4 * time.Second)
 	if err := d.NudgeBeats(-1); err != nil {
 		t.Fatal(err)
@@ -154,10 +154,10 @@ func TestNudgeBeats(t *testing.T) {
 func TestSyncClampsToPitchRange(t *testing.T) {
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 30)))
-	master.AttachBeatGrid(testGrid(200.0, 100))
+	master.AttachAnalysisNow(testGrid(200.0, 100), nil)
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 30)))
-	slave.AttachBeatGrid(testGrid(60.0, 200))
+	slave.AttachAnalysisNow(testGrid(60.0, 200), nil)
 	if err := slave.EngageSync(master); err != nil {
 		t.Fatal(err)
 	}
@@ -173,10 +173,10 @@ func TestSyncClampsToPitchRange(t *testing.T) {
 func TestDisableSyncStopsTracking(t *testing.T) {
 	master := NewDeck(0)
 	master.Load(memTrack(dsp.Sine(440, 30)))
-	master.AttachBeatGrid(testGrid(128.0, 60))
+	master.AttachAnalysisNow(testGrid(128.0, 60), nil)
 	slave := NewDeck(1)
 	slave.Load(memTrack(dsp.Sine(440, 30)))
-	slave.AttachBeatGrid(testGrid(124.0, 60))
+	slave.AttachAnalysisNow(testGrid(124.0, 60), nil)
 	if err := slave.EngageSync(master); err != nil {
 		t.Fatal(err)
 	}
@@ -194,8 +194,8 @@ func TestSyncPairLocksTempos(t *testing.T) {
 	e := newTestEngine()
 	e.Deck(0).Load(memTrack(dsp.Sine(440, 30)))
 	e.Deck(1).Load(memTrack(dsp.Sine(440, 30)))
-	e.Deck(0).AttachBeatGrid(testGrid(128.0, 60))
-	e.Deck(1).AttachBeatGrid(testGrid(124.0, 60))
+	e.Deck(0).AttachAnalysisNow(testGrid(128.0, 60), nil)
+	e.Deck(1).AttachAnalysisNow(testGrid(124.0, 60), nil)
 	if err := e.SyncPair(1, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -214,8 +214,8 @@ func TestSyncActionEngagesSync(t *testing.T) {
 	e := newTestEngine()
 	e.Deck(0).Load(memTrack(dsp.Sine(440, 30)))
 	e.Deck(1).Load(memTrack(dsp.Sine(440, 30)))
-	e.Deck(0).AttachBeatGrid(testGrid(128.0, 60))
-	e.Deck(1).AttachBeatGrid(testGrid(124.0, 60))
+	e.Deck(0).AttachAnalysisNow(testGrid(128.0, 60), nil)
+	e.Deck(1).AttachAnalysisNow(testGrid(124.0, 60), nil)
 	e.Apply(Action{Kind: Sync, Target: 1})
 	renderBlocks(e.Deck(1), BlockFrames, 1)
 	if !e.Deck(1).SyncActive() {
@@ -227,7 +227,7 @@ func TestSyncActionEngagesSync(t *testing.T) {
 func TestQuantizeActionSnapsToBeat(t *testing.T) {
 	e := newTestEngine()
 	e.Deck(0).Load(memTrack(dsp.Sine(440, 20)))
-	e.Deck(0).AttachBeatGrid(testGrid(120.0, 40))
+	e.Deck(0).AttachAnalysisNow(testGrid(120.0, 40), nil)
 	e.Deck(0).seek(1050 * time.Millisecond)
 	e.Apply(Action{Kind: Quantize, Target: 0})
 	if math.Abs(e.Deck(0).Pos().Seconds()-1.0) > 0.01 {

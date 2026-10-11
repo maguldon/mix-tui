@@ -27,7 +27,7 @@ func testGrid(bpm float64, beats int) *analyze.BeatGrid {
 func TestBeatLoopWrapsAndIsClickFree(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 10.0)))
-	d.AttachBeatGrid(testGrid(128.0, 4))
+	d.AttachAnalysisNow(testGrid(128.0, 4), nil)
 	d.Play()
 	if err := d.SetLoopBeat(4); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestBeatLoopAtEndOfTrackWrapsNotStops(t *testing.T) {
 	// or go silent.
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 2.0)))
-	d.AttachBeatGrid(testGrid(120.0, 8))
+	d.AttachAnalysisNow(testGrid(120.0, 8), nil)
 	d.Play()
 	d.seek(1900 * time.Millisecond)
 	if err := d.SetLoopBeat(1); err != nil {
@@ -82,7 +82,7 @@ func TestBeatLoopLengthTracksPitch(t *testing.T) {
 	for _, pitch := range []float64{-1.0, -0.5, 0.0, 0.5, 1.0} {
 		d := NewDeck(0)
 		d.Load(memTrack(dsp.Sine(440, 20.0)))
-		d.AttachBeatGrid(testGrid(128.0, 40))
+		d.AttachAnalysisNow(testGrid(128.0, 40), nil)
 		d.SetPitch(pitch)
 		d.Play()
 		renderBlocks(d, BlockFrames, 1) // apply the posted pitch
@@ -170,7 +170,7 @@ func TestLoopOutAtTrackEndIsClamped(t *testing.T) {
 func TestLoopReleaseContinuesFromLoopEnd(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 10.0)))
-	d.AttachBeatGrid(testGrid(128.0, 20))
+	d.AttachAnalysisNow(testGrid(128.0, 20), nil)
 	d.Play()
 	d.SetLoopBeat(4)
 	tmp := make(dsp.Stereo, 512*2)
@@ -195,7 +195,7 @@ func TestLoopReleaseContinuesFromLoopEnd(t *testing.T) {
 func TestRollRestoresPositionOnRelease(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 20.0)))
-	d.AttachBeatGrid(testGrid(128.0, 40))
+	d.AttachAnalysisNow(testGrid(128.0, 40), nil)
 	d.Play()
 	tmp := make(dsp.Stereo, 512*2)
 	for i := 0; i < 100; i++ {
@@ -240,7 +240,7 @@ func TestRollReleaseWithEmptyStackIsNoOp(t *testing.T) {
 func TestRollFromInsideLoopRestoresLoop(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 20.0)))
-	d.AttachBeatGrid(testGrid(128.0, 40))
+	d.AttachAnalysisNow(testGrid(128.0, 40), nil)
 	d.Play()
 	d.SetLoopBeat(8)
 	tmp := make(dsp.Stereo, 512*2)
@@ -276,7 +276,7 @@ func TestRollWithoutGridErrors(t *testing.T) {
 func TestLoopWrapIsClickFree(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 10.0)))
-	d.AttachBeatGrid(testGrid(128.0, 8))
+	d.AttachAnalysisNow(testGrid(128.0, 8), nil)
 	d.Play()
 	if err := d.SetLoopBeat(4); err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func worstStep(s dsp.Stereo) float64 {
 func TestLoopDoesNotAllocateOnWrap(t *testing.T) {
 	d := NewDeck(0)
 	d.Load(memTrack(dsp.Sine(440, 10.0)))
-	d.AttachBeatGrid(testGrid(128.0, 20))
+	d.AttachAnalysisNow(testGrid(128.0, 20), nil)
 	d.Play()
 	if err := d.SetLoopBeat(4); err != nil {
 		t.Fatal(err)

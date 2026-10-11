@@ -46,7 +46,12 @@ var minorProfile = [12]float64{6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3
 // best guess is not returned with a low score attached, because a caller that
 // shows a key at all will be believed.
 func AnalyzeKey(pcm dsp.Stereo) (*Key, error) {
-	spec := ComputeSpectrogram(pcm, windowLen, hopSize)
+	return KeyFromSpec(ComputeSpectrogram(pcm, windowLen, hopSize))
+}
+
+// KeyFromSpec is the key half of Analyze, taking a spectrogram the caller may
+// already have.
+func KeyFromSpec(spec *Spectrogram) (*Key, error) {
 	if len(spec.Frames) == 0 {
 		return &Key{}, nil
 	}

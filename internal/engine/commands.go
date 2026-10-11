@@ -37,6 +37,8 @@ type command struct {
 	// never briefly hold new audio with the previous track's analysis.
 	beatgrid *analyze.BeatGrid
 	key      *analyze.Key
+	// grid is set only for cmdAnalysis; key is shared with cmdLoad.
+	grid *analyze.BeatGrid
 }
 
 type cmdKind uint8
@@ -60,6 +62,10 @@ const (
 	// resampler, the filter, the playhead). Calling it from the TUI goroutine
 	// while the pump renders is a data race.
 	cmdLoad
+	// cmdAnalysis carries a background analysis result to the deck. It is a
+	// command rather than a direct write because analysis finishes long after
+	// the load, while the pump is rendering.
+	cmdAnalysis
 )
 
 // commandQueueSize is a power of two so the index wrap is a MASK, not a
@@ -136,6 +142,8 @@ func (q *commandQueue) dropped() uint64 { return q.droppedCount.Load() }
 // only, so it mutates deck state without any lock.
 func (d *Deck) apply(c command) {
 	switch c.kind {
+	case cmdAnalysis:
+		d.applyAnalysis(c.grid, c.key)
 	case cmdLoad:
 		d.applyLoad(c.track, c.beatgrid, c.key)
 

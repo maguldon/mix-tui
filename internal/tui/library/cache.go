@@ -13,11 +13,15 @@ import (
 
 // Analysis is the cached result of analysing one track.
 type Analysis struct {
-	BPM           float64         `yaml:"bpm"`
-	HasGrid       bool            `yaml:"has_grid"`
-	Beats         []time.Duration `yaml:"beats,omitempty"`
-	KeyCamelot    string          `yaml:"key_camelot,omitempty"`
-	KeyConfidence float64         `yaml:"key_confidence,omitempty"`
+	BPM        float64         `yaml:"bpm"`
+	HasGrid    bool            `yaml:"has_grid"`
+	Beats      []time.Duration `yaml:"beats,omitempty"`
+	KeyCamelot string          `yaml:"key_camelot,omitempty"`
+	// KeyName is the musical name ("C minor"). Spec 6.5 wants the Camelot
+	// code in the track list and the musical name in the detail pane, so both
+	// are stored rather than deriving one from the other.
+	KeyName       string  `yaml:"key_name,omitempty"`
+	KeyConfidence float64 `yaml:"key_confidence,omitempty"`
 	// Size and ModTime are the file's state when the analysis was made. A
 	// mismatch on lookup means the file changed and the analysis is stale.
 	Size    int64     `yaml:"size"`

@@ -120,6 +120,19 @@ func (e *Engine) Deck(i int) *Deck {
 // DeckCount returns the number of decks.
 func (e *Engine) DeckCount() int { return len(e.decks) }
 
+// ApplyAnalysis attaches a background analysis result to a deck.
+//
+// Grid and key travel as one command, so a deck never shows a BPM whose beats
+// have not arrived yet. It is safe to call while audio is running: the result
+// is queued and applied at the next block boundary.
+func (e *Engine) ApplyAnalysis(deck int, grid *analyze.BeatGrid, key *analyze.Key) {
+	d := e.Deck(deck)
+	if d == nil {
+		return
+	}
+	d.post(command{kind: cmdAnalysis, grid: grid, key: key})
+}
+
 // Config returns a copy of the engine's configuration.
 func (e *Engine) Config() Config { return e.cfg }
 

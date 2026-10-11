@@ -32,7 +32,7 @@ func TestDeckAttachBeatGrid(t *testing.T) {
 	}
 
 	grid := &analyze.BeatGrid{BPM: 128, Confidence: 0.9}
-	d.AttachBeatGrid(grid)
+	d.AttachAnalysisNow(grid, nil)
 	if !d.HasBeatGrid() {
 		t.Error("attached grid not reported")
 	}
@@ -41,7 +41,7 @@ func TestDeckAttachBeatGrid(t *testing.T) {
 	}
 
 	// A nil grid returns the deck to its playable-but-ungridded state.
-	d.AttachBeatGrid(nil)
+	d.AttachAnalysisNow(nil, nil)
 	if d.HasBeatGrid() {
 		t.Error("nil grid still reported as available")
 	}
@@ -50,7 +50,7 @@ func TestDeckAttachBeatGrid(t *testing.T) {
 // A grid the analyser could not trust must not enable beat-dependent features.
 func TestDeckLowConfidenceGridIsNotAvailable(t *testing.T) {
 	d := NewDeck(0)
-	d.AttachBeatGrid(&analyze.BeatGrid{BPM: 128, Confidence: 0})
+	d.AttachAnalysisNow(&analyze.BeatGrid{BPM: 128, Confidence: 0}, nil)
 	if d.HasBeatGrid() {
 		t.Error("zero-confidence grid enabled beat features")
 	}

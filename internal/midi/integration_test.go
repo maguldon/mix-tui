@@ -39,8 +39,8 @@ func TestSyntheticControllerDrivesEngine(t *testing.T) {
 	track := engine.NewTrackFromPCM(dsp.Sine(440, 60))
 	eng.Deck(0).Load(track)
 	eng.Deck(1).Load(track)
-	eng.Deck(0).AttachBeatGrid(testGrid(128))
-	eng.Deck(1).AttachBeatGrid(testGrid(128))
+	eng.Deck(0).AttachAnalysisNow(testGrid(128), nil)
+	eng.Deck(1).AttachAnalysisNow(testGrid(128), nil)
 
 	table, err := midi.ParseMapping("test", []byte(performanceMapping))
 	if err != nil {
@@ -118,7 +118,7 @@ func TestIgnoredMessagesDoNotStopTheHandler(t *testing.T) {
 func TestShiftChordOverridesBaseInLiveEngine(t *testing.T) {
 	eng := engine.New(engine.Config{SampleRate: dsp.SampleRate, DeckCount: 2})
 	eng.Deck(0).Load(engine.NewTrackFromPCM(dsp.Sine(440, 30)))
-	eng.Deck(0).AttachBeatGrid(testGrid(128))
+	eng.Deck(0).AttachAnalysisNow(testGrid(128), nil)
 
 	table, err := midi.ParseMapping("t", []byte(performanceMapping))
 	if err != nil {

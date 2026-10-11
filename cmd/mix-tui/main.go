@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,6 +43,14 @@ func main() {
 }
 
 func run(args appArgs) error {
+	// Diagnostics go to a file, not stderr: the TUI owns the terminal, and a
+	// background analysis pass writing to stderr would corrupt the alt-screen
+	// frame it is running behind.
+	log := newLogger()
+	defer log.Close()
+
+	slogLog := log.slog()
+
 	// 1. Configuration. Loaded before anything opens a device, so a bad config
 	//    is reported before audio starts.
 	cfgPath := discoverConfig(args.configPath)
@@ -104,6 +113,8 @@ func run(args appArgs) error {
 	}
 
 	cache := library.OpenCache(filepath.Join(cacheDir(), "analysis"))
+	analyzer := NewAnalyzer(cache, eng, slogLog)
+
 	for i, path := range []string{args.aPath, args.bPath} {
 		if path == "" {
 			continue
@@ -120,6 +131,13 @@ func run(args appArgs) error {
 		}
 		// Nothing is rendering yet, so the immediate path is safe here.
 		eng.Deck(i).LoadNow(track, grid, key)
+		// A cache miss is the common case for a track seen for the first time,
+		// and without this the deck would simply never have a beatgrid: the
+		// analysis code existed but nothing called it, so sync, quantise,
+		// beat loops and zoom were all inert in a running application.
+		if grid == nil {
+			analyzer.Analyze(i, path, track.PCM)
+		}
 	}
 
 	// 5. Controls.
@@ -145,6 +163,12 @@ func run(args appArgs) error {
 			key = keyFrom(a)
 		}
 		eng.Deck(deck).LoadWith(track, grid, key)
+		// Analysis is scheduled rather than run here. A full STFT over a
+		// five-minute track takes long enough to be felt as a stall, and this
+		// is the path the user is waiting on; it applies itself when done.
+		if grid == nil {
+			analyzer.Analyze(deck, path, track.PCM)
+		}
 		return nil
 	}
 	model.SetLoader(loadInto)
@@ -287,4 +311,43 @@ func cacheDir() string {
 		return filepath.Join(home, ".cache", "mix-tui")
 	}
 	return ".mix-tui-cache"
+}
+
+// newLogger opens the diagnostic log.
+//
+// The TUI is a full-screen alt-screen program, so anything written to stderr
+// while it runs lands in the middle of a rendered frame. Diagnostics go to a
+// file instead; without this, a background analysis pass would have had
+// nowhere safe to report that it finished.
+func newLogger() *diagLogger {
+	f, err := os.OpenFile(filepath.Join(cacheDir(), "mix-tui.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		// No log file is not a reason to refuse to start.
+		return &diagLogger{logger: slog.New(slog.NewTextHandler(discard{}, nil))}
+	}
+	return &diagLogger{
+		file:   f,
+		logger: slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+}
+
+// discard is an io.Writer that drops everything, used when no log file can be
+// opened.
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// diagLogger owns the diagnostic log file so it can be closed on exit.
+type diagLogger struct {
+	file   *os.File
+	logger *slog.Logger
+}
+
+func (d *diagLogger) slog() *slog.Logger { return d.logger }
+
+func (d *diagLogger) Close() {
+	if d.file != nil {
+		_ = d.file.Close()
+	}
 }

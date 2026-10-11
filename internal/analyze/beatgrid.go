@@ -52,7 +52,13 @@ const (
 // to find: callers get a low-confidence grid they can check rather than a
 // nil-pointer hazard (spec §8).
 func AnalyzeBeatGrid(pcm dsp.Stereo) (*BeatGrid, error) {
-	spec := ComputeSpectrogram(pcm, windowLen, hopSize)
+	return BeatGridFromSpec(ComputeSpectrogram(pcm, windowLen, hopSize))
+}
+
+// BeatGridFromSpec is the beat tracker half of Analyze, taking a spectrogram
+// the caller may already have. Spec 4.1 wants one STFT to serve both analyses;
+// calling AnalyzeBeatGrid and AnalyzeKey separately ran the FFT twice.
+func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 	if len(spec.Frames) < 4 {
 		return &BeatGrid{Confidence: 0}, nil
 	}
