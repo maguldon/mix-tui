@@ -27,6 +27,7 @@ import "C"
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -71,15 +72,21 @@ func releasePkg() {
 
 // Context owns a libpipewire thread loop and the context on it.
 type Context struct {
-	loop *C.struct_pw_thread_loop
-	ctx  *C.struct_pw_context
+	// loop is immutable once constructed. Close stops and destroys it but does
+	// NOT nil the field: nil-ing it while other goroutines read it to decide
+	// whether the loop is safe to touch was a data race, and it made every
+	// read a three-way check. closed is the atomic that says whether it is
+	// still usable, so a late reader observes a stale-but-valid pointer
+	// instead of a torn one.
+	loop   *C.struct_pw_thread_loop
+	closed atomic.Bool
+	ctx    *C.struct_pw_context
 	// core is the connected pipewire core. A stream is created from the core,
 	// not the context, so NewContext connects eagerly: a caller that only
 	// wants the loop would otherwise be told there is a daemon and then
 	// discover otherwise at stream creation.
-	core   *C.struct_pw_core
-	mu     sync.Mutex
-	closed bool
+	core *C.struct_pw_core
+	mu   sync.Mutex
 }
 
 // NewContext initialises libpipewire, creates a named thread loop, and starts
@@ -153,10 +160,10 @@ func NewContext(name string) (*Context, error) {
 // PipeWire owns, locking from Go is how we enter that thread's world
 // synchronously.
 // alive reports whether the loop is still usable.
-func (c *Context) alive() bool { return c != nil && c.loop != nil }
+func (c *Context) alive() bool { return c != nil && c.loop != nil && !c.closed.Load() }
 
 func (c *Context) lock() {
-	if c == nil || c.loop == nil {
+	if !c.alive() {
 		return
 	}
 	C.pw_thread_loop_lock(c.loop)
@@ -182,7 +189,7 @@ func (c *Context) pwcore() *C.struct_pw_core {
 // type leaks into this package's exported API — the rest of the package would
 // then have to carry a cgo import of its own.
 func (c *Context) Loop() unsafe.Pointer {
-	if c == nil || c.loop == nil {
+	if !c.alive() {
 		return nil
 	}
 	return unsafe.Pointer(c.loop)
@@ -199,10 +206,10 @@ func (c *Context) Close() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return nil
 	}
-	c.closed = true
+	c.closed.Store(true)
 
 	if c.loop != nil {
 		C.pw_thread_loop_stop(c.loop)
@@ -221,7 +228,8 @@ func (c *Context) Close() error {
 	}
 	if c.loop != nil {
 		C.pw_thread_loop_destroy(c.loop)
-		c.loop = nil
+		// The field is left set on purpose: a concurrent reader must see a
+		// valid pointer (and rely on `closed`) rather than a race with nil.
 	}
 	releasePkg()
 	return nil
@@ -247,18 +255,32 @@ func Available() bool {
 		return false
 	}
 
+	// The loop thread must be RUNNING before connecting. pw_context_connect
+	// marshals a handshake through the loop and waits for the reply; with no
+	// loop thread to service it, the call blocks forever. This is the same
+	// ordering NewContext uses, and the reason Available() used to hang the UI
+	// thread on a wedged daemon (spec §8 makes it the gate for the idle-art
+	// diagnostic screen).
+	if rc := C.pw_thread_loop_start(loop); rc != 0 {
+		C.pw_context_destroy(ctx)
+		C.pw_thread_loop_destroy(loop)
+		return false
+	}
+
 	// pw_context_connect returns a pw_core*, NULL on failure. Comparing it to
 	// an int would treat a non-NULL pointer as an error code.
 	C.pw_thread_loop_lock(loop)
 	core := C.pw_context_connect(ctx, nil, 0)
 	if core == nil {
 		C.pw_thread_loop_unlock(loop)
+		C.pw_thread_loop_stop(loop)
 		C.pw_context_destroy(ctx)
 		C.pw_thread_loop_destroy(loop)
 		return false
 	}
 	C.pw_core_disconnect(core)
 	C.pw_thread_loop_unlock(loop)
+	C.pw_thread_loop_stop(loop)
 	C.pw_context_destroy(ctx)
 	C.pw_thread_loop_destroy(loop)
 	return true
