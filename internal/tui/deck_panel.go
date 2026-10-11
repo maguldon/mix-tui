@@ -158,23 +158,32 @@ func firstLine(lines []string) string {
 // Two entries per cell, matching Peaks' stereo layout. Narrowing an envelope
 // takes the extreme of the samples it collapses, so a transient between cells
 // still shows rather than disappearing.
+//
+// Everything below indexes ENTRIES, not cells. Peaks stores 2 entries per cell
+// (left/right channel), so an envelope for a w-cell panel is 2w entries long.
+// The first version computed its source window in cells and then used those
+// indices against the entry arrays, which both under-covered the tail and mixed
+// the two coordinate systems. For every panel narrower than the 64 cells the
+// cache holds -- which is every default layout -- the right half of the envelope
+// was sampled from the wrong place.
 func resamplePeaks(p engine.Peaks, w int) Peaks {
 	if w <= 0 || len(p.Max) == 0 {
 		return Peaks{Min: make([]float32, w*2), Max: make([]float32, w*2)}
 	}
-	src := len(p.Max) / 2
-	if src == w {
+	n := len(p.Max)
+	outN := w * 2
+	if n == outN {
 		return p // already the right resolution
 	}
-	out := Peaks{Min: make([]float32, w*2), Max: make([]float32, w*2)}
-	for c := 0; c < w*2; c++ {
-		lo := c * src / w
-		hi := (c + 1) * src / w
+	out := Peaks{Min: make([]float32, outN), Max: make([]float32, outN)}
+	for c := 0; c < outN; c++ {
+		lo := c * n / outN
+		hi := (c + 1) * n / outN
 		if hi <= lo {
 			hi = lo + 1
 		}
-		if hi > src {
-			hi = src
+		if hi > n {
+			hi = n
 		}
 		var mn, mx float32
 		mn, mx = p.Min[lo], p.Max[lo]

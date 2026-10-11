@@ -49,7 +49,11 @@ func (m *Model) handleKey(k string) {
 	// Mode-relative keys. A key meaning different things in two modes is fine,
 	// as long as the footer says which mode you are in.
 	if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
-		if m.handleBrowserKey(name) {
+		// The browser gets the RAW key, not the binding name. bindingName maps
+		// " " to "space", which is 5 runes, so the printable-rune test below
+		// rejected it and the space fell through to the deck-play binding:
+		// typing a space in the filter box started the focused deck instead.
+		if m.handleBrowserKey(k) {
 			return
 		}
 	}
@@ -84,6 +88,12 @@ func (m *Model) handleKey(k string) {
 
 // handleBrowserKey handles the browser's own keys. It reports whether it
 // consumed the key.
+//
+// It takes the RAW key string. Callers must not pass bindingName(k) here:
+// bindingName maps " " to "space", which is five runes, so the printable-rune
+// test at the bottom rejected it and the space fell through to the deck-play
+// binding. Typing a space in the filter box started the focused deck. The
+// browser needs to see the character the user actually pressed.
 func (m *Model) handleBrowserKey(name string) bool {
 	switch name {
 	case "up":
@@ -118,6 +128,9 @@ func (m *Model) handleBrowserKey(name string) bool {
 	}
 	// Any other single printable rune filters the list. The full-screen
 	// browser previously had no way to narrow a track list at all.
+	//
+	// r[0] >= ' ' admits the space bar, which is what the user wants when they
+	// type a multi-word query like "beat that". Control runes fall below ' '.
 	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
 		m.st.Query += name
 		return true
