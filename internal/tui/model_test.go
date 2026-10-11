@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/maguldon/mix-tui/internal/config"
 	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 type fakeEngine struct {
@@ -334,5 +337,103 @@ func TestRenderAtIsStillRectangularInEveryMode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestLibraryEnterLoadsSelectedTrack is the test that was missing: the review
+// found ENTER consumed the key and did nothing, so there was no way to load a
+// track at all and the empty-deck art told the user to press a key that was not
+// bound.
+func TestLibraryEnterLoadsSelectedTrack(t *testing.T) {
+	m, _ := testModel(t)
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/m/1.wav", Title: "Inner Speaker", BPM: 128, Duration: 3 * time.Minute})
+	m.SetLibrary(ix)
+
+	var loaded []string
+	m.SetLoader(func(deck int, path string) error {
+		loaded = append(loaded, path)
+		return nil
+	})
+
+	m2, _ := m.Update(keyMsg("/"))
+	m3, _ := m2.(*Model).Update(keyMsg("enter"))
+	if len(loaded) != 1 || loaded[0] != "/m/1.wav" {
+		t.Fatalf("enter loaded %v, want [/m/1.wav]", loaded)
+	}
+	// Loading returns to the decks so the user sees the result.
+	if m3.(*Model).State().Mode != ModeMix {
+		t.Error("loading did not return to the mix view")
+	}
+}
+
+// TestOverlayIsReachable covers the other half: the quick-load overlay had no
+// producer at all, so RenderOverlay was dead code in production.
+func TestOverlayIsReachable(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("l"))
+	if m2.(*Model).State().Mode != ModeOverlay {
+		t.Fatal("the key the empty-deck art tells the user to press does not open the overlay")
+	}
+}
+
+// TestOverlayTypingFilters covers filtering, which only worked in the
+// unreachable overlay and never in the full-screen browser.
+func TestOverlayTypingFilters(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("l"))
+	mm := m2.(*Model)
+	for _, c := range "ware" {
+		mm2, _ := mm.Update(keyMsg(string(c)))
+		mm = mm2.(*Model)
+	}
+	if mm.State().Query != "ware" {
+		t.Errorf("query = %q, want %q", mm.State().Query, "ware")
+	}
+}
+
+// TestBackspaceDeletesARuneNotAByte guards against leaving invalid UTF-8.
+func TestBackspaceDeletesARuneNotAByte(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(keyMsg("l"))
+	mm := m2.(*Model)
+	mm.Update(keyMsg("日"))
+	mm3, _ := mm.Update(keyMsg("backspace"))
+	if got := mm3.(*Model).State().Query; got != "" {
+		t.Errorf("query = %q, want empty; got %q which is not valid UTF-8", got, got)
+	}
+}
+
+// TestLoadErrorSurfacesAndExpires checks a failed load is reported rather than
+// swallowed.
+func TestLoadErrorSurfacesAndExpires(t *testing.T) {
+	m, _ := testModel(t)
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/bad.wav", Title: "Broken"})
+	m.SetLibrary(ix)
+	m.SetLoader(func(int, string) error { return errTest })
+
+	m2, _ := m.Update(keyMsg("/"))
+	m3, _ := m2.(*Model).Update(keyMsg("enter"))
+	if m3.(*Model).State().LastErr == "" {
+		t.Error("a failed load was swallowed")
+	}
+	if m3.(*Model).State().Mode != ModeLibrary {
+		t.Error("a failed load closed the library; the user lost their place")
+	}
+}
+
+var errTest = errors.New("decode failed")
+
+// TestDebugStatsFuncIsSampled covers the wiring that made the debug overlay
+// report permanent zeros -- the stats source was never installed.
+func TestDebugStatsFuncIsSampled(t *testing.T) {
+	m, _ := testModel(t)
+	m.SetStatsFunc(func() views.DebugStats {
+		return views.DebugStats{AudioExpected: true, MainCallbacks: 42, CueCallbacks: 42}
+	})
+	m2, _ := m.Update(tickMsg{t: time.Now()})
+	if got := m2.(*Model).stats.MainCallbacks; got != 42 {
+		t.Errorf("callbacks = %d, want 42; the stats source is not being sampled", got)
 	}
 }

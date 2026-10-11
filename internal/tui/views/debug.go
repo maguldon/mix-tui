@@ -32,6 +32,9 @@ type DebugStats struct {
 	CueCallbacks  uint64
 	// AnalysisState is whatever the library scanner is doing.
 	AnalysisState string
+	// AudioExpected reports that an audio device was actually opened. The
+	// "no callbacks" warning is only meaningful when it was.
+	AudioExpected bool
 }
 
 // knownMIDICategories are always listed, even at zero.
@@ -57,12 +60,14 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	lines = append(lines, kv("underrun", fmt.Sprintf("%d", stats.Underruns), w)...)
 	lines = append(lines, kv("blocks rendered", fmt.Sprintf("%d", stats.BlocksRendered), w)...)
 	lines = append(lines, kv("worst render", fmt.Sprintf("%v", stats.RenderWallMax.Round(time.Microsecond)), w)...)
+	lines = append(lines, kv("ring overruns", fmt.Sprintf("%d", s.Overruns), w)...)
 	lines = append(lines, kv("MAIN callbacks", fmt.Sprintf("%d", stats.MainCallbacks), w)...)
 	lines = append(lines, kv("CUE callbacks", fmt.Sprintf("%d", stats.CueCallbacks), w)...)
 
 	// The single most useful diagnostic: both streams idle means nothing is
-	// draining, which looks identical to "no device" from the outside.
-	if stats.MainCallbacks == 0 && stats.CueCallbacks == 0 {
+	// draining. It is only meaningful once playback was expected, so a headless
+	// or -no-audio run does not raise a permanent false alarm.
+	if stats.AudioExpected && stats.MainCallbacks == 0 && stats.CueCallbacks == 0 {
 		lines = append(lines, pad(warnStyle.Render("! no audio callbacks: check the device"), w))
 	}
 	if stats.Underruns > 0 {

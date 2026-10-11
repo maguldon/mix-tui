@@ -162,6 +162,8 @@ var keyDescriptions = map[string]string{
 	"Z":      "zoom level",
 	"v":      "cycle layout",
 	"/":      "library",
+	"l":      "quick-load overlay",
+	"tab":    "move deck focus",
 	"escape": "close overlay",
 	"ctrl+c": "quit",
 }

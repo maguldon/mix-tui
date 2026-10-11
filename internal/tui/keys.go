@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/maguldon/mix-tui/internal/engine"
+	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 // handleKey routes a key press.
@@ -36,12 +38,25 @@ func (m *Model) handleKey(k string) {
 	case "/":
 		m.st.Mode = toggleMode(m.st.Mode, ModeLibrary)
 		return
+	case "l":
+		// The quick-load overlay, reachable from the mix view. Without this the
+		// overlay had no producer at all: a view nothing can open is dead code,
+		// and the empty-deck art told the user to press exactly this key.
+		if m.st.Mode == ModeMix {
+			m.st.Mode = ModeOverlay
+		}
+		return
 	}
 
 	// Mode-relative keys. A key meaning different things in two modes is fine,
 	// as long as the footer says which mode you are in.
 	if m.st.Mode == ModeLibrary {
 		if m.handleLibraryKey(name) {
+			return
+		}
+	}
+	if m.st.Mode == ModeOverlay {
+		if m.handleOverlayKey(name) {
 			return
 		}
 	}
@@ -86,17 +101,71 @@ func (m *Model) handleLibraryKey(name string) bool {
 	case "down":
 		m.st.TrackSel++
 		return true
-	case "left":
-		if m.st.Query != "" {
-			m.st.Query = m.st.Query[:len(m.st.Query)-1]
-		}
+	case "left", "backspace":
+		m.st.Query = dropLastRune(m.st.Query)
 		return true
 	case "right":
 		return true
 	case "enter":
+		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
+		// did nothing before, so the browser had no way to load anything.
+		m.loadSelected()
 		return true
 	}
 	return false
+}
+
+// loadSelected loads the highlighted track into the focused deck and returns to
+// the decks so the user sees the result.
+func (m *Model) loadSelected() {
+	tr, ok := m.selectedTrack()
+	if !ok {
+		return
+	}
+	if err := m.LoadSelected(m.st.Focus, tr.Path); err != nil {
+		return // the error is already recorded and auto-expires
+	}
+	m.st.Mode = ModeMix
+	m.st.TrackSel = 0
+	m.st.Query = ""
+}
+
+// selectedTrack resolves the cursor against the filtered library.
+func (m *Model) selectedTrack() (library.Track, bool) {
+	if m.lib == nil {
+		return library.Track{}, false
+	}
+	return views.MatchTrack(m.lib.Tracks(), m.st.Query, m.st.TrackSel)
+}
+
+// handleOverlayKey handles the quick-load overlay: printable characters filter,
+// enter loads into the focused deck.
+func (m *Model) handleOverlayKey(name string) bool {
+	switch name {
+	case "enter":
+		m.loadSelected()
+		return true
+	case "backspace":
+		m.st.Query = dropLastRune(m.st.Query)
+		return true
+	}
+	// Any other single printable rune is appended to the query.
+	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
+		m.st.Query += name
+		return true
+	}
+	return false
+}
+
+// dropLastRune removes one rune, not one byte. Deleting a byte from a
+// multi-byte query leaves invalid UTF-8, which renders as U+FFFD at one column
+// per byte.
+func dropLastRune(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return ""
+	}
+	return string(r[:len(r)-1])
 }
 
 // applyAction applies a resolved Action, updating view state for the controls

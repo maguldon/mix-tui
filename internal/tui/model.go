@@ -43,6 +43,17 @@ type Model struct {
 	// midi is attached when a device is opened, so the debug overlay can show
 	// ignored-message counts.
 	midi *midi.Handler
+	// loadFunc decodes and loads a track into a deck. The TUI cannot decode
+	// itself: that is the audio package's job, and doing it here would put file
+	// I/O in the view layer. The binary supplies it.
+	loadFunc func(deck int, path string) error
+	// statsFunc is supplied by the binary to report device and pump health.
+	//
+	// It is a function rather than a pipewire type so the TUI does not import
+	// the device layer: doing so would drag cgo into the view package and break
+	// the "no engine access below the view" boundary the whole test strategy
+	// rests on.
+	statsFunc func() views.DebugStats
 
 	st ViewState
 
@@ -87,7 +98,32 @@ func (m *Model) Engine() Engine { return m.eng }
 // SetLibrary attaches a scanned library for the browser and overlay.
 func (m *Model) SetLibrary(ix *library.Index) { m.lib = ix }
 
-// SetStats updates the diagnostic surface shown by the debug overlay.
+// SetLoader supplies the track-loading function the library and overlay use.
+func (m *Model) SetLoader(f func(deck int, path string) error) { m.loadFunc = f }
+
+// LoadSelected loads a path into a deck, reporting why it failed.
+func (m *Model) LoadSelected(deck int, path string) error {
+	if m.loadFunc == nil {
+		return fmt.Errorf("loading is not available")
+	}
+	if err := m.loadFunc(deck, path); err != nil {
+		m.setError(err.Error())
+		return err
+	}
+	m.setError("")
+	return nil
+}
+
+func (m *Model) setError(msg string) {
+	m.st.LastErr = msg
+	m.st.LastErrAt = time.Now()
+}
+
+// SetStatsFunc supplies a source of device and pump statistics for the debug
+// overlay. Passing nil restores the default, which reports zeros.
+func (m *Model) SetStatsFunc(f func() views.DebugStats) { m.statsFunc = f }
+
+// SetStats sets the diagnostic surface directly.
 func (m *Model) SetStats(s views.DebugStats) { m.stats = s }
 
 // MIDIHandler returns a midi.Handler that applies to this model's engine.
@@ -122,6 +158,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.expireErr()
 		m.refreshMIDICounts()
+		m.refreshStats()
 		// Mirror authoritative control values from the snapshot each tick
 		// rather than keeping a second copy that can drift.
 		m.mirrorFromSnapshot()
@@ -149,6 +186,13 @@ func bindingName(k string) string {
 		return "escape"
 	}
 	return k
+}
+
+// refreshStats samples device and pump health for the debug overlay.
+func (m *Model) refreshStats() {
+	if m.statsFunc != nil {
+		m.stats = m.statsFunc()
+	}
 }
 
 // refreshMIDICounts copies the MIDI handler's tallies into the debug stats, so

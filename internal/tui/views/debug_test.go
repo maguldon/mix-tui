@@ -68,9 +68,16 @@ func TestDebugShowsZeroCounts(t *testing.T) {
 // reporting zero callbacks means nothing is draining, which is the symptom of a
 // device the session manager would not configure.
 func TestDebugFlagsAnUnfedDevice(t *testing.T) {
-	out := RenderDebug(120, 40, emptySnap(), DebugStats{})
+	// Only when a device was actually opened: a headless run must not raise a
+	// permanent false alarm telling a user with working audio that it is broken.
+	out := RenderDebug(120, 40, emptySnap(), DebugStats{AudioExpected: true})
 	if !strings.Contains(out, "no audio") && !strings.Contains(out, "check") {
 		t.Errorf("zero callbacks on both streams was not flagged:\n%s", out)
+	}
+
+	quiet := RenderDebug(120, 40, emptySnap(), DebugStats{AudioExpected: false})
+	if strings.Contains(quiet, "no audio callbacks") {
+		t.Errorf("a run with no audio device raised a device warning:\n%s", quiet)
 	}
 }
 

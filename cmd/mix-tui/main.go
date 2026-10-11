@@ -21,6 +21,7 @@ import (
 	"github.com/maguldon/mix-tui/internal/pipewire"
 	"github.com/maguldon/mix-tui/internal/tui"
 	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 func main() {
@@ -121,6 +122,24 @@ func run(args appArgs) error {
 	model := tui.New(eng, cfg, keys)
 	model.SetLibrary(lib)
 
+	// Loading decodes audio, which belongs to the audio package rather than the
+	// view layer, so the binary supplies it. Without this the library and the
+	// overlay could browse but never load, and the empty-deck art told the user
+	// to press a key that did nothing.
+	loadInto := func(deck int, path string) error {
+		track, err := audio.Decode(path)
+		if err != nil {
+			return fmt.Errorf("load: %w", err)
+		}
+		eng.Deck(deck).Load(track)
+		if a, ok := cache.Get(path); ok {
+			eng.Deck(deck).AttachBeatGrid(beatGridFrom(a, track))
+			eng.Deck(deck).AttachKey(keyFrom(a))
+		}
+		return nil
+	}
+	model.SetLoader(loadInto)
+
 	if !args.noMIDI {
 		handler := model.MIDIHandler()
 		listener, err := midi.OpenListener(handler)
@@ -155,6 +174,23 @@ func run(args appArgs) error {
 			defer close(pumpDone)
 			_ = pump.Run(ctx)
 		}()
+
+		// Feed the debug overlay real numbers. Without this the overlay's
+		// "no audio callbacks" warning is permanently true and its advice is
+		// worse than useless -- it would tell a user with working audio that
+		// their device is broken.
+		model.SetStatsFunc(func() views.DebugStats {
+			mainStats, cueStats := out.Stats()
+			ps := pump.Stats()
+			return views.DebugStats{
+				AudioExpected:  true,
+				Underruns:      mainStats.Starves + cueStats.Starves,
+				MainCallbacks:  mainStats.Callbacks,
+				CueCallbacks:   cueStats.Callbacks,
+				BlocksRendered: ps.BlocksRendered,
+				RenderWallMax:  ps.RenderWallMax,
+			}
+		})
 	}
 
 	// 7. A single frame to a file, without a terminal. This is the one flag
