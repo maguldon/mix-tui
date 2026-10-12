@@ -257,6 +257,14 @@ func run(args appArgs) error {
 	// 7. A single frame to a file, without a terminal. This is the one flag
 	//    that makes layout work verifiable in CI.
 	if args.screenshot != "" {
+		// Let in-flight analysis land first. Analysis is asynchronous so it
+		// never sits on the path a user waits on, but a screenshot is a single
+		// settled frame: taken too early it shows "--" for BPM and key on a
+		// track that has both.
+		waitCtx, waitCancel := context.WithTimeout(ctx, 60*time.Second)
+		analyzer.Wait(waitCtx)
+		waitCancel()
+
 		// Drain the engine's command queue before capturing.
 		//
 		// Deck actions do not mutate state directly: they are posted and applied

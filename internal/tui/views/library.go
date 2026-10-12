@@ -275,20 +275,24 @@ func crateRows(ix *library.Index, w, rows int) []string {
 		}
 	}
 	out = append(out, pad(dimStyle.Render(strings.Repeat("-", minInt(w, 6))), w))
-	for i := 0; i < rows-2; i++ {
-		name := ""
-		switch {
-		case i == 0:
-			name = "All tracks"
-		case i == 1:
-			name = fmt.Sprintf("  (%d tracks)", ix.Len())
-		default:
-			// Crates beyond the two summary rows. There is no crate store on
-			// the Model yet, so this pane reports what it has rather than
-			// pretending a crate picker exists.
-			name = fmt.Sprintf("  (crate %d: none saved)", i-1)
+	entries := []string{"All tracks", fmt.Sprintf("  (%d tracks)", ix.Len())}
+	// Crate storage is not implemented. Listing numbered placeholders filled
+	// the pane with "(crate 7: none saved)", which reads as lost data rather
+	// than as an absent feature -- an honest empty pane is better than a
+	// misleading full one. Once crates exist this becomes a real list.
+	for _, e := range entries {
+		if len(out) >= rows {
+			return out
 		}
-		out = append(out, pad(name, w))
+		out = append(out, pad(e, w))
+	}
+	// One line, not one per row: the pane is mostly empty, and filling it with
+	// the same placeholder reads as though something is wrong.
+	if len(out) < rows {
+		out = append(out, pad(dimStyle.Render("  (no crates yet)"), w))
+	}
+	for len(out) < rows {
+		out = append(out, pad("", w))
 	}
 	return out
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync"
@@ -215,5 +216,44 @@ func TestAnalyzerRejectsOutOfRangeDecks(t *testing.T) {
 	eng.mu.Unlock()
 	if calls != 0 {
 		t.Errorf("%d results applied for out-of-range decks, want 0", calls)
+	}
+}
+
+// TestAnalyzerWaitForInFlight. -screenshot captures one settled frame, and
+// analysis is asynchronous so it does not sit on the path a user waits on. The
+// two conflict: a screenshot taken before analysis lands shows "--" for BPM and
+// key on a track that has both, which is exactly what a screenshot is for
+// demonstrating.
+func TestAnalyzerWaitForInFlight(t *testing.T) {
+	eng := newFakeTarget(2)
+	a := NewAnalyzer(nil, eng, nil)
+	defer a.CancelAll()
+
+	a.Analyze(0, writeTempTrack(t, clickTrack(128, 30)), clickTrack(128, 30))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	a.Wait(ctx)
+
+	eng.mu.Lock()
+	calls := eng.calls
+	eng.mu.Unlock()
+	if calls == 0 {
+		t.Error("Wait returned before any analysis applied")
+	}
+}
+
+// TestAnalyzerWaitReturnsWhenIdle. Waiting with nothing in flight must return
+// immediately rather than blocking until the context expires.
+func TestAnalyzerWaitReturnsWhenIdle(t *testing.T) {
+	a := NewAnalyzer(nil, newFakeTarget(2), nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	a.Wait(ctx)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("Wait blocked for %v with nothing in flight", elapsed)
 	}
 }

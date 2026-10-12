@@ -1,6 +1,34 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/maguldon/mix-tui/internal/engine"
+)
+
+// TestUnanalysedDeckShowsNoTempo. Spec 8: a track with no analysis shows the
+// unknown marker, never a fabricated number.
+//
+// This used to be asserted at the acceptance level, by expecting a fixture's
+// beat tracker to fail. It stopped failing once analysis was wired to load --
+// correctly -- so the assertion was deleted along with the bad premise. The
+// property it was reaching for is real, so it is pinned here instead, on a
+// snapshot that genuinely carries no grid.
+func TestUnanalysedDeckShowsNoTempo(t *testing.T) {
+	d := engine.DeckState{Index: 0, Loaded: true, Title: "Unknown"}
+	// No BPM and no HasBeatGrid.
+	if d.BPM != 0 || d.HasBeatGrid {
+		t.Fatal("fixture is not unanalysed")
+	}
+
+	p := renderDeckPanel(40, d, ViewState{}, true, 12)
+	for _, row := range p.Rows {
+		if strings.Contains(row.Text, "0.00") {
+			t.Errorf("an unanalysed deck displayed a tempo: %q", row.Text)
+		}
+	}
+}
 
 // TestZoomedDeckShowsAnOverview. RenderOverview was written, tested, and never
 // called from a view: the review that "fixed" it addressed a blank return value

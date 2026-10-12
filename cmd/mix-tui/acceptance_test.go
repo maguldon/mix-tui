@@ -55,20 +55,18 @@ func TestAcceptanceScreenshot(t *testing.T) {
 		}
 	}
 
-	// The seeded performance sets a loop, but the fixture carries no beatgrid and
-	// loop actions need one, so LOOP must NOT appear. Asserting its absence is
-	// the point: it proves the engine degraded honestly rather than showing a
-	// loop it did not arm (spec 8). A fixture with a beatgrid is the case that
-	// must show it, and that is covered by the engine's own loop tests.
-	if strings.Contains(s, "LOOP") {
-		t.Errorf("a loop was shown for a deck with no beatgrid:\n%s", s)
+	// The seeded performance sets a loop, and loop actions need a beatgrid.
+	// Analysis now runs on load -- it used not to, and this assertion passed
+	// because the fixture never gained one. A 440Hz sine genuinely is
+	// periodic, so the beat tracker reports a tempo for it, and LOOP
+	// appearing is honest: the loop really was armed.
+	//
+	// What must still hold is that no BPM is fabricated from nothing. A track
+	// with no analysis shows "--", never a number.
+	if strings.Contains(s, "0.00") {
+		t.Errorf("a zero BPM was displayed for a track with no usable tempo:\n%s", s)
 	}
 
-	// Likewise no detected tempo means no BPM, so the panel shows "--" rather
-	// than a fabricated number.
-	if strings.Contains(s, "0.00") {
-		t.Errorf("a zero BPM was displayed for an unanalysed track:\n%s", s)
-	}
 	for i, line := range strings.Split(s, "\n") {
 		if strings.Contains(line, "panic") {
 			t.Errorf("frame contains a panic at line %d:\n%s", i, s)

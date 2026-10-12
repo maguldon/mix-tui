@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
@@ -177,6 +178,37 @@ func (a *Analyzer) apply(deck int, res *analyze.Result) {
 	a.log.Debug("analysis complete",
 		"deck", deck, "bpm", res.Grid.BPM, "has_grid", res.HasGrid,
 		"key", res.Key.Camelot, "has_key", res.HasKey, "took", res.Duration)
+}
+
+// Wait blocks until no analysis is in flight, or ctx is done.
+//
+// Analysis is asynchronous on purpose -- it must not sit on the path a user
+// waits on. But a caller that needs a settled frame rather than a live one
+// needs the other behaviour: -screenshot captures a single frame, and one
+// taken before analysis lands shows "--" for BPM and key on a track that
+// does have them.
+//
+// There is no correctness reason for a screenshot to wait; there is only the
+// question of whether it is the picture anyone wants to look at.
+func (a *Analyzer) Wait(ctx context.Context) {
+	if a == nil {
+		return
+	}
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		a.mu.Lock()
+		n := len(a.pending)
+		a.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // Cancel stops an in-flight analysis for a path.
