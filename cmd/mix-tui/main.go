@@ -23,7 +23,6 @@ import (
 	"github.com/maguldon/mix-tui/internal/pipewire"
 	"github.com/maguldon/mix-tui/internal/tui"
 	"github.com/maguldon/mix-tui/internal/tui/library"
-	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 // scanTimeout bounds a library scan. It is generous because scanning only
@@ -72,30 +71,30 @@ func run(args appArgs) error {
 		return fmt.Errorf("keybindings: %w", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// 2. Audio device, so the engine can be built at the rate the device
 	//    actually granted rather than the one we asked for.
 	rate := cfg.Audio.SampleRate
-	var out *pipewire.Output
-	if !args.noAudio {
-		out, err = pipewire.NewOutput(pipewire.OutputConfig{
-			SampleRate: rate,
-			RingFrames: cfg.Audio.RingFrames,
-			MainTarget: cfg.Audio.MainTarget,
-			CueTarget:  cfg.Audio.CueTarget,
-		})
-		if err != nil {
-			// A missing device is not fatal: the interface still runs and can
-			// say why there is no sound (spec §8). Audio simply will not play.
-			fmt.Fprintf(os.Stderr, "mix-tui: no audio device: %v\n", err)
-		} else if rate != 0 && out.SampleRate() != rate {
-			// The device disagreed with the request. Rebuild at its rate rather
-			// than rendering 44.1k into a 48k stream.
-			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
-				out.SampleRate(), rate)
-		}
+	// A device is opened once here and the session can retry in the background,
+	// so a missing sound card costs a banner rather than silence (spec §8).
+	audioCfg := pipewire.OutputConfig{
+		SampleRate: rate,
+		RingFrames: cfg.Audio.RingFrames,
+		MainTarget: cfg.Audio.MainTarget,
+		CueTarget:  cfg.Audio.CueTarget,
 	}
-	if out != nil {
-		rate = out.SampleRate()
+	var session *audioSession
+	if !args.noAudio {
+		session = startupAudio(ctx, &audioCfg)
+		if session.Active() && rate != 0 && session.rate() != rate {
+			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
+				session.rate(), rate)
+		}
+		if session.Active() {
+			rate = session.rate()
+		}
 	}
 	if rate <= 0 {
 		rate = dsp.SampleRate
@@ -141,6 +140,12 @@ func run(args appArgs) error {
 	// one failed file open per track to discover a mostly-empty cache.
 	if n := lib.ApplyAnalysis(cache.All()); n > 0 {
 		fmt.Fprintf(os.Stderr, "mix-tui: %d track(s) restored from the analysis cache\n", n)
+	}
+	// Drop analyses for tracks that have since been deleted (spec 8). The index
+	// is rebuilt from the filesystem each start, so without this the cache grows
+	// forever describing a collection the user no longer has.
+	if n := cache.EvictMissing(); n > 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: dropped %d cached analysis file(s) for missing tracks\n", n)
 	}
 
 	for i, path := range []string{args.aPath, args.bPath} {
@@ -260,9 +265,6 @@ func run(args appArgs) error {
 		model.AttachMIDI(seedMIDI(model))
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// Hot-reload the mapping table. Without this the watcher existed but was
 	// never started, so editing a mapping mid-set did nothing -- while the README
 	// told users it would take effect within two seconds.
@@ -286,35 +288,16 @@ func run(args appArgs) error {
 		}
 	}
 
-	// 6. Renderer.
-	var pumpDone chan struct{}
-	if out != nil {
-		if err := out.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "mix-tui: audio start: %v\n", err)
-		}
-		pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
-		pumpDone = make(chan struct{})
-		go func() {
-			defer close(pumpDone)
-			_ = pump.Run(ctx)
-		}()
+	// 6. Audio. The session was opened before the engine existed so the engine
+	//    could be built at the device's real rate; now it gets the engine, and
+	//    from here it can come up on its own if the device appears later.
+	if session != nil {
+		session.adopt(eng)
+		defer session.Close()
+		go session.retry(ctx)
 
-		// Feed the debug overlay real numbers. Without this the overlay's
-		// "no audio callbacks" warning is permanently true and its advice is
-		// worse than useless -- it would tell a user with working audio that
-		// their device is broken.
-		model.SetStatsFunc(func() views.DebugStats {
-			mainStats, cueStats := out.Stats()
-			ps := pump.Stats()
-			return views.DebugStats{
-				AudioExpected:  true,
-				Underruns:      mainStats.Starves + cueStats.Starves,
-				MainCallbacks:  mainStats.Callbacks,
-				CueCallbacks:   cueStats.Callbacks,
-				BlocksRendered: ps.BlocksRendered,
-				RenderWallMax:  ps.RenderWallMax,
-			}
-		})
+		model.SetStatsFunc(session.Stats)
+		model.SetAudioStatus(func() (bool, string) { return session.Active(), session.Reason() })
 	}
 
 	// 7. A single frame to a file, without a terminal. This is the one flag
@@ -349,16 +332,14 @@ func run(args appArgs) error {
 		return writeScreenshot(model, args.screenshot, w, h)
 	}
 
+	// Boot art, once, before the alt screen takes the terminal over. Spec 6.4
+	// names audio initialisation as its place, and this is the only moment the
+	// reason for a missing device is readable without scrolling back.
+	printSplash(os.Stderr, 120, session)
+
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, runErr := p.Run()
 	stop()
-	if pumpDone != nil {
-		<-pumpDone
-	}
-	if out != nil {
-		_ = out.Stop()
-		_ = out.Close()
-	}
 	return runErr
 }
 

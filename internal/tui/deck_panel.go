@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,7 +84,22 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 		})
 	}
 
-	rows := make([]PanelRow, 0, 10)
+	rows := make([]PanelRow, 0, 12)
+	// Saved loop slots get their own numbered row rather than braille markers.
+	//
+	// Spec 6.2.1 asks for "small numbered markers in the same row as hotcues",
+	// but a braille cell is a 2x4 dot grid and cannot be a digit -- no glyph is
+	// both. A text row carries the real numbers, costs one row, and leaves the
+	// waveform as a waveform. It sits above the wave so it reads as a header for
+	// it, next to the BPM and key line rather than buried under the transport.
+	if len(d.SavedLoopSlots) > 0 {
+		rows = append([]PanelRow{{
+			Kind:  RowText,
+			Text:  padRight(TruncateTo(loopSlotsText(d), inner), inner),
+			Style: &labelStyle,
+		}}, rows...)
+	}
+
 	// A short panel drops the waveform before it drops the transport row: a
 	// missing waveform is a smaller loss than a deck that shows no PLAY or CUE
 	// indicator at all, which is what happens when the rows are simply
@@ -100,6 +116,17 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 
 	// Progress / playhead bar.
 	rows = append(rows, PanelRow{Kind: RowText, Text: progressBar(d, inner), Style: &dimStyle})
+
+	// A faulted deck still shows its title, BPM and waveform, so nothing about it
+	// says "this will make no sound". Without this line a deck whose file has
+	// been deleted is indistinguishable from one that is merely stopped.
+	if d.Faulted {
+		rows = append(rows, PanelRow{
+			Kind:  RowText,
+			Text:  padRight(TruncateTo("FAULT: "+d.FaultReason, inner), inner),
+			Style: &errStyle,
+		})
+	}
 
 	// Title and artist.
 	rows = append(rows, PanelRow{Kind: RowText, Text: padRight(TruncateTo(titleOrDash(d.Title), inner), inner), Style: &titleStyle})
@@ -512,4 +539,31 @@ func loopTimes(d engine.DeckState) []TimeSpan {
 		return nil
 	}
 	return []TimeSpan{{Start: d.LoopStart, End: d.LoopEnd}}
+}
+
+// loopSlotsText lists the saved loops, numbered, in slot order.
+//
+// The row is only built when a slot is occupied: an empty "LOOPS" heading on
+// every deck would be noise on a panel that is already dense, and the absence of
+// the row is itself the information that nothing is saved.
+func loopSlotsText(d engine.DeckState) string {
+	if len(d.SavedLoopSlots) == 0 {
+		return ""
+	}
+	slots := make([]int, 0, len(d.SavedLoopSlots))
+	for s := range d.SavedLoopSlots {
+		slots = append(slots, s)
+	}
+	sort.Ints(slots)
+
+	var b strings.Builder
+	b.WriteString("LOOPS  ")
+	for i, s := range slots {
+		if i > 0 {
+			b.WriteString("   ")
+		}
+		r := d.SavedLoopSlots[s]
+		fmt.Fprintf(&b, "%d: %s", s, mmss(r.End-r.Start))
+	}
+	return b.String()
 }

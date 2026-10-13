@@ -12,6 +12,10 @@ type Peaks struct {
 	Min, Max []float32
 }
 
+// TimeRange is a half-open range in track time. It is a named type so a pair of
+// durations in the Snapshot says what it means without the view having to guess.
+type TimeRange struct{ Start, End time.Duration }
+
 // DeckState is an immutable view of one deck at the instant Snapshot was
 // taken. The UI never reads Deck directly: doing so would race the audio
 // goroutine (spec §5).
@@ -35,6 +39,24 @@ type DeckState struct {
 	// LoopStart and LoopEnd bound the active loop in track time.
 	LoopStart time.Duration
 	LoopEnd   time.Duration
+	// SavedLoopSlots are the loops stored in slots, in track time, keyed by slot
+	// number.
+	//
+	// Deck.Loop() has always returned these; the Snapshot simply did not carry
+	// them, so the TUI had no way to know a slot was occupied. Spec 6.2.1 asks
+	// for saved slots to be visible alongside the hotcues.
+	SavedLoopSlots map[int]TimeRange
+	// Faulted marks a deck holding a track it cannot actually play audio from,
+	// and FaultReason says why.
+	//
+	// Spec 8 asks for a fault marker on a decoder that fails mid-stream, which
+	// cannot happen here: decoding is whole-file at load, so a bad file is
+	// rejected before it ever reaches a deck. What this actually catches is the
+	// case a user cannot otherwise diagnose -- a deck showing a title, a BPM and
+	// a waveform while producing nothing, because the file has since been
+	// removed or the track has run out.
+	Faulted     bool
+	FaultReason string
 	// KeyCamelot is the detected key in DJ notation ("8A"), or empty when no
 	// key was detected or the confidence was below threshold. KeyConfidence is
 	// the raw 0..1 score. A view must show "unknown" rather than a low-confidence

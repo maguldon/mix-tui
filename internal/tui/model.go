@@ -62,6 +62,12 @@ type Model struct {
 	// flagRoot a user whose -library flag overrides the config cannot tell why
 	// editing the file changes nothing.
 	configPath, flagRoot string
+	// audioFunc reports whether a device is running, and why not if it is not.
+	// It is sampled every tick so the interface can say so: spec 8 forbids
+	// "a TUI that silently produces no sound", and a session with no device used
+	// to be exactly that -- a working interface, no audio, and no indication
+	// which of the two was the problem.
+	audioFunc func() (active bool, reason string)
 	// statsFunc is supplied by the binary to report device and pump health.
 	//
 	// It is a function rather than a pipewire type so the TUI does not import
@@ -192,6 +198,23 @@ func (m *Model) setError(msg string) {
 // overlay. Passing nil restores the default, which reports zeros.
 func (m *Model) SetStatsFunc(f func() views.DebugStats) { m.statsFunc = f }
 
+// SetAudioStatus supplies the source of the "no audio" banner.
+func (m *Model) SetAudioStatus(f func() (active bool, reason string)) { m.audioFunc = f }
+
+// refreshAudio samples whether audio is running.
+//
+// The banner is suppressed entirely when audio was never wanted: under -no-audio
+// there is nothing to retry for, and a permanent warning would be noise.
+func (m *Model) refreshAudio() {
+	if m.audioFunc == nil {
+		m.st.AudioDown, m.st.AudioReason = false, ""
+		return
+	}
+	active, reason := m.audioFunc()
+	m.st.AudioDown = !active
+	m.st.AudioReason = reason
+}
+
 // SetStats sets the diagnostic surface directly.
 func (m *Model) SetStats(s views.DebugStats) { m.stats = s }
 
@@ -232,6 +255,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.expireErr()
 		m.refreshMIDICounts()
 		m.refreshStats()
+		m.refreshAudio()
 		// Mirror authoritative control values from the snapshot each tick
 		// rather than keeping a second copy that can drift.
 		m.mirrorFromSnapshot()
@@ -424,8 +448,24 @@ func (m *Model) RenderAt(w, h int) string {
 	// rendered it. Pressing ENTER on an unreadable track therefore looked
 	// exactly like ENTER doing nothing, which is the most expensive possible
 	// failure to debug from the user's side of the screen.
-	if msg := m.st.LastErr; msg != "" && h > 1 {
-		out[h-2] = padRight(errStyle.Render(truncate("! "+msg, w)), w)
+	// Rows are allocated from the bottom up: footer, then the no-audio banner,
+	// then the error. The banner is not an expiring error -- it is the current
+	// state, not something that happened, and it has to stay until a device
+	// appears. Retrying happens in the background, so it clears itself.
+	//
+	// All three are distinct rows. Sharing one put the banner under the footer,
+	// where it was overwritten before anyone could read it, which is the same
+	// silent-no-sound the banner exists to prevent.
+	errRow := h - 2
+	if m.st.AudioDown {
+		errRow = h - 3
+	}
+	if msg := m.st.LastErr; msg != "" && errRow >= 0 {
+		out[errRow] = padRight(errStyle.Render(truncate("! "+msg, w)), w)
+	}
+	if m.st.AudioDown && h > 1 {
+		out[h-2] = padRight(warnStyle.Render(truncate("NO AUDIO  "+m.st.AudioReason+
+			"  --  retrying", w)), w)
 	}
 	if h > 0 && footerVisible(m.st.Mode) {
 		// The footer names the active mode's keys, so a key that means

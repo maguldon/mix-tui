@@ -305,6 +305,17 @@ offset from each playhead. At matching tempo the beat markers line up; as the
 decks drift you watch the columns slide. Zoom is per-deck — `z` toggles the
 focused deck, so `z` then `tab` then `z` puts both on the same scale to compare.
 
+### When something is wrong
+
+A deck that is holding audio it cannot play — the file has been deleted, or the
+track has run out — says so on its panel, in place of the silence. It still shows
+its title, BPM and waveform, so nothing else about it would tell you.
+
+With no audio device the interface starts anyway and carries a `NO AUDIO` banner
+with the reason, retrying every few seconds; the banner clears itself when a
+device appears. The boot art reports the device state once before the interface
+takes the terminal.
+
 ### Layout widths
 
 Layout D is `deck A | mixer | deck B` with the mixer centred. Deck panels grow to

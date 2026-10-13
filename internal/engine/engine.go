@@ -370,6 +370,44 @@ func (e *Engine) otherDeck(i int) *Deck {
 //
 // This allocates and takes the engine mutex, which is why the UI reads state
 // through here and never through Deck directly (spec §5).
+// savedLoopSlots copies a deck's stored loops into Snapshot form.
+//
+// Deck.Loop() already had them; the Snapshot did not, so the view could not
+// tell an occupied slot from an empty one. The copy matters because Loop()
+// allocates a map per call and the Snapshot is taken 30 times a second.
+func savedLoopSlots(d *Deck) map[int]TimeRange {
+	if len(d.savedLoop) == 0 {
+		return nil
+	}
+	out := make(map[int]TimeRange, len(d.savedLoop))
+	for slot, l := range d.savedLoop {
+		out[slot] = TimeRange{
+			Start: d.framesToDuration(l.Start),
+			End:   d.framesToDuration(l.End),
+		}
+	}
+	return out
+}
+
+// deckFault reports whether a deck is holding audio it cannot play.
+//
+// The cases are the ones a user cannot otherwise diagnose: the deck renders a
+// title, a BPM and a waveform, so it looks loaded, while the file it was decoded
+// from has since gone, or the track has run to its end. Without a marker the
+// panel is simply silent and the transport reads as though nothing is selected.
+func deckFault(d *Deck) (bool, string) {
+	if d.track == nil {
+		return false, ""
+	}
+	if d.track.PCM == nil || len(d.track.PCM) == 0 {
+		return true, "no audio data"
+	}
+	if d.pos >= float64(d.track.PCM.Frames()) && !d.loop.active {
+		return true, "track finished"
+	}
+	return false, ""
+}
+
 // downbeatTimes resolves a grid's Downbeats -- which are indices into Beats --
 // into absolute times, so the view can draw bar lines without knowing the
 // indexing scheme. Out-of-range indices are dropped rather than panicking: a
@@ -443,6 +481,8 @@ func (e *Engine) Snapshot() Snapshot {
 		st.LoopBeatCount = ls.BeatCount
 		st.LoopStart = ls.Start
 		st.LoopEnd = ls.End
+		st.SavedLoopSlots = savedLoopSlots(d)
+		st.Faulted, st.FaultReason = deckFault(d)
 		if k := d.Key(); k != nil {
 			// Below the threshold analyze leaves Camelot empty, but gate here
 			// too so a low-confidence key can never reach the view even if a

@@ -101,6 +101,11 @@ type ViewState struct {
 	// found. It is the only feedback a save produces, and a save is otherwise
 	// invisible.
 	SettingNote string
+	// AudioDown is true when no device is running, and AudioReason why. It is
+	// sampled from the binary every tick rather than pushed, so a device that
+	// appears in the background clears the banner without the model being told.
+	AudioDown   bool
+	AudioReason string
 	// ScanBusy is true between asking for a rescan and the scan returning. It
 	// exists so the view can say what is happening: a scan of a real collection
 	// runs for seconds, and without it the interface looks identical whether

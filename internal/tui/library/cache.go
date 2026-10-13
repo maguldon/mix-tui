@@ -187,3 +187,49 @@ func (c *Cache) staleFrom(a Analysis) bool {
 	}
 	return fi.Size() != a.Size || !fi.ModTime().Equal(a.ModTime)
 }
+
+// EvictMissing removes cache entries whose track no longer exists.
+//
+// Spec 8 lists "remove its cached analysis" among the cleanups for a track
+// deleted since the last scan. Nothing ever did it: the index is rebuilt from
+// the filesystem each start, so the track itself disappears, while its analysis
+// stayed on disk forever. A user who reorganises their music accumulates an
+// analysis cache describing a collection they no longer have.
+//
+// Only entries that name a path which no longer exists are removed. A path-less
+// entry cannot be checked, so it is left alone -- an unreadable entry is more
+// likely a permission problem than a deleted file, and deleting on a guess would
+// throw away a correct analysis.
+//
+// It returns how many entries were removed.
+func (c *Cache) EvictMissing() int {
+	if c.dir == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		p := filepath.Join(c.dir, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var a Analysis
+		if err := yaml.Unmarshal(data, &a); err != nil || a.Path == "" {
+			continue
+		}
+		if _, err := os.Stat(a.Path); err == nil {
+			continue // still there
+		}
+		if os.Remove(p) == nil {
+			removed++
+		}
+	}
+	return removed
+}
