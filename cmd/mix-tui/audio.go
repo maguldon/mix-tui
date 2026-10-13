@@ -54,7 +54,7 @@ type audioSession struct {
 // leaves the session inactive, so the caller can retry later.
 func (s *audioSession) start(ctx context.Context) error {
 	s.mu.Lock()
-	if s.closed || s.out != nil {
+	if s.closed || s.Active() {
 		s.mu.Unlock()
 		return nil
 	}
@@ -71,31 +71,40 @@ func (s *audioSession) start(ctx context.Context) error {
 		return err
 	}
 
+	// The device is opened before the engine exists -- that is how the engine
+	// gets built at the rate the device actually granted. The pump cannot start
+	// until adopt supplies an engine, so the device sits open and idle for the
+	// few milliseconds in between.
 	s.mu.Lock()
-	eng := s.eng
+	s.out = out
+	s.err = ""
 	s.mu.Unlock()
-	if eng == nil {
-		// No engine yet: leave the device open so adopt can start the pump, and
-		// do not report audio as live until something is actually rendering.
-		s.mu.Lock()
-		s.out, s.pump = out, nil
+	s.startPump(ctx)
+	return nil
+}
+
+// startPump runs the pump if a device is open and an engine is available.
+func (s *audioSession) startPump(ctx context.Context) {
+	s.mu.Lock()
+	if s.closed || s.out == nil || s.eng == nil || s.pump != nil {
 		s.mu.Unlock()
-		return nil
+		return
 	}
+	out, eng := s.out, s.eng
 	pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
 	done := make(chan struct{})
+	s.pump, s.done = pump, done
+	s.mu.Unlock()
+
 	go func() {
 		defer close(done)
 		_ = pump.Run(ctx)
 	}()
 
-	s.mu.Lock()
-	s.out, s.pump, s.done = out, pump, done
-	s.err = ""
-	s.mu.Unlock()
-
+	// Audio is only live once something is actually rendering. Reporting the
+	// open device as active before the pump ran claimed sound that was not
+	// happening.
 	s.notify(true, "")
-	return nil
 }
 
 // setErr records why audio is unavailable, without spamming the terminal: the
@@ -139,11 +148,14 @@ func (s *audioSession) retry(ctx context.Context) {
 	}
 }
 
-// Active reports whether audio is running.
+// Active reports whether audio is genuinely running, which means a pump is
+// rendering into a live stream. An open device with no pump produces silence, so
+// counting it as active would claim sound that is not happening -- and would
+// hide the banner at exactly the moment it is needed.
 func (s *audioSession) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.out != nil
+	return s.out != nil && s.pump != nil
 }
 
 // Reason is the last failure, empty when audio is running.
@@ -159,7 +171,7 @@ func (s *audioSession) Stats() views.DebugStats {
 	s.mu.Lock()
 	out, pump := s.out, s.pump
 	s.mu.Unlock()
-	if out == nil {
+	if out == nil || pump == nil {
 		return views.DebugStats{AudioExpected: false}
 	}
 	mainStats, cueStats := out.Stats()
@@ -201,10 +213,12 @@ func (s *audioSession) Close() {
 // The device is opened first so the engine can be built at the rate the device
 // actually granted rather than the one that was asked for. A device that appears
 // later is not renegotiated, which the README lists as a known gap.
-func (s *audioSession) adopt(eng *engine.Engine) {
+func (s *audioSession) adopt(ctx context.Context, eng *engine.Engine) {
 	s.mu.Lock()
 	s.eng = eng
 	s.mu.Unlock()
+	// A device opened at startup is still sitting there with no pump.
+	s.startPump(ctx)
 }
 
 // rate is the device's sample rate, or 0 when there is no device.

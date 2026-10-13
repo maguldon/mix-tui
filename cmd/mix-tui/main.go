@@ -88,12 +88,12 @@ func run(args appArgs) error {
 	var session *audioSession
 	if !args.noAudio {
 		session = startupAudio(ctx, &audioCfg)
-		if session.Active() && rate != 0 && session.rate() != rate {
+		if session.rate() > 0 && rate != 0 && session.rate() != rate {
 			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
 				session.rate(), rate)
 		}
-		if session.Active() {
-			rate = session.rate()
+		if r := session.rate(); r > 0 {
+			rate = r
 		}
 	}
 	if rate <= 0 {
@@ -292,7 +292,7 @@ func run(args appArgs) error {
 	//    could be built at the device's real rate; now it gets the engine, and
 	//    from here it can come up on its own if the device appears later.
 	if session != nil {
-		session.adopt(eng)
+		session.adopt(ctx, eng)
 		defer session.Close()
 		go session.retry(ctx)
 
