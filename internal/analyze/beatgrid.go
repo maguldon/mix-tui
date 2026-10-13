@@ -32,11 +32,18 @@ type BeatGrid struct {
 }
 
 // BeatPeriod returns the time between beats, or 0 when the grid is unusable.
+//
+// The factor of 60 is not optional: a beat is 60/BPM seconds, so at 128 BPM the
+// period is 0.46875s. Dividing time.Second by BPM alone yields 7.8ms, sixty
+// times too short, which would silently shrink every beat loop built on it.
+// Nothing called this while it was wrong — the engine computes its own period in
+// source frames (see deck.beatPeriodFrames) — so the error sat latent behind a
+// correct-looking accessor.
 func (g *BeatGrid) BeatPeriod() time.Duration {
 	if g == nil || g.BPM <= 0 {
 		return 0
 	}
-	return time.Duration(float64(time.Second) / g.BPM)
+	return time.Duration(60 * float64(time.Second) / g.BPM)
 }
 
 // Tempo search bounds. Below 60 BPM a tracker starts locking onto half-time
@@ -63,12 +70,12 @@ func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 		return &BeatGrid{Confidence: 0}, nil
 	}
 
-	onset := onsetEnvelope(spec)
+	onset, rawPeak := onsetEnvelope(spec)
 	bpm, tempoConf := estimateTempo(onset, spec)
 	beats := trackBeats(onset, bpm, spec)
 	downbeats := markDownbeats(beats)
 
-	confidence := combineConfidence(tempoConf, beats, onset)
+	confidence := combineConfidence(tempoConf, rawPeak, beats)
 	return &BeatGrid{
 		BPM:        bpm,
 		Confidence: confidence,
@@ -80,10 +87,32 @@ func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 
 // onsetEnvelope is the half-wave-rectified spectral flux: the frame-to-frame
 // increase in magnitude, summed over bins. Peaks in this curve are onsets.
-func onsetEnvelope(spec *Spectrogram) []float64 {
+//
+// It returns the envelope and the largest raw flux value in it. The raw peak
+// has to be taken before normalise: a normalised envelope peaks at exactly 1 by
+// construction, so anything reading its peak learns nothing. The raw peak is
+// what distinguishes a real onset (a broadband jump, two to three orders of
+// magnitude above the floor) from the gentle ripple a sustained tone produces
+// against the Hann window overlap.
+func onsetEnvelope(spec *Spectrogram) ([]float64, float64) {
 	env := make([]float64, len(spec.Frames))
 	prev := make([]float64, len(spec.Frames[0]))
+	var rawPeak float64
 	for f := range spec.Frames {
+		if f == 0 {
+			// The first frame has no predecessor, so every bin reads as a jump
+			// from zero and the flux is the frame's total energy rather than an
+			// onset. That made frame 0 the tallest point in the envelope for
+			// every track, which did two things: normalise rescaled every real
+			// onset down by it, and onsetCandidates never saw the first real
+			// onset as a local maximum, because it always sat next to a taller
+			// frame. Tracks then began their beat chain on the first off-beat
+			// instead of the first downbeat.
+			for b := range spec.Frames[f] {
+				prev[b] = spec.magnitude(f, b)
+			}
+			continue
+		}
 		var flux float64
 		for b := range spec.Frames[f] {
 			m := spec.magnitude(f, b)
@@ -92,10 +121,13 @@ func onsetEnvelope(spec *Spectrogram) []float64 {
 			}
 			prev[b] = m
 		}
+		if flux > rawPeak {
+			rawPeak = flux
+		}
 		env[f] = flux
 	}
 	normalise(env)
-	return env
+	return env, rawPeak
 }
 
 // normalise scales a slice to peak 1, leaving an all-zero slice alone.
@@ -224,8 +256,13 @@ func trackBeats(env []float64, bpm float64, spec *Spectrogram) []time.Duration {
 		prev[i] = -1
 		score[i] = env[cands[i]]
 	}
-	searchLo := int(periodFrames * 0.5)
-	searchHi := int(periodFrames * 1.5)
+	// A beat-to-beat interval should sit near ONE period, not half of one. The
+	// window exists to absorb tempo drift, not to admit off-beat subdivisions:
+	// at 0.5x a hat sits exactly on the acceptance boundary, so whether the
+	// chain swallowed a hat depended on rounding the period to an integer frame.
+	// Real drift is far below a quarter of a beat between consecutive beats.
+	searchLo := int(periodFrames * 0.75)
+	searchHi := int(periodFrames * 1.25)
 	if searchLo < 1 {
 		searchLo = 1
 	}
@@ -233,14 +270,22 @@ func trackBeats(env []float64, bpm float64, spec *Spectrogram) []time.Duration {
 	for i := 0; i < n; i++ {
 		for j := i - 1; j >= 0; j-- {
 			delta := cands[i] - cands[j]
-			if delta < searchLo {
-				// Candidates are ascending, so deltas only grow as j walks
-				// backwards. Everything further back is even farther away, and
-				// the DP cannot look past one period: a chain that skips a beat
-				// is not a valid chain. Break, don't continue.
+			// Candidates are ascending, so delta only GROWS as j walks backwards.
+			// Both bounds therefore have to break in that direction: too far is
+			// hopeless, too close just means keep looking.
+			//
+			// Getting this backwards is catastrophic and silent. Real music puts
+			// several onsets between beats, so for most i the very first
+			// j = i-1 is nearer than searchLo. Breaking there left prev[i] = -1
+			// for almost every candidate, the backtrack collapsed to a path of
+			// length 1, and a 431-second track came back with 6 beats. It went
+			// unnoticed because an impulse-train fixture has exactly one onset
+			// per period, so j = i-1 already lands inside the window and the
+			// guards are never reached.
+			if searchHi > 0 && delta > searchHi {
 				break
 			}
-			if searchHi > 0 && delta > searchHi {
+			if delta < searchLo {
 				continue
 			}
 			// Prefer predecessors near one period back. The penalty is scaled
@@ -255,27 +300,95 @@ func trackBeats(env []float64, bpm float64, spec *Spectrogram) []time.Duration {
 		}
 	}
 
-	// Backtrack from the best-scoring final beat.
-	bestIdx := 0
-	for i := 1; i < n; i++ {
-		if score[i] > score[bestIdx] {
-			bestIdx = i
-		}
-	}
+	// Backtrack from the best-scoring final beat, then keep going over whatever
+	// the first chain did not consume.
+	//
+	// A single backtrack yields ONE contiguous run. Real music breaks the
+	// chain: a quiet bar, a dense fill, a passage whose onsets land outside the
+	// search window. Whatever lay outside the best run was simply discarded,
+	// which on a real track threw away more than half the grid: a 431s track
+	// came back with beats covering only its middle stretch. Repeating the
+	// extraction over the remaining candidates recovers those stretches as
+	// separate segments, which is the standard way out of this.
+	used := make([]bool, n)
 	var path []int
-	for i := bestIdx; i >= 0; i = prev[i] {
-		path = append(path, cands[i])
-		if prev[i] < 0 {
-			break
+
+	// Every segment must land on the SAME grid, or the tracker recovers two
+	// metrical levels at once. On a track with off-beat hats the kick chain and
+	// the hat chain are both perfectly periodic; extracting both interleaves
+	// them and reports twice the true beat rate. The first chain found is the
+	// highest-scoring one, which is the strongest onsets, so it defines the
+	// phase and later segments must agree with it.
+	//
+	// A quarter of a period is the tolerance: hats sit at exactly half a
+	// period, so they are comfortably outside it, while genuine beat jitter in
+	// real material is well inside.
+	var phase float64
+	havePhase := false
+	phaseTol := periodFrames * 0.25
+
+	// Rank candidates once by score, then walk that order skipping the ones
+	// earlier segments claimed. Rescanning all n per segment is the same result
+	// but quadratic in the number of segments, which is exactly the case a long
+	// dense track produces.
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(a, b int) bool { return score[order[a]] > score[order[b]] })
+
+	for _, best := range order {
+		if used[best] {
+			continue
+		}
+		// Walk back until the chain leaves this segment: either it runs out of
+		// predecessors, or it reaches a beat an earlier segment already claimed.
+		var chain []int
+		for i := best; i >= 0 && !used[i]; i = prev[i] {
+			chain = append(chain, cands[i])
+			used[i] = true
+			if prev[i] < 0 {
+				break
+			}
+		}
+		if len(chain) == 0 {
+			continue
+		}
+		// chain is descending; the phase is read off its earliest beat.
+		if !havePhase {
+			phase = math.Mod(float64(chain[len(chain)-1]), periodFrames)
+			havePhase = true
+		}
+		for _, f := range chain {
+			off := math.Mod(float64(f)-phase, periodFrames)
+			if off > periodFrames/2 {
+				off = periodFrames - off
+			}
+			if off <= phaseTol {
+				path = append(path, f)
+			}
 		}
 	}
-	// The backtrack walks newest to oldest, so path is descending. Beats must
-	// be chronological: reverse it into ascending order.
+	// The backtracks walk newest to oldest, so path is descending, and later
+	// segments can also land out of order. Beats must be chronological and free
+	// of duplicates.
 	sort.Sort(sort.IntSlice(path))
 
+	// Phase agreement alone is not enough on dense material: a kick and a snare
+	// a few frames apart both sit inside one period window, and separate segments
+	// overlapping in time land on top of each other. Keeping the first of each
+	// period slot restores one beat per period. Half a period is a safe floor:
+	// the DP already refuses chains spaced below 0.75 of it, so this only merges
+	// duplicates, never real beats.
+	minGap := periodFrames * 0.5
 	beats := make([]time.Duration, 0, len(path))
-	for _, c := range path {
-		beats = append(beats, frameToDuration(c, spec))
+	last := math.Inf(-1)
+	for _, f := range path {
+		if float64(f)-last < minGap {
+			continue
+		}
+		last = float64(f)
+		beats = append(beats, frameToDuration(f, spec))
 	}
 	return beats
 }
@@ -330,14 +443,34 @@ func markDownbeats(beats []time.Duration) []int {
 	return down
 }
 
+// frameToDuration converts a frame index to a time position.
+//
+// Frame f covers samples [f*hop, f*hop+WindowLen): the window is NOT centred on
+// its nominal time. A transient's magnitude in frame f peaks when the window
+// sits centred on it, and the flux is the frame-to-frame increase, so flux
+// peaks roughly half a window BEFORE the transient actually happens. Reporting
+// f*hop therefore biases every beat early by WindowLen/2 — 23ms here, which is
+// 5% of a beat at 128 BPM and enough to make quantize feel loose.
+//
+// Adding half a window reports the window centre instead, the standard STFT
+// convention. Only beat positions use this; key detection never reads a frame
+// time, so a constant offset cannot affect it.
 func frameToDuration(f int, spec *Spectrogram) time.Duration {
-	return time.Duration(float64(f) * float64(spec.HopSize) / float64(spec.SampleRate) * float64(time.Second))
+	centre := float64(f)*float64(spec.HopSize) + float64(spec.WindowLen)/2
+	return time.Duration(centre / float64(spec.SampleRate) * float64(time.Second))
 }
 
 // combineConfidence weights the tempo score with how well the placed beats
 // actually fit the period, so a strong autocorrelation peak that never
 // produced a coherent beat sequence does not read as confident.
-func combineConfidence(tempoConf float64, beats []time.Duration, env []float64) float64 {
+//
+// rawPeak is the largest flux value BEFORE the envelope was normalised. A
+// sustained tone still produces a periodic ripple in the envelope, because a
+// stationary sine's windowed magnitudes wobble against the 4x Hann overlap, so
+// regularity and tempo score alone will happily certify a sine as a beat. The
+// absolute size of the flux is what says no: a real onset jumps the spectrum by
+// orders of magnitude, a tone's ripple does not.
+func combineConfidence(tempoConf, rawPeak float64, beats []time.Duration) float64 {
 	if len(beats) < 4 {
 		return math.Min(tempoConf*0.5, 0.4)
 	}
@@ -359,14 +492,11 @@ func combineConfidence(tempoConf float64, beats []time.Duration, env []float64) 
 	}
 	regularity := float64(good) / float64(len(gaps))
 
-	// A flat envelope has no meaningful onsets at all.
-	var peak float64
-	for _, v := range env {
-		if v > peak {
-			peak = v
-		}
-	}
-	energyTerm := math.Min(1, peak*4)
+	// Spectral flux magnitude. The envelope is normalised to peak 1, so reading
+	// its peak here always yielded exactly 1 and this term did nothing at all.
+	// Measured on real material: a drum pattern peaks near 1.1e3, a sustained
+	// sine near 0.09, so the knee sits between them with room to spare.
+	energyTerm := math.Min(1, rawPeak*4)
 
 	return math.Max(0, math.Min(1, 0.5*tempoConf+0.5*regularity)*energyTerm)
 }

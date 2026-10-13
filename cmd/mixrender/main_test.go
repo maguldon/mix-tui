@@ -6,9 +6,90 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/dsp"
+	"github.com/maguldon/mix-tui/internal/engine"
 )
+
+// A grid built for a track of a known length must actually contain beats.
+//
+// The startup path built its grid from eng.Deck(deck).Duration() right after an
+// async Load, before the render loop had drained the load. Duration() read 0,
+// so the grid carried a BPM and an empty beat list, and every beat-dependent
+// control failed with "no beatgrid" however -bpm-a was set. A grid with a BPM
+// and no beats looks correct in a snapshot, which is why it went unnoticed.
+func TestSyntheticGridCoversTheTrack(t *testing.T) {
+	const dur = 4 * time.Second
+	g := syntheticGrid(128, dur)
+	if g.BPM != 128 {
+		t.Errorf("BPM = %v, want 128", g.BPM)
+	}
+	if len(g.Beats) == 0 {
+		t.Fatal("no beats: every beat-dependent control would refuse this grid")
+	}
+	if g.Beats[0] != 0 {
+		t.Errorf("first beat at %v, want 0", g.Beats[0])
+	}
+	for _, b := range g.Beats {
+		if b < 0 || b >= dur {
+			t.Errorf("beat at %v is outside the track (%v)", b, dur)
+		}
+	}
+	// 4s at 128 BPM is 8 beats, give or take the exact beat period.
+	if n := len(g.Beats); n < 8 || n > 9 {
+		t.Errorf("beat count = %d, want about 8 for 4s at 128 BPM", n)
+	}
+}
+
+// A zero-length track must not produce a grid full of beats at zero.
+func TestSyntheticGridZeroDuration(t *testing.T) {
+	g := syntheticGrid(128, 0)
+	if g.BPM != 128 {
+		t.Errorf("BPM = %v, want 128", g.BPM)
+	}
+	if len(g.Beats) != 0 {
+		t.Errorf("beat count = %d, want 0 for a zero-length track", len(g.Beats))
+	}
+}
+
+func TestDeckBMP(t *testing.T) {
+	if got := deckBMP(0, 128, 124); got != 128 {
+		t.Errorf("deckBMP(0) = %v, want 128", got)
+	}
+	if got := deckBMP(1, 128, 124); got != 124 {
+		t.Errorf("deckBMP(1) = %v, want 124", got)
+	}
+	// An unset -bpm-a/-bpm-b must stay 0 so no grid is attached at all.
+	if got := deckBMP(1, 128, 0); got != 0 {
+		t.Errorf("deckBMP(1) with no -bpm-b = %v, want 0", got)
+	}
+}
+
+// LoadNow installs the grid before anything reads it, which is the property
+// the startup path depends on: applyLoad on the render goroutine would leave
+// the deck beatgrid-free at the moment SetLoopBeat runs.
+func TestLoadNowInstallsBeatGridImmediately(t *testing.T) {
+	eng := engine.New(engine.Config{
+		SampleRate:  dsp.SampleRate,
+		BlockFrames: engine.BlockFrames,
+		RingFrames:  dsp.SampleRate / 5,
+		DeckCount:   2,
+	})
+	tr := engine.NewTrackFromPCM(dsp.Sine(440, 2))
+	if tr.Duration != 2*time.Second {
+		t.Fatalf("fixture duration = %v, want 2s", tr.Duration)
+	}
+	eng.Deck(0).LoadNow(tr, &analyze.BeatGrid{BPM: 128, Confidence: 0.9}, nil)
+
+	if !eng.Deck(0).HasBeatGrid() {
+		t.Fatal("HasBeatGrid() = false right after LoadNow")
+	}
+	if err := eng.Deck(0).SetLoopBeat(4); err != nil {
+		t.Errorf("SetLoopBeat after LoadNow: %v", err)
+	}
+}
 
 func TestPcm16Clamps(t *testing.T) {
 	cases := []struct {

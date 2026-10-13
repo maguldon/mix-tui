@@ -212,10 +212,17 @@ func runPlayback(ctx context.Context, f flags) error {
 		if err != nil {
 			return fmt.Errorf("deck %d: %w", deck, err)
 		}
-		eng.Deck(deck).Load(track)
+		// The grid is built from track.Duration and installed with LoadNow, not
+		// from eng.Deck(deck).Duration() after an async Load. Load queues a
+		// command that only the render goroutine drains, and the pump has not
+		// started yet: Duration() read 0, so the grid carried a BPM and no
+		// beats. applyScript below then armed nothing at all, and discarded the
+		// errors, so -loop-a and -sync silently did nothing.
+		var grid *analyze.BeatGrid
 		if bpm := deckBPM(deck, f); bpm > 0 {
-			eng.Deck(deck).AttachBeatGrid(syntheticGrid(bpm, eng.Deck(deck).Duration()))
+			grid = syntheticGrid(bpm, track.Duration)
 		}
+		eng.Deck(deck).LoadNow(track, grid, nil)
 	}
 
 	out, err := pipewire.NewOutput(pipewire.OutputConfig{

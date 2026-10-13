@@ -41,9 +41,9 @@ mix-tui -a trackA.mp3 -b trackB.mp3
 | `-seed-test-midi` | Replay a scripted performance through the real MIDI path. |
 | `-xf N` | Crossfader position at startup, -1..1. |
 
-The sample rate is negotiated with the device at startup. If the device grants a
-different rate than the config asked for, the engine is rebuilt at the device's
-rate rather than rendering the wrong speed into it.
+The engine renders at the sample rate the config asks for (44100 Hz by
+default) and relies on PipeWire's graph to resample if the device grants a
+different one. The mismatch is reported by `mixplay -stats`, not corrected here.
 
 ## Configuration
 
@@ -52,18 +52,19 @@ application runs on defaults.
 
 ```yaml
 audio:
-  sample_rate: 0            # 0 = negotiate with the device
+  sample_rate: 0            # 0 = the 44100 Hz default
   main_target: ""           # route MAIN to this PipeWire node
   cue_target: ""            # route CUE to this PipeWire node
   ring_frames: 8820         # ~200ms at 44.1kHz
   target_latency_frames: 8820
 ui:
   default_view: D
-  library_root: ~/Music
 keys:
   space: {action: DeckPlay}
   c: {action: DeckCue, target: 0, value: toggle}
 ```
+
+The library root comes from the `-library` flag, not the config file.
 
 Unknown fields are **errors**, not warnings. These files are user-editable, and a
 silently ignored `mods:` typo produces a controller that mysteriously does
@@ -99,14 +100,14 @@ To see what a mapping file actually defines:
 midimapdump ~/.config/mix-tui/mappings/xone-k2.yaml
 ```
 
-> **The shipped `xone-k2.yaml` CC numbers are placeholders.** They are plausible
-> but unverified against real hardware. The first session with a controller
-> should reconcile them.
+> **No mapping file is shipped.** None has been reconciled against real
+> hardware yet. Write your own for your controller and verify it with
+> `midimapdump` — that is what the tool is for.
 
 ## Keys
 
 `v` cycles layout · `tab` moves focus · `z` zoom · `Z` zoom level ·
-`/` library · `?` help · `` ` `` debug overlay · `esc` back
+`/` library · `l` quick-load overlay · `?` help · `` ` `` debug overlay · `esc` back
 
 Press `?` in the application for the full list.
 
