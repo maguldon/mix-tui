@@ -9,7 +9,9 @@ package engine
 
 // Deck actions.
 const (
-	// DeckPlay starts or resumes the deck on Target.
+	// DeckPlay starts or resumes the deck on Target. It is idempotent: pressing
+	// it on a rolling deck leaves it rolling. Use DeckPlayPause for the
+	// play/pause button, which is what a key or a controller pad means.
 	DeckPlay ActionKind = iota + 1
 	DeckCue
 	DeckPitch // Value normalized -1..1, 1.0 = +8%
@@ -22,6 +24,13 @@ const (
 	DeckSeek         // Value normalized 0..1 position
 	DeckNudge        // Value = seconds to nudge by
 	DeckCueAssign    // routes the deck to the cue bus
+	// DeckPlayPause toggles the deck on Target: rolling decks pause in place,
+	// stopped and paused decks resume. It is the transport button.
+	//
+	// It is a separate kind from DeckPlay rather than a change to it, because
+	// mixplay and mixrender start decks with DeckPlay and need that to mean
+	// "make this play" -- under a toggle their second call would render silence.
+	DeckPlayPause
 )
 
 // Hotcue actions. Slot selects which hotcue.
@@ -120,6 +129,7 @@ var actionNames = map[ActionKind]string{
 	DeckSeek:         "DeckSeek",
 	DeckNudge:        "DeckNudge",
 	DeckCueAssign:    "DeckCueAssign",
+	DeckPlayPause:    "DeckPlayPause",
 	DeckHotcueSet:    "DeckHotcueSet",
 	DeckHotcueJump:   "DeckHotcueJump",
 	DeckHotcueDelete: "DeckHotcueDelete",
@@ -174,7 +184,7 @@ var actionKinds = func() map[string]ActionKind {
 // which is what made space play deck A while the interface said B was focused.
 func (k ActionKind) TakesDeck() bool {
 	switch {
-	case k >= DeckPlay && k <= DeckCueAssign:
+	case k >= DeckPlay && k <= DeckPlayPause:
 		return true
 	case k >= DeckHotcueSet && k <= DeckHotcueDelete:
 		return true

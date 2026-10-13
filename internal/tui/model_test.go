@@ -90,12 +90,12 @@ func TestKeyEmitsActionToEngine(t *testing.T) {
 	_ = m2
 	found := false
 	for _, a := range f.applied {
-		if a.Kind == engine.DeckPlay {
+		if a.Kind == engine.DeckPlayPause {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("space produced no DeckPlay; actions: %+v", f.applied)
+		t.Errorf("space produced no DeckPlayPause; actions: %+v", f.applied)
 	}
 }
 

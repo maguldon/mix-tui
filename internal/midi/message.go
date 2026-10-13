@@ -148,6 +148,7 @@ func (c Counts) Snapshot() map[string]uint64 {
 // construction.
 var actionNames = map[string]engine.ActionKind{
 	"DeckPlay":         engine.DeckPlay,
+	"DeckPlayPause":    engine.DeckPlayPause,
 	"DeckCue":          engine.DeckCue,
 	"CueAssign":        engine.DeckCueAssign,
 	"DeckCueAssign":    engine.DeckCueAssign,

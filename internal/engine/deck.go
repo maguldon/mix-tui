@@ -333,6 +333,25 @@ func (d *Deck) play() {
 	d.playing = true
 }
 
+// TogglePlay pauses a rolling deck in place and resumes a stopped or paused one.
+//
+// It is the play/pause button. The engine had no pause at all: Play() sets
+// playing = true unconditionally, so the key that the help screen called
+// "play/pause" could start a deck and never stop one, and the transport row
+// simply stopped changing.
+func (d *Deck) TogglePlay() { d.post(command{kind: cmdPlayToggle}) }
+
+// togglePlay applies a play/pause command on the render goroutine.
+//
+// Pausing keeps the playhead, so resuming continues from where the deck stopped
+// rather than from the top. That is the whole difference from a stop-and-return.
+func (d *Deck) togglePlay() {
+	if d.track == nil {
+		return
+	}
+	d.playing = !d.playing
+}
+
 // Stop halts the deck, leaving the playhead where it is.
 func (d *Deck) Stop() { d.post(command{kind: cmdStop}) }
 

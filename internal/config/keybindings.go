@@ -38,7 +38,11 @@ type compiled struct {
 // DefaultKeys is the shipped keymap. It is merged under the user's file, so a
 // user rebinding one of these keys overrides it rather than colliding.
 func DefaultKeys() map[string]KeyBinding {
-	play := KeyBinding{Action: "DeckPlay"}
+	// DeckPlayPause, not DeckPlay: this is the transport button, and DeckPlay
+	// only ever starts. With DeckPlay here, pressing space on a rolling deck
+	// re-asserted playing=true and nothing happened -- no pause existed at all,
+	// while the help screen called this key "play/pause".
+	play := KeyBinding{Action: "DeckPlayPause"}
 	cue := KeyBinding{Action: "DeckCue", Value: "toggle"}
 	// Pitch and the hotcue and loop keys name no deck, so they follow the
 	// focused one. "[" and "]" used to pin Target: 0, which as a plain int was

@@ -106,8 +106,8 @@ func TestMixViewStillBindsSpace(t *testing.T) {
 	if m.st.Query != "" {
 		t.Errorf("space in the mix view must not type; query = %q", m.st.Query)
 	}
-	if len(f.applied) != 1 || f.applied[0].Kind != engine.DeckPlay {
-		t.Errorf("space in the mix view applied %v, want one DeckPlay", f.applied)
+	if len(f.applied) != 1 || f.applied[0].Kind != engine.DeckPlayPause {
+		t.Errorf("space in the mix view applied %v, want one DeckPlayPause", f.applied)
 	}
 }
 

@@ -45,6 +45,7 @@ type cmdKind uint8
 
 const (
 	cmdPlay cmdKind = iota
+	cmdPlayToggle
 	cmdStop
 	cmdPitch
 	cmdSeekNorm
@@ -153,6 +154,8 @@ func (d *Deck) apply(c command) {
 
 	case cmdPlay:
 		d.play()
+	case cmdPlayToggle:
+		d.togglePlay()
 	case cmdStop:
 		d.stop()
 	case cmdPitch:
@@ -205,6 +208,8 @@ func controlKind(k ActionKind) cmdKind {
 	switch k {
 	case DeckPlay:
 		return cmdPlay
+	case DeckPlayPause:
+		return cmdPlayToggle
 	case DeckCue:
 		return cmdStop
 	case DeckPitch:

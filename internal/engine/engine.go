@@ -153,6 +153,10 @@ func (e *Engine) Apply(a Action) {
 	switch a.Kind {
 	case DeckPlay:
 		d.Play()
+	case DeckPlayPause:
+		// Toggle, not Play: this is the key and pad that starts and stops a
+		// deck, and Play() would leave a rolling deck rolling.
+		d.TogglePlay()
 	case DeckCue:
 		// Cue is momentary-cue-to-headphones, but stopping is the observable
 		// behaviour of a cue button on a deck with no separate cue source.

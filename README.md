@@ -162,7 +162,7 @@ ui:
   default_view: D
   library_root: "~/Music/DJ Music"   # scanned at startup; -library overrides
 keys:
-  space: {action: DeckPlay}
+  space: {action: DeckPlayPause}
   c: {action: DeckCue, target: 0, value: toggle}
   "-": {action: MasterGain, value: dec}
 ```
@@ -241,7 +241,7 @@ Remappable deck controls:
 
 | Key | Action |
 |---|---|
-| `space` | Play the focused deck |
+| `space` | Play / pause the focused deck |
 | `c` | Cue (stop and return) |
 | `[` `]` | Pitch down / up |
 | `s` | Sync toggle · `q` quantize to nearest beat |
@@ -264,6 +264,10 @@ deck focus. There is no `shift+⏎` — see [Keyboard notes](#keyboard-notes).
 **Keyboard notes.** These are transport facts, not preferences, and each one
 cost a binding that looked implemented:
 
+- **`space` is play/pause, not play.** `DeckPlay` only ever starts a deck and is
+  what `mixplay` and `mixrender` use, so the transport button is a separate
+  action, `DeckPlayPause`. A mapping that says `action: DeckPlay` means "start";
+  one that says `DeckPlayPause` means the button.
 - **`shift+⏎` does not exist.** A terminal sends Enter's bytes for both, and the
   terminal library reports `enter` for both. A keybinding on `shift+enter` is
   unreachable. Use `tab` then `⏎`.
@@ -282,7 +286,7 @@ terminal is not a dead end.
 ### Deck targeting
 
 A key that does not name a deck acts on the **focused** deck, so `tab` and then
-`space` plays deck B. To pin a key to one deck regardless of focus, name it:
+`space` plays or pauses deck B. To pin a key to one deck regardless of focus, name it:
 
 ```yaml
 keys:
