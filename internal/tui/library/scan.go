@@ -95,6 +95,15 @@ func scanRoot(ctx context.Context, root string, ix *Index, onTrack func(Track)) 
 			}
 			return nil
 		}
+		// Skip hidden files. The dot-directory rule above does not cover
+		// these: on a volume synced from macOS every MP3 is joined by a
+		// 4KB AppleDouble sibling named "._<same>.mp3", which passes the
+		// extension test and is indexed as a track. It sorts first, so it
+		// becomes the browser's initial selection, and loading it fails on a
+		// file that is not audio at all.
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil
+		}
 		t, ok := trackFor(path)
 		if !ok {
 			return nil

@@ -52,9 +52,6 @@ func parseArgs(argv []string) (appArgs, error) {
 	if err := fs.Parse(argv); err != nil {
 		return a, err
 	}
-	if a.aPath == "" && a.bPath == "" {
-		return a, fmt.Errorf("no tracks given: pass -a or -b (use -h for help)")
-	}
 	if a.bPath != "" && a.aPath == "" {
 		return a, fmt.Errorf("-b given without -a: both decks are loaded together")
 	}

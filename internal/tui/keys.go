@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"github.com/maguldon/mix-tui/internal/engine"
 	"github.com/maguldon/mix-tui/internal/tui/library"
 	"github.com/maguldon/mix-tui/internal/tui/views"
@@ -76,6 +77,13 @@ func (m *Model) handleKey(k string) {
 		// and the empty-deck art told the user to press exactly this key.
 		if m.st.Mode == ModeMix {
 			m.st.Mode = ModeOverlay
+			// Focus the track list, exactly as "/" does for the browser.
+			//
+			// LibPane defaults to the crates pane, and the overlay renders no
+			// crate list at all. Left at the default, every arrow key moved a
+			// cursor the overlay never draws, so the list could not be scrolled
+			// and only the first result was ever reachable.
+			m.st.LibPane = views.PaneTracks
 		}
 		return
 	}
@@ -268,6 +276,17 @@ func dropLastRune(s string) string {
 // applyAction applies a resolved Action, updating view state for the controls
 // it mirrors.
 func (m *Model) applyAction(a engine.Action) {
+	// Hotcue jumps are the one action the engine can refuse: jumpToHotcue
+	// returns quietly when the slot is empty, and the reply is lost through the
+	// command queue. The snapshot already lists which slots are set, so check
+	// here -- otherwise jumping to a cue that was never set is indistinguishable
+	// from a dead key.
+	if a.Kind == engine.DeckHotcueJump {
+		if m.slotHasNoHotcue(a.Target, a.Slot) {
+			m.setError(fmt.Sprintf("no hotcue in slot %d on deck %c", a.Slot+1, 'A'+rune(a.Target)))
+			return
+		}
+	}
 	switch a.Kind {
 	case engine.Quit:
 		// Handled here rather than in the engine: quitting is a property of
@@ -370,4 +389,24 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// slotHasNoHotcue reports whether the given hotcue slot is empty on a deck.
+//
+// Slot N is set when the snapshot carries at least N+1 cue times: the snapshot
+// fills them densely from slot 0, so a gap cannot appear in the middle.
+func (m *Model) slotHasNoHotcue(deck, slot int) bool {
+	if m.eng == nil || deck < 0 || slot < 0 {
+		return false
+	}
+	snap := m.eng.Snapshot()
+	if deck >= len(snap.Decks) {
+		return false
+	}
+	d := snap.Decks[deck]
+	n := d.CueCount
+	if n > len(d.CueTimes) {
+		n = len(d.CueTimes)
+	}
+	return slot >= n
 }
