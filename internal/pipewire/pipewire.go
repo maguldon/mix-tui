@@ -26,6 +26,7 @@ import "C"
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -150,10 +151,13 @@ func NewContext(name string) (*Context, error) {
 	// run with the loop lock held; without it libpipewire reports
 	// "impl_ext_end_proxy called from wrong context" and returns a core that
 	// never completes its handshake, leaving every stream stuck PAUSED with no
-	// error anywhere.
+	// error anywhere. The goroutine is pinned so that this lock, the connect,
+	// and the unlock all happen on one thread; see lockOSThread.
+	lockOSThread()
 	C.pw_thread_loop_lock(loop)
 	core := C.pw_context_connect(ctx, nil, 0)
 	C.pw_thread_loop_unlock(loop)
+	unlockOSThread()
 	if core == nil {
 		C.pw_context_destroy(ctx)
 		C.pw_thread_loop_destroy(loop)
@@ -186,21 +190,69 @@ func (c *Context) alive() bool { return c != nil && c.loop != nil && !c.closed.L
 // destroyed, it would unlock freed memory. Either way the loop's mutex is left
 // in a state no later caller can reason about, which showed up as an
 // intermittent hang in whichever test happened to run next.
+//
+// The goroutine is also PINNED TO ITS OS THREAD for the duration of the lock.
+// This is not an optimisation; without it the whole package deadlocks. See the
+// long note on LockOSThread below.
 func (c *Context) lock() bool {
 	if c == nil || c.loop == nil || c.closed.Load() {
 		return false
 	}
+	lockOSThread()
 	C.pw_thread_loop_lock(c.loop)
 	return true
 }
 
 // unlock releases the loop lock, but only if lock reported that it took it.
+//
+// The UnlockOSThread MUST come after the C unlock: until the loop lock is
+// dropped, this goroutine is still inside libpipewire's world.
 func (c *Context) unlock(held bool) {
 	if !held || c == nil || c.loop == nil {
 		return
 	}
 	C.pw_thread_loop_unlock(c.loop)
+	unlockOSThread()
 }
+
+// lockOSThread pins the calling goroutine to its current OS thread.
+//
+// WHY THIS IS REQUIRED, since it is the single most important line in the
+// package and the bug it fixes looked like a random hang in unrelated code.
+//
+// libpipewire's loop lock is THREAD-AFFINE and RECURSIVE. The loop remembers,
+// in thread-local storage, which thread currently holds it, so that a nested
+// lock from the same thread is a no-op rather than a self-deadlock, and so that
+// the library can tell whether a caller has paid for the lock it is about to
+// demand. Both properties are keyed on the OS thread, and Go does not promise
+// that two cgo calls from one goroutine land on the same OS thread. A cgo call
+// is a scheduling point: the goroutine can be resumed by any idle M.
+//
+// With no pinning, `lock` and the `unlock` a few lines later routinely run on
+// DIFFERENT threads, and the bookkeeping is corrupted in two ways at once:
+//
+//   - The unlock, on a thread whose TLS says "I do not hold this", decrements
+//     or releases a lock that the acquiring thread still believes it owns. The
+//     loop is now left unlocked while the graph is mid-mutation, and any
+//     concurrent caller walks straight in.
+//   - libpipewire's own guard notices that the marshalling call did not come
+//     from a thread holding the lock and refuses it, logging
+//     "pw_stream_connect called from wrong context, check thread and locking".
+//     That is not cosmetic: the object is left half-built.
+//
+// The observed symptom was an unreproducible-looking hang in whichever test
+// happened to be running, always parked in pthread_mutex_lock inside
+// pw_thread_loop_lock, roughly 15-20% of runs, never twice in the same test.
+// The loop's own thread ends up blocked on the same mutex, so nothing can ever
+// service the loop again. Pinning makes every cgo call between lock and unlock
+// run on one thread, which is exactly the contract libpipewire expects and the
+// one Go was silently breaking.
+func lockOSThread() { runtime.LockOSThread() }
+
+// unlockOSThread releases the pin taken by lockOSThread. It pairs strictly
+// with it: calling it without a matching lockOSThread detaches the goroutine
+// from a thread it still needs.
+func unlockOSThread() { runtime.UnlockOSThread() }
 
 func (c *Context) pwcore() *C.struct_pw_core {
 	if c == nil {
@@ -248,9 +300,11 @@ func (c *Context) Close() error {
 	// The core first, with the loop still running and under its lock.
 	if c.core != nil {
 		if c.loop != nil {
+			lockOSThread()
 			C.pw_thread_loop_lock(c.loop)
 			C.pw_core_disconnect(c.core)
 			C.pw_thread_loop_unlock(c.loop)
+			unlockOSThread()
 		}
 		c.core = nil
 	}
@@ -302,19 +356,33 @@ func Available() bool {
 
 	// pw_context_connect returns a pw_core*, NULL on failure. Comparing it to
 	// an int would treat a non-NULL pointer as an error code.
+	lockOSThread()
 	C.pw_thread_loop_lock(loop)
 	core := C.pw_context_connect(ctx, nil, 0)
 	if core == nil {
 		C.pw_thread_loop_unlock(loop)
-		C.pw_thread_loop_stop(loop)
+		unlockOSThread()
 		C.pw_context_destroy(ctx)
+		C.pw_thread_loop_stop(loop)
 		C.pw_thread_loop_destroy(loop)
 		return false
 	}
 	C.pw_core_disconnect(core)
 	C.pw_thread_loop_unlock(loop)
-	C.pw_thread_loop_stop(loop)
+	unlockOSThread()
+	// Teardown order matches Context.Close, and must stay matched: destroy the
+	// context BEFORE stopping the thread loop.
+	//
+	// This used to be the other way round, and it hung — but only under
+	// concurrency, which is what made it so hard to see. Stopping the loop first
+	// joins the loop thread while the context is still attached to that loop;
+	// the thread stays parked in epoll_wait and never reaches its stop check, so
+	// the join in pw_thread_loop_stop never returns. One goroutine's serial
+	// probes sailed through; two goroutines wedged the process inside a call
+	// that is supposed to be a cheap, side-effect-free "is there a daemon?"
+	// question.
 	C.pw_context_destroy(ctx)
+	C.pw_thread_loop_stop(loop)
 	C.pw_thread_loop_destroy(loop)
 	return true
 }
