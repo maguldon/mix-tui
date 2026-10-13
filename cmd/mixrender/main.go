@@ -102,17 +102,22 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("deck %d: %w", deck, err)
 		}
-		eng.Deck(deck).Load(track)
-	}
-
-	// Beatgrids are needed before sync or any loop can be armed. mixrender
-	// trusts -bpm-a/-bpm-b rather than analysing: the tracks are fixtures, and
-	// a full analysis would take seconds per run for no extra signal.
-	if *bpmA > 0 {
-		eng.Deck(0).AttachBeatGrid(syntheticGrid(*bpmA, eng.Deck(0).Duration()))
-	}
-	if *bpmB > 0 {
-		eng.Deck(1).AttachBeatGrid(syntheticGrid(*bpmB, eng.Deck(1).Duration()))
+		// Beatgrids are needed before sync or any loop can be armed, and
+		// mixrender trusts -bpm-a/-bpm-b rather than analysing: the tracks are
+		// fixtures, and a full analysis would take seconds per run for no extra
+		// signal.
+		//
+		// The grid is built from track.Duration and installed with LoadNow, not
+		// from eng.Deck(deck).Duration() after an async Load. Load queues a
+		// command that only the render loop drains, and the render loop has not
+		// started yet: Duration() read 0, so the grid carried a BPM and no
+		// beats, and every beat-dependent control below failed with "no
+		// beatgrid" no matter what -bpm-a said.
+		var grid *analyze.BeatGrid
+		if bpm := deckBMP(deck, *bpmA, *bpmB); bpm > 0 {
+			grid = syntheticGrid(bpm, track.Duration)
+		}
+		eng.Deck(deck).LoadNow(track, grid, nil)
 	}
 	if *doSync {
 		if err := eng.SyncPair(1, 0); err != nil {
@@ -266,6 +271,18 @@ func printSnapshot(e *engine.Engine, s engine.Snapshot) {
 			fmt.Printf("          %s - %s\n", d.Artist, d.Title)
 		}
 	}
+}
+
+// deckBMP returns the tempo declared for a deck, or 0 for none.
+//
+// A negative -bpm-a means "no beatgrid here": LoadNow treats a grid with a
+// non-positive BPM as absent, so the flag says so without needing a second
+// spelling for "unset".
+func deckBMP(deck int, bpmA, bpmB float64) float64 {
+	if deck == 0 {
+		return bpmA
+	}
+	return bpmB
 }
 
 // syntheticGrid builds a uniform beatgrid of the given tempo covering dur.
