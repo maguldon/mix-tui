@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/maguldon/mix-tui/internal/engine"
 )
 
@@ -41,12 +44,48 @@ func renderMixerPanel(w int, s engine.Snapshot, st ViewState) Panel {
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(head, inner), Style: &dimStyle})
 	rows = append(rows, PanelRow{Kind: RowText, Text: TruncateTo(channelBar("A", lvl(0), peak(0), barW)+channelBar("B", lvl(1), peak(1), barW), inner)})
 
-	// Master level, from the Snapshot's master bus rather than the loudest
+	// Master LEVEL, from the Snapshot's master bus rather than the loudest
 	// deck: the mixer output is not the peak of its inputs once the crossfader
 	// and channel faders have had their say.
 	rows = append(rows, PanelRow{Kind: RowText, Text: "MASTER " + RenderPeakHold(s.MasterPeak, s.MasterLevel, maxInt(0, inner-7))})
 
+	// The master GAIN setting and the cue/program blend. These are what the
+	// - and = keys move. The level meter above responds to the music, so a
+	// gain change looked identical to pressing nothing: the fader moved and
+	// the screen showed the same waveform either way.
+	//
+	// The label is 7 columns and the readout is " NNN%", so the bar gets
+	// whatever is left. Getting that arithmetic wrong overflows the panel and
+	// bleeds the next column's text into the mixer.
+	gainW := inner - 12
+	rows = append(rows, PanelRow{Kind: RowText, Text: "GAIN   " + faderValue(s.MasterGain, gainW)})
+	rows = append(rows, PanelRow{Kind: RowText, Text: "CUE/P  " + faderValue(s.CueMix, gainW)})
+
 	return Panel{Title: "MIXER", Width: w, Rows: rows}
+}
+
+// faderValue renders a 0..1 control position as a gauge and its percentage.
+//
+// The bar is optional: the centre column is narrow in the default layout, and
+// on a narrow panel the number alone is worth more than a bar with no room to
+// show it.
+func faderValue(v float64, w int) string {
+	if v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	pct := fmt.Sprintf("%3d%%", int(v*100+0.5))
+	if w < 4 {
+		return pct
+	}
+	filled := int(v*float64(w) + 0.5)
+	if filled > w {
+		filled = w
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("·", w-filled)
+	return bar + " " + pct
 }
 
 // channelBar renders "X" plus a level bar, exactly barW columns wide.

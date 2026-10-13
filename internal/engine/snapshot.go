@@ -47,8 +47,23 @@ type DeckState struct {
 	DeltaMS  float64
 	HasDelta bool
 	// Cued reports whether the deck is routed to the headphone bus.
-	Cued   bool
+	Cued bool
+	// Synced reports whether this deck is tempo-locked to another. Without it
+	// the sync key could be pressed and nothing on screen would say so, which
+	// is the worst property a mixing feature can have: you cannot tell whether
+	// it is locked, and you cannot tell that it failed to lock.
+	Synced bool
 	Loaded bool
+	// EQ holds the three band gains as -1..1 knob positions, and FilterCutoffNorm
+	// is the filter knob as 0..1, with FilterHighpass selecting the slope.
+	//
+	// The EQ bars and the filter readout were rendered from hardcoded zeros,
+	// because none of this reached the snapshot. Six EQ knobs and two filter
+	// knobs are bound in the shipped Xone K2 mapping; all eight moved the
+	// audio and none moved a pixel, so turning a physical knob looked broken.
+	EQ               [3]float64
+	FilterCutoffNorm float64
+	FilterHighpass   bool
 	// PCM is the loaded track's audio, shared with the Deck rather than copied.
 	// A Snapshot is taken ~30 times a second, so copying audio into it would
 	// allocate megabytes per frame; the slice is immutable once loaded, so a
@@ -82,8 +97,15 @@ type DeckState struct {
 
 // Snapshot is a consistent copy of the whole engine state for one UI refresh.
 type Snapshot struct {
-	Decks       []DeckState
-	Crossfader  float64 // -1..1
+	Decks      []DeckState
+	Crossfader float64 // -1..1
+	// MasterGain and CueMix are the SETTINGS, not the output meters below.
+	// The meters show what is coming out; these show where the faders are.
+	// Without them the interface can render a level that responds to the music
+	// but never shows the user moving a control, so the master fader and the
+	// cue/program blend looked like dead keys.
+	MasterGain  float64
+	CueMix      float64 // 0 = cue only, 1 = program only
 	MasterLevel float64
 	CueLevel    float64
 	MasterPeak  float64

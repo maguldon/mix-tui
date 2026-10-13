@@ -24,6 +24,7 @@ var (
 	labelStyle = lipgloss.NewStyle().Foreground(text)
 	dimStyle   = lipgloss.NewStyle().Foreground(dim)
 	warnStyle  = lipgloss.NewStyle().Foreground(warn)
+	errStyle   = lipgloss.NewStyle().Bold(true).Foreground(warn)
 	okStyle    = lipgloss.NewStyle().Foreground(ok)
 	borderBox  = lipgloss.NewStyle().Foreground(border)
 )

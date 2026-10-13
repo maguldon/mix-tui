@@ -97,6 +97,16 @@ func NewKeyResolver(cfg *Config) (*KeyResolver, error) {
 		bindings: make(map[string]compiled, len(merged)),
 		toggles:  make(map[string]bool),
 	}
+	// A toggle alternates 1/0 and starts from "off", which means its FIRST
+	// press always emits 1. For most controls that is right, because the
+	// engine starts them at 0. For these the engine starts them already at 1,
+	// so the first press re-sent the value they already had and the key looked
+	// dead until it was pressed twice.
+	for k := range engagedByDefault {
+		if b, ok := merged[k]; ok && strings.EqualFold(strings.TrimSpace(b.Value), "toggle") {
+			r.toggles[k] = true
+		}
+	}
 	for name, kb := range merged {
 		c, err := compileBinding(name, kb)
 		if err != nil {
@@ -167,13 +177,17 @@ func (r *KeyResolver) Resolve(key string) (engine.Action, bool) {
 			value = 0
 		}
 	}
+	relative := false
 	if c.inc {
 		value = 1
+		relative = true
 	}
 	if c.dec {
 		value = -1
+		relative = true
 	}
-	return engine.Action{Kind: c.action, Target: c.target, Value: value, Slot: c.slot}, true
+	return engine.Action{Kind: c.action, Target: c.target, Value: value,
+		Slot: c.slot, Relative: relative}, true
 }
 
 // Repeats reports whether a binding should fire on auto-repeat while held.
@@ -255,4 +269,15 @@ func (r *KeyResolver) Bindings() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// engagedByDefault lists the toggle bindings whose engine control starts at 1
+// rather than 0.
+//
+// engine.Mixer's cueMix is documented as "0 is cue-only, 1 is program" and
+// initialised to 1. Seeding the toggle from that makes the first press move
+// the control to 0, which is what pressing it means. Without the seed, `m`
+// sent the value the mixer was already at and nothing on screen moved.
+var engagedByDefault = map[string]bool{
+	"m": true,
 }

@@ -161,7 +161,7 @@ func (e *Engine) Apply(a Action) {
 		// Value is normalized 0..1 of the track's duration.
 		d.SeekNormalized(a.Value)
 	case DeckPitch:
-		d.SetPitch(a.Value)
+		d.SetPitch(a.step(d.Pitch(), StepSize))
 	case DeckEQLow:
 		d.SetEQBand(0, gainFromNormalized(a.Value))
 	case DeckEQMid:
@@ -243,7 +243,7 @@ func (e *Engine) Apply(a Action) {
 	case MixerCueMix:
 		e.mixer.cueMix = clampUnit(a.Value)
 	case MixerMasterGain:
-		e.mixer.masterGain = clampUnit(a.Value)
+		e.mixer.masterGain = clampUnit(a.step(e.mixer.masterGain, StepSize))
 	}
 }
 
@@ -373,6 +373,11 @@ func (e *Engine) Snapshot() Snapshot {
 	s := Snapshot{
 		Decks:      make([]DeckState, len(e.decks)),
 		Crossfader: e.mixer.xfader,
+		// The control SETTINGS, not the meters. The UI needs these to show the
+		// user where the faders are; without them master gain and the cue blend
+		// move the audio while the interface reports nothing.
+		MasterGain: e.mixer.masterGain,
+		CueMix:     e.mixer.cueMix,
 	}
 	for i, d := range e.decks {
 		st := &s.Decks[i]
@@ -385,6 +390,12 @@ func (e *Engine) Snapshot() Snapshot {
 		st.SampleRate = d.SampleRate()
 		ls := d.LoopSummary()
 		st.Cued = e.mixer.Cued(i)
+		st.Synced = d.IsSynced()
+		for b := 0; b < 3; b++ {
+			st.EQ[b] = d.EQPosition(b)
+		}
+		st.FilterCutoffNorm = d.FilterCutoffNorm()
+		st.FilterHighpass = d.FilterHighpass()
 		st.PCM = d.PCM()
 		st.Peaks, st.PeaksWidth = d.Peaks()
 		if g := d.BeatGrid(); g != nil {
