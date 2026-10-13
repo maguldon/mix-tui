@@ -43,14 +43,13 @@ Known gaps, so nothing here is a surprise:
   on them. The features they name are reachable by key instead.
 - **The library crates pane is a stub.** It renders "All tracks" plus a scan
   summary and nothing else; there is no crate store yet.
-- **Sample-rate negotiation is not implemented.** The engine renders at the
-  rate your config asks for (default 44100) and relies on PipeWire's graph to
-  resample. If the daemon grants a different rate, `mixplay -stats` reports
-  `RATE MISMATCH` rather than rebuilding the engine.
-- **Sample rate is not renegotiated when a device appears after startup.** The
-  engine is built at the rate the first device granted, or the 44100 default when
-  none did. A device that turns up later at a different rate is rendered at the
-  engine's rate rather than rebuilt.
+- **Sample rate is negotiated once, at startup.** `mix-tui` asks for the rate
+  your config asks for (44100 by default) and then builds the engine at whatever
+  the device actually granted, warning when the two disagree. It is not
+  renegotiated afterwards: a device that appears later — which it now can, since
+  audio retries in the background — is rendered at the engine's rate rather than
+  rebuilding the engine. `mixplay`, which has no interface to rebuild, reports
+  `RATE MISMATCH` under `-stats` and carries on.
 - **No controller has been validated against real hardware.** Nothing is
   installed into your config directory; the only mapping in the tree is
   `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests
