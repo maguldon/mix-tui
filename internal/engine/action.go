@@ -93,6 +93,15 @@ type Action struct {
 	Target int
 	Value  float64
 	Slot   int
+	// Relative makes Value a STEP rather than an absolute position.
+	//
+	// A MIDI knob sends where the control IS: a value of 1.0 means fully open.
+	// A keyboard inc/dec binding sends how far to MOVE, and 1.0 there means one
+	// step, not the extreme. Without this distinction both were treated as
+	// absolute, so pressing "-" once slammed master gain from unity to zero and
+	// "=" slammed it to full -- two presses of a step control moving the whole
+	// range, which is how a fader ends up looking broken.
+	Relative bool
 }
 
 // actionNames maps each kind to the spelling used in configuration files. The
@@ -217,3 +226,29 @@ func itoa(v int) string {
 	}
 	return string(buf[i:])
 }
+
+// step resolves an action's value against the control's current position.
+//
+// A relative action (a keyboard inc/dec binding) moves the control by its
+// value; an absolute one (a MIDI knob, a config literal) sets it. Keeping this
+// here rather than in the keymap means every control gets the same rule, and a
+// knob at full scale still means "fully open" rather than "one step up".
+//
+// Applied only where the getter and setter agree on units: pitch and master
+// gain are both normalized. The EQ and filter controls are left absolute
+// because no normalized getter exists for them -- FilterCutoff reports Hz, not
+// a fader position -- and stepping those against the wrong unit would be worse
+// than the behaviour it replaced.
+//
+// StepSize is the fraction of a control's travel one key press moves. It is a
+// knob-of-a-judgement value: small enough to be precise, large enough that a
+// few presses cross the range.
+func (a Action) step(current, perStep float64) float64 {
+	if a.Relative {
+		return current + a.Value*perStep
+	}
+	return a.Value
+}
+
+// StepSize is the fraction of a control's travel that one key press moves.
+const StepSize = 0.05

@@ -172,6 +172,7 @@ func (d *Deck) apply(c command) {
 	case cmdEQHigh:
 		d.eq.SetBand(2, gainFromNormalized(c.value))
 	case cmdFilterCutoff:
+		d.filterNorm = c.value
 		d.filter.SetCutoffNormalized(c.value)
 	case cmdFilterReso:
 		d.filter.SetResonance(c.value)

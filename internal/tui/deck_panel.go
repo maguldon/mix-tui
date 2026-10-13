@@ -101,7 +101,10 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 
 	// EQ bars, dropped before the transport row when the panel is short.
 	if rowsAvail >= len(rows)+3 {
-		rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(inner), Style: &dimStyle})
+		rows = append(rows, PanelRow{Kind: RowText, Text: eqRow(d, inner), Style: &dimStyle})
+		if f := filterRow(d, inner); f != "" {
+			rows = append(rows, PanelRow{Kind: RowText, Text: f, Style: &dimStyle})
+		}
 	}
 
 	// The full-track overview strip. When zoom is off, the waveform already
@@ -356,7 +359,12 @@ func metaRow(d engine.DeckState, w int) string {
 const keyConfidenceThreshold = 0.55
 
 // eqRow draws low/mid/high EQ bars.
-func eqRow(w int) string {
+//
+// It used to take only a width and draw RenderMeter(0, ...) for every band:
+// the bars were hardcoded to zero because no EQ value reached the view. Six EQ
+// knobs are bound in the shipped controller mapping, and all six moved the
+// audio while these bars sat permanently flat.
+func eqRow(d engine.DeckState, w int) string {
 	if w < 12 {
 		return spaces(w)
 	}
@@ -366,12 +374,50 @@ func eqRow(w int) string {
 	}
 	parts := make([]string, 3)
 	for i, c := range []string{"L", "M", "H"} {
-		parts[i] = c + RenderMeter(0, each-1)
+		gain := 0.0
+		if i < len(d.EQ) {
+			gain = d.EQ[i]
+		}
+		// RenderMeter takes 0..1; the band is -1..1 with 0 as flat.
+		level := (gain + 1) / 2
+		parts[i] = c + RenderMeter(level, each-1)
 	}
 	return strings.Join(parts, "")
 }
 
-// transportRow renders the CUE/PLAY/SYNC/SLIP/QUANT indicator row.
+// filterRow draws the DJ filter: its slope and the knob position.
+//
+// Rendered only when the filter is off centre, because a permanent row for a
+// control nobody has touched is noise in a panel that is already dense. A DJ
+// needs to see it the instant they move it, and see it go away again once it is
+// out of the way.
+func filterRow(d engine.DeckState, w int) string {
+	if w < 12 {
+		return ""
+	}
+	knob := d.FilterCutoffNorm
+	// The engine treats a normalised cutoff of 1.0 as fully open, which is
+	// also the untouched position, so treat anything near either extreme as
+	// "not in use".
+	if knob <= 0.001 || knob >= 0.999 {
+		return ""
+	}
+	slope := "LP"
+	if d.FilterHighpass {
+		slope = "HP"
+	}
+	label := "FLTR " + slope
+	return label + RenderMeter(knob, maxInt(0, w-len(label)))
+}
+
+// transportRow renders the PLAY/CUE/SYNC indicator row.
+//
+// The comment above this function used to claim it also rendered SYNC, SLIP
+// and QUANT. It rendered PLAY and CUE. SYNC is now here because sync is a
+// headline feature and, with no indicator, there was no way to tell a locked
+// deck from an unlocked one. SLIP and QUANT are still not here: SLIP is not
+// implemented, and Quantize is a one-shot action rather than a mode, so there
+// is no persistent state for either to display.
 func transportRow(d engine.DeckState, w int) string {
 	on := func(b bool, label string) string {
 		if b {
@@ -382,6 +428,9 @@ func transportRow(d engine.DeckState, w int) string {
 	s := on(d.Playing, "PLAY")
 	if w >= lipgloss.Width(s)+6 {
 		s += " " + on(d.Cued, "CUE")
+	}
+	if w >= lipgloss.Width(s)+12 {
+		s += " " + on(d.Synced, "SYNC")
 	}
 	return TruncateTo(s, w)
 }

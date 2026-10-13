@@ -41,8 +41,12 @@ type Deck struct {
 	pitchNorm float64
 	resampler *dsp.Resampler
 
-	eq     *dsp.EQ
-	filter *dsp.Filter
+	eq *dsp.EQ
+	// filterNorm is the filter knob as 0..1. SetCutoffNormalized consumes the
+	// position and the filter then reports Hz, so the position is kept here for
+	// the interface to draw a fader from.
+	filterNorm float64
+	filter     *dsp.Filter
 
 	// Preallocated scratch buffers. Render runs on the render goroutine and
 	// must not allocate (spec §4.3), so everything it touches lives here.
@@ -598,6 +602,17 @@ func (d *Deck) seekNormalized(normalized float64) {
 // treating the unwritten remainder as audio inserts a discontinuity
 // indistinguishable from a seek seam.
 func (d *Deck) Render(out dsp.Stereo) int {
+	// Drain posted commands FIRST, before any early return below.
+	//
+	// This must happen even for a deck that has no track, which is precisely
+	// the state a library load starts from. A load posts cmdLoad, and this
+	// function is the only thing that applies it -- so with the old ordering
+	// the deck returned at the d.track == nil guard above, never drained, and
+	// the load sat unread forever. ENTER on an empty deck did nothing, with no
+	// error and no visible state change. The command line path never hit this
+	// because it loads with LoadNow before rendering starts.
+	d.drainCommands()
+
 	if d.track == nil || len(out) == 0 {
 		for i := range out {
 			out[i] = 0
@@ -605,11 +620,9 @@ func (d *Deck) Render(out dsp.Stereo) int {
 		return 0
 	}
 
-	// Drain posted commands BEFORE the playing check. A stopped deck must
-	// still process its queue: otherwise the play command that would start it
-	// sits unread behind the early return, and the deck can never start.
-	d.drainCommands()
-
+	// A stopped deck must still process its queue: otherwise the play command
+	// that would start it sits unread behind the early return, and the deck
+	// can never start.
 	if !d.playing {
 		for i := range out {
 			out[i] = 0
@@ -755,4 +768,61 @@ func (d *Deck) primeFilters(frame int) {
 
 	d.eq.Prime(hist)
 	d.filter.Prime(hist)
+}
+
+// IsSynced reports whether this deck is currently tempo-locked to another.
+//
+// This exists so the interface can show sync state. syncedTo is private and
+// nothing on Deck reported it, so pressing the sync key changed the engine
+// with no way for the UI to say so -- and no way for the user to tell a
+// successful lock from a failed one.
+func (d *Deck) IsSynced() bool { return d != nil && d.syncedTo != nil }
+
+// EQBand returns band n's gain as a LINEAR value (1.0 is flat), read on the
+// render goroutine.
+func (d *Deck) EQBand(band int) float64 {
+	if d.eq == nil || band < 0 || band > 2 {
+		return 1
+	}
+	return d.eq.Gain(band)
+}
+
+// EQPosition returns band n's knob position as -1..1, which is what a fader
+// wants. See eqPosition for why this is not EQBand's value.
+func (d *Deck) EQPosition(band int) float64 {
+	if d.eq == nil || band < 0 || band > 2 {
+		return 0
+	}
+	return d.eqPosition(band)
+}
+
+// FilterCutoffNorm reports the filter knob as 0..1 of its travel.
+//
+// FilterCutoff reports Hz, which is not something to draw on a fader. The
+// knob's own 0..1 position is what the interface needs.
+func (d *Deck) FilterCutoffNorm() float64 {
+	return d.filterNorm
+}
+
+// eqPosition converts a band's linear gain back to its -1..1 knob position,
+// the inverse of gainFromNormalized.
+//
+// EQ.Gain reports a LINEAR gain (1.0 is flat), which is the wrong shape to draw
+// on a fader and the wrong shape to compare against a knob: mapping 1.0 to the
+// top of the meter meant a boosted band and a flat one both pinned the bar
+// full, so no EQ movement was ever visible.
+func (d *Deck) eqPosition(band int) float64 {
+	g := d.EQBand(band)
+	if g <= 0 {
+		g = 0.01
+	}
+	// gain = 1 + v*3  =>  v = (gain - 1) / 3
+	v := (g - 1) / 3
+	if v < -1 {
+		v = -1
+	}
+	if v > 1 {
+		v = 1
+	}
+	return v
 }
