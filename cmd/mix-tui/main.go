@@ -493,3 +493,20 @@ func midiReportLines(state midiStartupState, err error, cfgDir string) []string 
 		"mix-tui: mappings are read from " + filepath.Join(cfgDir, "mappings"),
 	}
 }
+
+// mappingStartupLines builds what the startup mapping scan reports.
+//
+// The errors themselves rather than a count: spec 8 asks for the file and the
+// line, and a count is the one thing that cannot make a typo findable. These go
+// to stderr because the alt screen has not taken the terminal yet -- the
+// watcher's ongoing reports do not, since those arrive mid-session.
+func mappingStartupLines(loaded int, errs []error) []string {
+	var out []string
+	for _, e := range errs {
+		out = append(out, "mix-tui: mapping: "+e.Error())
+	}
+	if loaded > 0 {
+		out = append(out, fmt.Sprintf("mix-tui: loaded %d mapping(s)", loaded))
+	}
+	return out
+}

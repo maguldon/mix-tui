@@ -189,6 +189,15 @@ func (m *Model) LoadSelected(deck int, path string) error {
 	return nil
 }
 
+// ShowError surfaces a message on the interface's error line.
+//
+// It exists for the binary to report things the interface cannot discover for
+// itself: a mapping file that failed to parse mid-set, say. Writing those to
+// stderr instead would corrupt the alt-screen frame -- the same reason the
+// diagnostic log exists -- and leaving them only in the log means a user who
+// broke their mapping never learns why their controller stopped responding.
+func (m *Model) ShowError(msg string) { m.setError(msg) }
+
 func (m *Model) setError(msg string) {
 	m.st.LastErr = msg
 	m.st.LastErrAt = time.Now()
