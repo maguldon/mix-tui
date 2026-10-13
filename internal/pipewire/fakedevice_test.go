@@ -58,27 +58,46 @@ func (d *fakeDevice) run() {
 
 func (d *fakeDevice) close() { close(d.stop) }
 
+// newPumpRig builds a pump over two standalone rings plus a fake device
+// draining the MAIN one, and returns both.
+//
+// The rings are deliberately NOT the PipeWire streams' rings. The fake device
+// exists to stand in for a real drain thread, so attaching it to a ring that
+// libpipewire is already draining gives the ring two real-time consumers and
+// one real-time producer -- the ring then starves by construction and the test
+// measures that arithmetic rather than the pump.
+//
+// It used to share the stream's ring, back when the stream never drained at
+// all: the EnumFormat pod handed to pw_stream_connect was malformed, so
+// WirePlumber could not configure the node and the drain callback never fired.
+// The bug that made the test's arrangement accidentally true is fixed, and the
+// arrangement itself has to change with it.
+//
+// Owning the rings also drops the daemon dependency: the rig now exercises the
+// pump's pacing against a real-time consumer with nothing else attached.
+func newFakeDeviceRig(t *testing.T, rate int) (*Pumper, *fakeDevice) {
+	t.Helper()
+	main := audio.NewRing(rate / 5)
+	cue := audio.NewRing(rate / 5)
+
+	cfg := PumpConfig{TargetLatencyFrames: rate / 5}
+	dev := newFakeDevice(main, rate)
+	p := &Pumper{eng: newSilentEngine(rate), cfg: cfg, main: main, cue: cue}
+
+	// Fill before the device starts, so the first tick does not race the pump's
+	// first fill and count a startup artifact as a starve.
+	p.pumpOnce()
+	go dev.run()
+	t.Cleanup(dev.close)
+	return p, dev
+}
+
 // C1 RED: the pump must keep up with real time against a device that actually
 // consumes. The previous implementation rendered one block per capped tick and
 // delivered roughly half of what real time needed.
 func TestPumpKeepsUpWithRealTime(t *testing.T) {
-	if !Available() {
-		t.Skip("no daemon")
-	}
-	out, err := NewOutput(OutputConfig{SampleRate: 44100, RingFrames: 8820})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-	if err := out.Start(); err != nil {
-		t.Fatal(err)
-	}
+	p, dev := newFakeDeviceRig(t, 44100)
 
-	dev := newFakeDevice(out.mainStream.ring, 44100)
-	go dev.run()
-	defer dev.close()
-
-	p := NewPumper(out, newSilentEngine(44100), PumpConfig{})
 	p.runFor(3 * time.Second)
 
 	got := int(dev.frames.Load())
@@ -92,27 +111,7 @@ func TestPumpKeepsUpWithRealTime(t *testing.T) {
 // The pump must deliver ahead of the drain, not merely eventually: a consumer
 // that sees an empty ring has already dropped audio.
 func TestPumpNeverStarvesADrainingDevice(t *testing.T) {
-	if !Available() {
-		t.Skip("no daemon")
-	}
-	out, err := NewOutput(OutputConfig{SampleRate: 44100, RingFrames: 8820})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-	if err := out.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Fill before the device starts. Under -race the whole run is slower, and
-	// a device whose first tick beats the pump's first fill counts a starve
-	// that is a startup artifact rather than a pump that fell behind.
-	p := NewPumper(out, newSilentEngine(44100), PumpConfig{})
-	p.pumpOnce()
-
-	dev := newFakeDevice(out.mainStream.ring, 44100)
-	go dev.run()
-	defer dev.close()
+	p, dev := newFakeDeviceRig(t, 44100)
 
 	p.runFor(2 * time.Second)
 

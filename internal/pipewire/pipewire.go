@@ -59,14 +59,29 @@ func acquirePkg() {
 	pkgInit.refs++
 }
 
-// releasePkg drops a reference, calling pw_deinit when the last one goes.
+// releasePkg drops a reference.
+//
+// It deliberately does NOT call pw_deinit.
+//
+// pw_deinit tears down libpipewire's GLOBAL state: the spa system registry,
+// the default event loop, and the daemon glue. Calling it whenever our own
+// reference count reaches zero means every sequential context teardown cycles
+// the entire global stack down and back up. That is not merely wasteful -- it
+// deadlocks. pw_thread_loop_stop joins the loop thread, and that thread can
+// still be inside a global structure pw_deinit has just torn down, so the join
+// never returns. Observed as an intermittent hang in whichever test happened to
+// be running: 5 of 8 runs of this package, always stuck in either
+// pw_thread_loop_stop or the lock immediately before it, and never in the
+// same test twice.
+//
+// pw_deinit is documented as a once-at-exit call. The process exiting reclaims
+// everything it would release, so not calling it costs nothing and removes the
+// only global teardown from the process's lifetime.
 func releasePkg() {
 	pkgInit.mu.Lock()
 	defer pkgInit.mu.Unlock()
-	pkgInit.refs--
-	if pkgInit.refs <= 0 {
-		pkgInit.refs = 0
-		C.pw_deinit()
+	if pkgInit.refs > 0 {
+		pkgInit.refs--
 	}
 }
 
@@ -162,15 +177,26 @@ func NewContext(name string) (*Context, error) {
 // alive reports whether the loop is still usable.
 func (c *Context) alive() bool { return c != nil && c.loop != nil && !c.closed.Load() }
 
-func (c *Context) lock() {
-	if !c.alive() {
-		return
+// lock takes the loop lock when the context is still usable, and reports
+// whether it actually took it.
+//
+// The boolean matters. lock and unlock MUST be symmetric: lock declines to
+// take the lock once the context is closing, so an unconditional unlock would
+// release a lock this caller does not hold -- and if the loop has already been
+// destroyed, it would unlock freed memory. Either way the loop's mutex is left
+// in a state no later caller can reason about, which showed up as an
+// intermittent hang in whichever test happened to run next.
+func (c *Context) lock() bool {
+	if c == nil || c.loop == nil || c.closed.Load() {
+		return false
 	}
 	C.pw_thread_loop_lock(c.loop)
+	return true
 }
 
-func (c *Context) unlock() {
-	if c == nil || c.loop == nil {
+// unlock releases the loop lock, but only if lock reported that it took it.
+func (c *Context) unlock(held bool) {
+	if !held || c == nil || c.loop == nil {
 		return
 	}
 	C.pw_thread_loop_unlock(c.loop)
@@ -197,9 +223,17 @@ func (c *Context) Loop() unsafe.Pointer {
 
 // Close stops the loop and releases everything it owns. It is idempotent.
 //
-// ORDER MATTERS. The loop must be stopped before the context is destroyed:
-// a running loop dereferences the context, and destroying it underneath a live
-// loop is a use-after-free that takes the process with it.
+// ORDER MATTERS, and the order is the opposite of what it looks like it should
+// be. The core must be disconnected BEFORE the loop is stopped, because
+// pw_core_disconnect marshals a request through the loop and then blocks until
+// the loop thread replies. Stopping the loop first joins that thread, and the
+// reply never comes -- Close waits forever on a loop that can no longer answer.
+//
+// The sequence is: disconnect the core, destroy the context (which stops the
+// spa data-loop thread that shares this loop), then stop and destroy the thread
+// loop. Destroying the context underneath a live loop is a use-after-free, and
+// leaving the data loop running while freeing the loop it runs on is the same
+// hazard one step later.
 func (c *Context) Close() error {
 	if c == nil {
 		return nil
@@ -211,15 +245,13 @@ func (c *Context) Close() error {
 	}
 	c.closed.Store(true)
 
-	if c.loop != nil {
-		C.pw_thread_loop_stop(c.loop)
-	}
-	// Disconnect the core before destroying its context, mirroring the loop
-	// ordering above: teardown runs strictly outermost-first.
+	// The core first, with the loop still running and under its lock.
 	if c.core != nil {
-		C.pw_thread_loop_lock(c.loop)
-		C.pw_core_disconnect(c.core)
-		C.pw_thread_loop_unlock(c.loop)
+		if c.loop != nil {
+			C.pw_thread_loop_lock(c.loop)
+			C.pw_core_disconnect(c.core)
+			C.pw_thread_loop_unlock(c.loop)
+		}
 		c.core = nil
 	}
 	if c.ctx != nil {
@@ -227,6 +259,7 @@ func (c *Context) Close() error {
 		c.ctx = nil
 	}
 	if c.loop != nil {
+		C.pw_thread_loop_stop(c.loop)
 		C.pw_thread_loop_destroy(c.loop)
 		// The field is left set on purpose: a concurrent reader must see a
 		// valid pointer (and rely on `closed`) rather than a race with nil.

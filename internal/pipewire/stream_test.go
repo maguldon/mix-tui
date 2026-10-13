@@ -293,3 +293,28 @@ func TestDrainGateCloseWaitsForActiveDrain(t *testing.T) {
 		t.Fatal("closeAndWait did not return after the last drain left")
 	}
 }
+
+// The EnumFormat pod must survive a round trip through spa's parser.
+//
+// This is the test that would have caught the silent-audio bug. The pod used
+// to be produced by calling spa_pod_builder_pop a second time on an
+// uninitialised frame, which zeroed the pod header. pw_stream_connect
+// accepted that pod and returned success; the daemon created the node; and
+// WirePlumber then logged "no usable format found for node N", never
+// configured or linked the node, and left the stream in PAUSED forever with
+// the process callback never firing.
+//
+// Nothing in the application reported an error, so the only observable symptom
+// was silence. Asserting the pod parses closes that gap without needing a
+// daemon, and it fails the instant the builder sequence changes.
+func TestConnectParamsPodIsWellFormed(t *testing.T) {
+	for _, tc := range []struct{ rate, channels int }{
+		{44100, 2},
+		{48000, 2},
+	} {
+		if got := connectParamsSelfcheck(tc.rate, tc.channels); got != tc.rate {
+			t.Errorf("connect params for %dHz/%dch do not parse back correctly: got %d, want %d",
+				tc.rate, tc.channels, got, tc.rate)
+		}
+	}
+}

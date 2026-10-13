@@ -38,8 +38,10 @@ extern int set_stream_active(struct pw_stream *stream, int active);
 
 extern struct spa_pod **make_connect_params(int rate, int channels);
 extern int format_rate(const struct spa_pod *param);
+extern int connect_params_selfcheck(int rate, int channels);
 
 extern int format_rate(const struct spa_pod *param);
+extern int connect_params_selfcheck(int rate, int channels);
 
 
 extern struct pw_properties *make_stream_props(const char *node_name,
@@ -164,8 +166,8 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	s.handle = cgo.NewHandle(s)
 
 	// Every stream operation must hold the loop lock; see Context.lock.
-	ctx.lock()
-	defer ctx.unlock()
+	held := ctx.lock()
+	defer ctx.unlock(held)
 
 	props := buildStreamProps(cfg)
 
@@ -228,8 +230,8 @@ func (s *Stream) Start() error {
 		return nil // idempotent
 	}
 	// PW_DIRECTION_OUTPUT: a playback stream PRODUCES audio into the graph.
-	s.ctx.lock()
-	defer s.ctx.unlock()
+	held := s.ctx.lock()
+	defer s.ctx.unlock(held)
 	// Declare the format the stream accepts. A stream with no EnumFormat pod
 	// gives the graph nothing to negotiate against, and connect then fails on
 	// the half-built object — which is why the helper existed but was never
@@ -257,8 +259,16 @@ func (s *Stream) Stop() error {
 	if !s.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
-	s.ctx.lock()
-	defer s.ctx.unlock()
+	// pw_stream_disconnect marshals through the loop and blocks for a reply, so
+	// it is only valid while the loop is alive. Once the context is closed the
+	// loop is freed and this would segfault or hang; mark the stream stopped and
+	// return instead. Destroy() releases what remains.
+	if s.ctx == nil || !s.ctx.alive() {
+		s.started.Store(false)
+		return nil
+	}
+	held := s.ctx.lock()
+	defer s.ctx.unlock(held)
 	C.pw_stream_disconnect(s.stream)
 	// A disconnected pw_stream can be reconnected, so clear started to let a
 	// later Start reconnect. Without this, Stop/Start cycles - which Output
@@ -278,17 +288,19 @@ func (s *Stream) Destroy() error {
 	// the RT thread.
 	s.teardown.closeAndWait()
 
-	// Only touch the loop while it is alive: locking a destroyed
-	// pw_thread_loop is a use-after-free, and a Stream can outlive its
-	// Context when a caller owns the context itself.
+	// pw_stream_destroy must happen on a live loop, under its lock. The stream's
+	// implementation node hangs off that loop, so destroying the stream after
+	// the context is gone dereferences freed memory -- it segfaulted.
+	//
+	// When the context is already closed the loop is gone and there is nothing
+	// to destroy through. The stream's own allocations are still freed below;
+	// only the call into libpipewire is skipped.
 	if s.ctx != nil && s.ctx.alive() {
-		s.ctx.lock()
-		defer s.ctx.unlock()
-	}
-	if s.stream != nil {
+		held := s.ctx.lock()
 		C.pw_stream_destroy(s.stream)
-		s.stream = nil
+		s.ctx.unlock(held)
 	}
+	s.stream = nil
 	s.stateErrMu.Lock()
 	if s.stateErr != nil {
 		C.free(unsafe.Pointer(s.stateErr))
@@ -509,4 +521,10 @@ func (g *drainGate) closeAndWait() {
 		// it can finish; this is the teardown goroutine, not the audio thread.
 		runtime.Gosched()
 	}
+}
+
+// connectParamsSelfcheck builds the EnumFormat pod and parses it back,
+// returning the rate it carries, or 0 if the pod is malformed.
+func connectParamsSelfcheck(rate, channels int) int {
+	return int(C.connect_params_selfcheck(C.int(rate), C.int(channels)))
 }
