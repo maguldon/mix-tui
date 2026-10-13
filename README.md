@@ -47,6 +47,10 @@ Known gaps, so nothing here is a surprise:
   rate your config asks for (default 44100) and relies on PipeWire's graph to
   resample. If the daemon grants a different rate, `mixplay -stats` reports
   `RATE MISMATCH` rather than rebuilding the engine.
+- **Sample rate is not renegotiated when a device appears after startup.** The
+  engine is built at the rate the first device granted, or the 44100 default when
+  none did. A device that turns up later at a different rate is rendered at the
+  engine's rate rather than rebuilt.
 - **No controller has been validated against real hardware.** Nothing is
   installed into your config directory; the only mapping in the tree is
   `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests
