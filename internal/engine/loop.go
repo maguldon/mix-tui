@@ -399,3 +399,48 @@ func loopBeatsFromNormalized(v float64) float64 {
 	}
 	return loopBeatSizes[idx]
 }
+
+// loopBeatsForAction interprets a LoopBeat action's Value, which carries two
+// different things depending on where it came from.
+//
+// A MIDI encoder sends a normalized knob position in 0..1. A keyboard binding
+// names a beat count directly -- w/e/y/u send 2, 4, 8 and 16, because that is
+// what the key means and what the README documents.
+//
+// The engine used to run every value through the knob mapping, where `v >= 1`
+// returns the largest size. 2, 4, 8 and 16 are all >= 1, so all four beat-loop
+// keys produced a 32-beat loop and the encoder row read LOOP 32 for each.
+//
+// The two are told apart by range: 0..1 is a knob position, anything above is a
+// beat count. A beat count is snapped to the nearest legal size rather than
+// rejected, so a user who writes 3 gets a 4-beat loop instead of silence --
+// and the snapping is the same one SetLoopBeat would apply anyway.
+func loopBeatsForAction(v float64) float64 {
+	if math.IsNaN(v) {
+		return loopBeatSizes[0]
+	}
+	if v > 1 {
+		return snapLoopBeats(v)
+	}
+	return loopBeatsFromNormalized(v)
+}
+
+// snapLoopBeats rounds a beat count to the nearest legal size, preferring the
+// longer size on a tie.
+//
+// Ties are common because the sizes double: 3 is exactly between 2 and 4. A user
+// who asks for 3 beats wants the bar, not the half-bar -- the same reason the
+// sequence doubles in the first place.
+func snapLoopBeats(n float64) float64 {
+	if n <= 0 {
+		return 0
+	}
+	best := loopBeatSizes[0]
+	bestDist := math.Abs(n - best)
+	for _, s := range loopBeatSizes[1:] {
+		if d := math.Abs(n - s); d <= bestDist {
+			best, bestDist = s, d
+		}
+	}
+	return best
+}

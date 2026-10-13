@@ -230,7 +230,7 @@ of the screen you are on with no way back and no error.
 |---|---|
 | `tab` / `shift+tab` | Move deck focus (pane focus inside the library, deck focus in the overlay) |
 | `v` | Cycle layout: A → B → C → D |
-| `z` / `Z` | Toggle the zoomed waveform / cycle zoom bar count |
+| `z` / `Z` | Toggle the focused deck's zoomed waveform / cycle zoom bar count |
 | `↑` `↓` | Nudge the crossfader |
 | `/` | Library browser |
 | `l` | Quick-load overlay (load without leaving the decks) |
@@ -292,6 +292,18 @@ A key that does not name a deck acts on the **focused** deck, so `tab` and then
 keys:
   c: {action: DeckCue, target: 0, value: toggle}   # always deck A
 ```
+
+### Reading the waveform
+
+The waveform is coloured rather than drawn flat: waveform behind the playhead is
+one colour and ahead of it another, with hotcues, beat markers, bar lines, the
+active loop and the playhead each in their own. A regular beat is a grey tick and
+a bar line is orange, so a downbeat is findable without every beat shouting.
+
+When both decks are zoomed they share one window length, so a column is the same
+offset from each playhead. At matching tempo the beat markers line up; as the
+decks drift you watch the columns slide. Zoom is per-deck — `z` toggles the
+focused deck, so `z` then `tab` then `z` puts both on the same scale to compare.
 
 ### Layout widths
 

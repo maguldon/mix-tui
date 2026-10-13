@@ -9,11 +9,21 @@ import (
 	"github.com/maguldon/mix-tui/internal/engine"
 )
 
+// TestWindowLengthIsFourBars pins the window to real seconds.
+//
+// It used to compute the expectation as time.Duration(16) * time.Second / 128,
+// which is 16/128 of a second rather than 16 beats. The implementation had the
+// same error -- a beat taken as time.Second/bpm instead of time.Minute/bpm -- so
+// the two agreed, the test passed, and every zoom window was 60x too short. A
+// test written from the same mistaken formula as the code confirms nothing.
+//
+// Four bars is 16 beats; at 128 BPM a beat is 60/128 = 468.75ms, so 7.5s.
 func TestWindowLengthIsFourBars(t *testing.T) {
 	w := WindowFor(30*time.Second, 4, 128)
-	want := time.Duration(4*4) * time.Second / 128
+	beat := time.Duration(float64(time.Minute) / 128)
+	want := 16 * beat
 	if absDur(w.Length-want) > time.Millisecond {
-		t.Errorf("window = %v, want 4 bars = %v", w.Length, want)
+		t.Errorf("window = %v, want 4 bars = 16 beats = %v", w.Length, want)
 	}
 }
 
@@ -54,7 +64,7 @@ func TestZoomIndexCycles(t *testing.T) {
 
 func TestRenderZoomedDimensions(t *testing.T) {
 	w := WindowFor(30*time.Second, 4, 128)
-	rows := RenderZoomed(dsp.Sine(440, 60), w, 60, 4, nil, nil, dsp.SampleRate)
+	rows := RenderZoomed(dsp.Sine(440, 60), w, 60, 4, ZoomMarkers{}, dsp.SampleRate)
 	if len(rows) != 4 {
 		t.Errorf("got %d rows", len(rows))
 	}
@@ -67,8 +77,8 @@ func TestRenderZoomedShowsBeatsInWindow(t *testing.T) {
 	for i := range beats {
 		beats[i] = w.Start + time.Duration(i)*w.Length/200
 	}
-	withBeats := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, beats, nil, dsp.SampleRate)
-	without := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, nil, nil, dsp.SampleRate)
+	withBeats := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, ZoomMarkers{Beats: beats}, dsp.SampleRate)
+	without := RenderZoomed(dsp.Sine(440, 60), w, 60, 2, ZoomMarkers{}, dsp.SampleRate)
 	if strings.Join(withBeats, "\n") == strings.Join(without, "\n") {
 		t.Error("beat markers changed nothing inside the window")
 	}
@@ -117,7 +127,7 @@ func TestRenderZoomedIsBounded(t *testing.T) {
 	w := WindowFor(30*time.Second, 4, 128)
 	for _, width := range []int{0, 1, 2, 10, 40, 120} {
 		for _, height := range []int{0, 1, 2, 4, 8} {
-			rows := RenderZoomed(pcm, w, width, height, nil, nil, dsp.SampleRate)
+			rows := RenderZoomed(pcm, w, width, height, ZoomMarkers{}, dsp.SampleRate)
 			// A zero width has nothing to draw into, so no rows is correct.
 			if width > 0 && height > 0 && len(rows) != height {
 				t.Errorf("width %d height %d gave %d rows", width, height, len(rows))
@@ -140,13 +150,13 @@ func TestRenderZoomedIgnoresMarkersOutsideWindow(t *testing.T) {
 	for i := range inWindow {
 		inWindow[i] = w.Start + time.Duration(i)*time.Second/128
 	}
-	withIn := RenderZoomed(pcm, w, 60, 2, inWindow, nil, dsp.SampleRate)
-	none := RenderZoomed(pcm, w, 60, 2, nil, nil, dsp.SampleRate)
+	withIn := RenderZoomed(pcm, w, 60, 2, ZoomMarkers{Beats: inWindow}, dsp.SampleRate)
+	none := RenderZoomed(pcm, w, 60, 2, ZoomMarkers{}, dsp.SampleRate)
 	if strings.Join(withIn, "\n") == strings.Join(none, "\n") {
 		t.Error("in-window beats changed nothing")
 	}
 	outside := []time.Duration{5 * time.Hour, -2 * time.Hour}
-	same := RenderZoomed(pcm, w, 60, 2, outside, nil, dsp.SampleRate)
+	same := RenderZoomed(pcm, w, 60, 2, ZoomMarkers{Beats: outside}, dsp.SampleRate)
 	if strings.Join(same, "\n") != strings.Join(none, "\n") {
 		t.Error("markers outside the window were drawn inside it")
 	}
@@ -156,7 +166,7 @@ func TestRenderZoomedIgnoresMarkersOutsideWindow(t *testing.T) {
 // which happens when the user zooms near the end of a track.
 func TestRenderZoomedHandlesShortPCM(t *testing.T) {
 	w := WindowFor(50*time.Second, 4, 128)
-	rows := RenderZoomed(dsp.Sine(440, 2), w, 60, 4, nil, nil, dsp.SampleRate)
+	rows := RenderZoomed(dsp.Sine(440, 2), w, 60, 4, ZoomMarkers{}, dsp.SampleRate)
 	if len(rows) != 4 {
 		t.Errorf("short PCM gave %d rows", len(rows))
 	}
@@ -190,7 +200,7 @@ func TestRenderZoomedRespectsSampleRate(t *testing.T) {
 
 	const width = 60
 	w := WindowFor(30*time.Second, 2, 128)
-	rows := RenderZoomed(pcm, w, width, 4, nil, nil, rate)
+	rows := RenderZoomed(pcm, w, width, 4, ZoomMarkers{}, rate)
 	if len(rows) != 4 {
 		t.Fatalf("got %d rows, want 4", len(rows))
 	}
@@ -210,13 +220,13 @@ func TestRenderZoomedRespectsSampleRate(t *testing.T) {
 	// The strongest form of the check: rendering the same window with the wrong
 	// rate must produce a different picture. If it produced the same one, the
 	// rate argument would not be reaching the slice at all.
-	wrong := RenderZoomed(pcm, w, width, 4, nil, nil, 44100)
+	wrong := RenderZoomed(pcm, w, width, 4, ZoomMarkers{}, 44100)
 	if sameAs(t, rows, wrong) {
 		t.Error("rendering at 44.1k and 48k produced identical output; the rate argument is not being used")
 	}
 
 	// A non-positive rate falls back to the default rather than dividing by zero.
-	if got := RenderZoomed(pcm, w, width, 4, nil, nil, 0); len(got) != 4 {
+	if got := RenderZoomed(pcm, w, width, 4, ZoomMarkers{}, 0); len(got) != 4 {
 		t.Error("a zero sample rate must fall back, not fail")
 	}
 }

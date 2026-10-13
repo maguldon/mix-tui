@@ -4,14 +4,26 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/maguldon/mix-tui/internal/tui/palette"
 )
 
+// The palette lives in internal/tui/style.go and is imported here.
+//
+// It used to be a second, parallel copy: the same hex values under different
+// names, which is exactly the drift the original comment warned about --
+// "recolouring the whole interface is a single edit and the colours cannot drift
+// between panels". They had drifted across the package boundary, worst of all
+// on the word "accent", which meant #58a6ff here and #7ee787 in the deck view.
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
-	labelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9d1d9"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#3d444d"))
-	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7ee787"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffa657"))
+	titleStyle  = palette.TitleStyle
+	labelStyle  = palette.LabelStyle
+	dimStyle    = palette.DimStyle
+	accentStyle = palette.OkStyle
+	warnStyle   = palette.WarnStyle
+	errStyle    = palette.ErrStyle
+	okStyle     = palette.OkStyle
+	borderBox   = palette.BorderBox
 )
 
 func spaces(n int) string {

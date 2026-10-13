@@ -39,7 +39,7 @@ func TestZoomedDeckShowsAnOverview(t *testing.T) {
 	snap.Decks[0].Duration = 200e9
 	snap.Decks[0].Position = 20e9
 
-	st := ViewState{Layout: LayoutD, Focus: 0, Zoom: true}
+	st := ViewState{Layout: LayoutD, Focus: 0, Zoom: []bool{true}}
 	st.OtherDeck = snap.Decks[1]
 
 	out := Render(120, 40, snap, st)
@@ -47,7 +47,7 @@ func TestZoomedDeckShowsAnOverview(t *testing.T) {
 	// assert on the count of lit cells rising above the window-only case.
 	withOverview := litBrailleCells(splitLines(out))
 
-	st.Zoom = false
+	st.Zoom = []bool{false}
 	without := litBrailleCells(splitLines(Render(120, 40, snap, st)))
 
 	if withOverview <= without {

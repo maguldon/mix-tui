@@ -190,11 +190,16 @@ func (h *Handler) HandleFrom(device string, m Message) error {
 	}
 
 	key := msgKey{Kind: c.Kinds, Chan: c.Chan, Num: c.Num}
+	// A note's intensity is its velocity; Value is empty for notes. Reading
+	// Value for a note yielded 0, and every mode below turned that into a real
+	// movement -- Absolute(0) is -1.0, so an absolute-mode note pinned its
+	// control to full negative on each press.
+	intensity := m.ControlValue()
 	h.mu.Lock()
 	var value float64
 	switch c.Mode {
 	case ModeRelative:
-		h.encoder[key] += RelativeDelta(m.Value)
+		h.encoder[key] += RelativeDelta(intensity)
 		value = h.encoder[key]
 	case ModeToggle:
 		// Flip parity on each message and emit the new state.
@@ -220,7 +225,14 @@ func (h *Handler) HandleFrom(device string, m Message) error {
 			}
 		}
 	default: // ModeAbsolute
-		value = Absolute(m.Value)
+		if m.Kind == KindNote {
+			// A note is unipolar: it has an intensity, not a position. Velocity
+			// maps to 0..1 rather than through Absolute's bipolar -1..1, because
+			// a soft tap should read as near-closed, not as hard left.
+			value = float64(intensity) / 127.0
+		} else {
+			value = Absolute(intensity)
+		}
 	}
 	h.mu.Unlock()
 

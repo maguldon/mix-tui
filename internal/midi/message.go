@@ -46,6 +46,21 @@ type Message struct {
 	Other    OtherCategory
 }
 
+// ControlValue returns the message's intensity, which for a note is its
+// velocity and for a CC is its value.
+//
+// A note carries nothing in Value: fromWireNote fills Velocity and leaves Value
+// zero. Code that read Value unconditionally therefore saw 0 for every note and
+// turned it into a valid-looking control movement -- Absolute(0) is -1.0, so a
+// note mapped `mode: absolute` slammed its control to full negative on every
+// press (spec §7 promises velocity is "available as a value").
+func (m Message) ControlValue() uint8 {
+	if m.Kind == KindNote {
+		return m.Velocity
+	}
+	return m.Value
+}
+
 // String renders a message for logs and the debug overlay. It is terse on
 // purpose: these appear where horizontal space is scarce.
 func (m Message) String() string {

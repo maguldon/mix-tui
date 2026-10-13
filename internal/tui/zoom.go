@@ -32,14 +32,42 @@ const PlayX = 0.30
 // A missing or nonsensical tempo falls back to 128 rather than dividing by zero:
 // a deck without a beatgrid must still show a usable window, not a panic.
 func WindowFor(pos time.Duration, bars int, bpm float64) ZoomWindow {
+	return WindowAt(pos, ZoomLength(bars, bpm))
+}
+
+// ZoomLength is how much time a window of the given bar count spans at a tempo.
+//
+// It is split out because both decks must share one value. WindowFor derived the
+// length from each deck's own BPM, so at 128 and 124 the two windows spanned
+// different durations and the spec's "both decks display the same time scale"
+// could not hold however they were drawn: every column meant a different
+// instant on each deck, and beat markers could never line up.
+func ZoomLength(bars int, bpm float64) time.Duration {
 	if bpm <= 0 {
 		bpm = 128
 	}
 	if bars <= 0 {
 		bars = DefaultZoomBars
 	}
-	beat := time.Duration(float64(time.Second) / bpm)
-	length := time.Duration(bars*4) * beat
+	// A beat is 60/bpm SECONDS, not 1/bpm. Dividing a second by the tempo gives
+	// a 128th-of-a-second at 128 BPM, so every window was 60x too short: two bars
+	// showed 62ms of audio rather than 3.75 seconds. The engine's own
+	// beatPeriodFrames gets this right (rate*60/bpm), which is how the two
+	// disagreed without either test noticing.
+	beat := time.Duration(float64(time.Minute) / bpm)
+	return time.Duration(bars*4) * beat
+}
+
+// WindowAt places a window of a given length on a position.
+//
+// Both zoomed decks use this with the SAME length and the same PlayX, so a
+// column is the same offset from each playhead. When the tempos match, the beat
+// markers share columns; as the decks drift, the columns slide -- which spec
+// 6.3 calls the core beatmatching affordance.
+func WindowAt(pos time.Duration, length time.Duration) ZoomWindow {
+	if length <= 0 {
+		length = ZoomLength(DefaultZoomBars, 0)
+	}
 	// The window starts PlayX of its length before the playhead so what is
 	// coming is visible.
 	start := pos - time.Duration(float64(length)*PlayX)
@@ -57,8 +85,7 @@ func ZoomIndex(i int) int { return (i + 1) % len(ZoomBarOptions) }
 //
 // Markers outside [Start, Start+Length] are filtered out: a cue twenty minutes
 // away must not appear in the middle of the view.
-func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int,
-	beats []time.Duration, cues []time.Duration, sampleRate int) []string {
+func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int, m ZoomMarkers, sampleRate int) []string {
 
 	if width <= 0 || height <= 0 {
 		return nil
@@ -99,16 +126,29 @@ func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int,
 		}
 		return int(rel * float64(width))
 	}
-	var cellBeats, cellCues []int
-	for _, b := range beats {
+	var cellBeats, cellDownbeats, cellCues []int
+	for _, b := range m.Beats {
 		if c := toCell(b); c >= 0 {
 			cellBeats = append(cellBeats, c)
 		}
 	}
-	for _, c := range cues {
+	for _, b := range m.Downbeats {
+		if c := toCell(b); c >= 0 {
+			cellDownbeats = append(cellDownbeats, c)
+		}
+	}
+	for _, c := range m.Cues {
 		if i := toCell(c); i >= 0 {
 			cellCues = append(cellCues, i)
 		}
+	}
+	cellLoops := make([]LoopSpan, 0, len(m.Loops))
+	for _, lp := range m.Loops {
+		a, b := toCell(lp.Start), toCell(lp.End)
+		if a < 0 || b < 0 || b < a {
+			continue
+		}
+		cellLoops = append(cellLoops, LoopSpan{Start: a, End: b})
 	}
 
 	playCell := int(w.Playhead * float64(width))
@@ -126,10 +166,25 @@ func RenderZoomed(pcm dsp.Stereo, w ZoomWindow, width, height int,
 		PlayCol:   playCell,
 		Beats:     cellBeats,
 		Cues:      cellCues,
-		Downbeats: nil,
-		Loops:     nil,
+		Downbeats: cellDownbeats,
+		Loops:     cellLoops,
 	})
 }
+
+// ZoomMarkers are the times a zoomed waveform draws markers at.
+type ZoomMarkers struct {
+	Beats     []time.Duration
+	Downbeats []time.Duration
+	Cues      []time.Duration
+	// Loops are the active loop bounds in track time. The zoomed view passed nil
+	// here, so an active loop was invisible on exactly the view a DJ uses to
+	// judge whether a loop is landing on the beat.
+	Loops []TimeSpan
+}
+
+// TimeSpan is a half-open range in track time. LoopSpan is the same idea in cell
+// indices; this is the input form, before mapping through a window.
+type TimeSpan struct{ Start, End time.Duration }
 
 // absDur is the absolute value of a duration.
 func absDur(d time.Duration) time.Duration {

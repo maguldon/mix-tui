@@ -218,7 +218,7 @@ func (e *Engine) Apply(a Action) {
 	case NudgeBeats:
 		_ = d.NudgeBeats(a.Value)
 	case LoopBeat:
-		_ = d.SetLoopBeat(loopBeatsFromNormalized(a.Value))
+		_ = d.SetLoopBeat(loopBeatsForAction(a.Value))
 	case LoopIn:
 		_ = d.SetLoopIn()
 	case LoopOut:
@@ -370,6 +370,24 @@ func (e *Engine) otherDeck(i int) *Deck {
 //
 // This allocates and takes the engine mutex, which is why the UI reads state
 // through here and never through Deck directly (spec §5).
+// downbeatTimes resolves a grid's Downbeats -- which are indices into Beats --
+// into absolute times, so the view can draw bar lines without knowing the
+// indexing scheme. Out-of-range indices are dropped rather than panicking: a
+// grid whose beat list was shortened still has valid downbeats among them.
+func downbeatTimes(g *analyze.BeatGrid) []time.Duration {
+	if g == nil || len(g.Downbeats) == 0 {
+		return nil
+	}
+	out := make([]time.Duration, 0, len(g.Downbeats))
+	for _, i := range g.Downbeats {
+		if i < 0 || i >= len(g.Beats) {
+			continue
+		}
+		out = append(out, g.Beats[i])
+	}
+	return out
+}
+
 func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -404,6 +422,7 @@ func (e *Engine) Snapshot() Snapshot {
 		st.Peaks, st.PeaksWidth = d.Peaks()
 		if g := d.BeatGrid(); g != nil {
 			st.BeatTimes = g.Beats
+			st.DownbeatTimes = downbeatTimes(g)
 		}
 		for slot := 1; slot <= numHotcues; slot++ {
 			if at, ok := d.Hotcue(slot); ok {

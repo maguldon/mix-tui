@@ -80,6 +80,11 @@ type Analyzer struct {
 	log     *slog.Logger
 	mu      sync.Mutex
 	pending map[string]context.CancelFunc
+	// onResult is called once per completed analysis, on the analysis goroutine.
+	// It exists so a finished result can reach the library index: without it the
+	// analyzer produced BPM and key for the cache and the engine and nothing
+	// else, so the browser's columns never showed a value for any track.
+	onResult func(path string, r *analyze.Result)
 }
 
 // libraryAnalysisTarget is the part of the engine the analyzer needs.
@@ -106,6 +111,18 @@ func NewAnalyzer(cache *library.Cache, eng libraryAnalysisTarget, log *slog.Logg
 		pending: map[string]context.CancelFunc{},
 		log:     log,
 	}
+}
+
+// OnResult registers a callback for completed analyses. Only the last one is
+// kept: there is one consumer, the library index, and a chain would be a way to
+// leak a reference to a closed-over index long after a rescan replaced it.
+func (a *Analyzer) OnResult(f func(path string, r *analyze.Result)) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.onResult = f
+	a.mu.Unlock()
 }
 
 // Analyze schedules analysis for a track loaded into a deck.
@@ -148,6 +165,13 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 			if err := a.cache.Put(path, analysisFrom(res)); err != nil {
 				a.log.Debug("cache write failed", "path", path, "err", err)
 			}
+		}
+
+		a.mu.Lock()
+		onResult := a.onResult
+		a.mu.Unlock()
+		if onResult != nil {
+			onResult(path, res)
 		}
 
 		a.apply(deck, res)

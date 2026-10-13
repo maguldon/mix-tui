@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,7 +199,7 @@ func TestRenderAtIsPure(t *testing.T) {
 	// Compared field by field: ViewState embeds a DeckState, which holds
 	// slices, so the struct is not comparable with ==.
 	if after.Mode != before.Mode || after.Layout != before.Layout ||
-		after.Focus != before.Focus || after.Zoom != before.Zoom ||
+		after.Focus != before.Focus || !slicesEqual(after.Zoom, before.Zoom) ||
 		after.ZoomBars != before.ZoomBars || after.Xfade != before.Xfade ||
 		after.TrackSel != before.TrackSel || after.Query != before.Query ||
 		after.LastErr != before.LastErr {
@@ -678,3 +679,7 @@ func TestRealCtrlCQuits(t *testing.T) {
 		t.Error("ctrl+c did not set quitting")
 	}
 }
+
+// slicesEqual compares the per-deck zoom flags, which ViewState can no longer be
+// compared on directly now that Zoom is a slice.
+func slicesEqual(a, b []bool) bool { return slices.Equal(a, b) }

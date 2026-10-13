@@ -43,13 +43,24 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 		waveH = 0
 	}
 
-	// Zoom replaces the full-track wave with a sliding window when this deck is
-	// focused, which is the CDJ behaviour the spec asks for. The unfocused deck
-	// keeps the whole track, so a zoom never hides the other deck's context.
+	// Zoom replaces the full-track wave with a sliding window (spec 6.3).
+	//
+	// BOTH decks zoom, on the SAME window length. Only the focused deck used to
+	// zoom, which meant there was never a frame with two zoomed windows side by
+	// side -- so beat markers could not line up or slide, and the affordance the
+	// section exists to provide was unreachable. And the length was derived per
+	// deck from its own BPM, so even once both zoomed, a column would have meant
+	// a different instant on each deck. Now the length comes from one reference
+	// deck and both windows share it, which is what makes columns comparable.
+	win, zoomed := st.zoomWindow(d)
 	var wave []string
-	if focused && st.Zoom && d.HasBeatGrid {
-		zwin := WindowFor(d.Position, st.ZoomBars, d.BPM)
-		rows := RenderZoomed(d.PCM, zwin, inner, waveH, d.BeatTimes, cueSlice(d), d.SampleRate)
+	if zoomed {
+		rows := RenderZoomed(d.PCM, win, inner, waveH, ZoomMarkers{
+			Beats:     d.BeatTimes,
+			Downbeats: d.DownbeatTimes,
+			Cues:      cueSlice(d),
+			Loops:     loopTimes(d),
+		}, d.SampleRate)
 		for i := range rows {
 			rows[i] = padRight(rows[i], inner)
 		}
@@ -63,10 +74,12 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 			// width. Deriving them here cost ~33ms per frame per deck; at 30fps
 			// that is two CPU-seconds per wall-clock second and it thrashes the
 			// cache the audio thread needs.
-			Peaks:   resamplePeaks(d.Peaks, inner),
-			PlayCol: playCell(d, inner),
-			Cues:    cueCells(d, inner),
-			Loops:   loopSpans(d, inner),
+			Peaks:     resamplePeaks(d.Peaks, inner),
+			PlayCol:   playCell(d, inner),
+			Beats:     beatCells(d, inner),
+			Downbeats: downbeatCells(d, inner),
+			Cues:      cueCells(d, inner),
+			Loops:     loopSpans(d, inner),
 		})
 	}
 
@@ -115,8 +128,8 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 	// RenderOverview was written and unit-tested and never called from a view:
 	// the first review fixed "it returned a blank strip", which was true and
 	// also irrelevant, because no panel ever asked for one.
-	if st.Zoom && d.HasBeatGrid && rowsAvail > 6 {
-		w0, w1 := overviewWindow(d, inner)
+	if st.anyZoomed() && st.deckZoomed(d.Index) && d.HasBeatGrid && rowsAvail > 6 {
+		w0, w1 := overviewWindow(d, inner, st.zoomSpan(d))
 		rows = append(rows, PanelRow{
 			Kind: RowText,
 			Text: padRight(RenderOverview(resamplePeaks(d.Peaks, inner),
@@ -440,12 +453,22 @@ func transportRow(d engine.DeckState, w int) string {
 // The window covers one eighth of the track, which is the widest zoom level
 // the view offers: at that setting the strip is most useful, because the window
 // is smallest relative to the whole.
-func overviewWindow(d engine.DeckState, width int) (start, end int) {
+// overviewWindow brackets the span the zoomed waveform is actually showing.
+//
+// The span used to be a hardcoded Duration/8, which had nothing to do with the
+// zoom level: at 2 bars it highlighted far more track than the waveform above
+// it showed, and at 32 bars less. The comment justifying it claimed one eighth
+// was "the widest zoom level the view offers", which is not true -- an eighth of
+// a 5-minute track is 37.5s while 32 bars at 128 BPM is 60s. The strip's whole
+// job is to say where the window sits, so it has to be told the window.
+func overviewWindow(d engine.DeckState, width int, span time.Duration) (start, end int) {
 	if width <= 0 || d.Duration <= 0 {
 		return -1, -2
 	}
-	span := d.Duration / 8
 	if span <= 0 {
+		span = d.Duration / 8
+	}
+	if span > d.Duration {
 		span = d.Duration
 	}
 	start = int(float64(d.Position) / float64(d.Duration) * float64(width))
@@ -453,4 +476,40 @@ func overviewWindow(d engine.DeckState, width int) (start, end int) {
 	start = minInt(maxInt(0, start), width-1)
 	end = minInt(maxInt(start, end), width-1)
 	return start, end
+}
+
+// beatCells maps beat times to waveform cells for the full-track view.
+//
+// The main waveform drew no beats at all before: WaveSpec had the field and
+// overlayMarkers consumed it, but deck_panel never populated it. Spec 6.3 calls
+// beat alignment the core beatmatching affordance, and 6.2 lists the beatgrid
+// as overlaid on the waveform.
+func beatCells(d engine.DeckState, w int) []int {
+	return timeCells(d.BeatTimes, d, w)
+}
+
+// downbeatCells maps bar lines to waveform cells. DownbeatTimes was never
+// carried in the Snapshot at all, so bar lines were indistinguishable from
+// ordinary beats even where they were drawn.
+func downbeatCells(d engine.DeckState, w int) []int {
+	return timeCells(d.DownbeatTimes, d, w)
+}
+
+func timeCells(times []time.Duration, d engine.DeckState, w int) []int {
+	if w <= 0 || len(times) == 0 || d.Duration <= 0 {
+		return nil
+	}
+	out := make([]int, 0, len(times))
+	for _, t := range times {
+		out = append(out, int(clampFloat(float64(t)/float64(d.Duration), 0, 1)*float64(w)))
+	}
+	return out
+}
+
+// loopTimes is the active loop in track time, for the zoomed view.
+func loopTimes(d engine.DeckState) []TimeSpan {
+	if !d.LoopActive || d.LoopEnd <= d.LoopStart {
+		return nil
+	}
+	return []TimeSpan{{Start: d.LoopStart, End: d.LoopEnd}}
 }

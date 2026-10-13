@@ -79,6 +79,11 @@ type DeckState struct {
 	// requires peaks be cached per track and resolution).
 	Peaks      Peaks
 	PeaksWidth int
+	// DownbeatTimes are the bar lines, kept apart from BeatTimes so the view can
+	// draw the two differently. They were never carried, so downbeats were
+	// indistinguishable from ordinary beats even on the zoomed waveform -- and
+	// on the unzoomed one they were not drawn at all.
+	DownbeatTimes []time.Duration
 	// BeatTimes and CueTimes position the zoom view's markers. BeatTimes is
 	// empty without a beatgrid.
 	BeatTimes []time.Duration

@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/maguldon/mix-tui/internal/dsp"
 	"github.com/maguldon/mix-tui/internal/engine"
 )
@@ -26,6 +28,84 @@ const brailleBase = 0x2800
 // Peaks is an alias for the engine's envelope type, so a view and the engine
 // share one type rather than two structurally identical ones that could drift.
 type Peaks = engine.Peaks
+
+// cellKind is what a single braille cell is showing, which decides its colour.
+//
+// A braille cell is one glyph and takes one colour, so a cell that carries both
+// waveform and a beat tick can only be one of them. Markers win: the existing
+// comment on overlayMarkers says a marker buried under the waveform is a marker
+// nobody sees, and colouring is a second way to bury it.
+type cellKind uint8
+
+const (
+	kindNone cellKind = iota
+	// kindUnplayed is waveform ahead of the playhead.
+	kindUnplayed
+	// kindPlayed is waveform behind the playhead.
+	kindPlayed
+	kindCue
+	kindBeat
+	kindDownbeat
+	kindLoop
+	kindPlayhead
+)
+
+// cellStyle resolves a kind to its colour.
+//
+// The palette entries for the waveform existed at internal/tui/style.go with
+// comments naming exactly these jobs and were used nowhere: RenderWave returned
+// plain runes, so the spec's "played audio renders in one color, unplayed in
+// another" was never drawn at all.
+func cellStyle(k cellKind) lipgloss.Style {
+	switch k {
+	case kindUnplayed:
+		return lipgloss.NewStyle().Foreground(unplayed)
+	case kindPlayed:
+		return lipgloss.NewStyle().Foreground(played)
+	case kindCue:
+		return lipgloss.NewStyle().Foreground(cue)
+	case kindBeat:
+		// A plain beat is the quieter of the two: a grey tick against an orange
+		// downbeat, so a bar line is findable without every beat shouting.
+		return dimStyle
+	case kindDownbeat:
+		return lipgloss.NewStyle().Foreground(beat)
+	case kindLoop:
+		return lipgloss.NewStyle().Foreground(loopColor)
+	case kindPlayhead:
+		return lipgloss.NewStyle().Foreground(playhead)
+	default:
+		return lipgloss.NewStyle()
+	}
+}
+
+// paintKinds fills a run of cells that share a kind, returning the styled text.
+//
+// Runs rather than per-cell styling matter: braille cells are one column wide
+// but a full escape sequence is ~19 bytes, so styling every cell individually
+// quadruples the frame's byte count at 30fps for no visual difference.
+func paintRow(cells [][]int, kinds [][]cellKind, row, w int) string {
+	var b strings.Builder
+	start := 0
+	for start < w {
+		k := kinds[row][start]
+		end := start + 1
+		for end < w && kinds[row][end] == k {
+			end++
+		}
+		var plain strings.Builder
+		for c := start; c < end; c++ {
+			plain.WriteRune(rune(brailleBase + cells[row][c]))
+		}
+		if k == kindNone {
+			b.WriteString(plain.String())
+		} else {
+			b.WriteString(cellStyle(k).Render(plain.String()))
+		}
+		start = end
+	}
+	return b.String()
+}
 
 // LoopSpan marks a loop region in cell indices.
 type LoopSpan struct{ Start, End int }
@@ -111,10 +191,25 @@ func RenderWave(spec WaveSpec) []string {
 		return []string{strings.Repeat(brailleRune(0), w)}
 	}
 
-	// cells[row][col] accumulates dot bits.
+	// cells[row][col] accumulates dot bits, and kinds[row][col] says what that
+	// cell is showing so it can be coloured.
 	cells := make([][]int, h)
+	kinds := make([][]cellKind, h)
 	for i := range cells {
 		cells[i] = make([]int, w)
+		kinds[i] = make([]cellKind, w)
+	}
+
+	// Past the playhead is played; ahead of it is not. A deck with no playhead
+	// (PlayCol < 0) is entirely unplayed, which is what an idle deck shows.
+	for r := 0; r < h; r++ {
+		for c := 0; c < w; c++ {
+			if spec.PlayCol >= 0 && c <= spec.PlayCol {
+				kinds[r][c] = kindPlayed
+			} else {
+				kinds[r][c] = kindUnplayed
+			}
+		}
 	}
 
 	maxLvl := float64(half*4 - 1)
@@ -143,15 +238,11 @@ func RenderWave(spec WaveSpec) []string {
 
 	// Overlay markers after the wave so they are always visible: a marker
 	// buried under waveform dots is a marker nobody sees.
-	overlayMarkers(cells, spec, w, h)
+	overlayMarkers(cells, kinds, spec, w, h)
 
 	rows := make([]string, h)
 	for r := 0; r < h; r++ {
-		row := make([]rune, w)
-		for c := 0; c < w; c++ {
-			row[c] = rune(brailleBase + cells[r][c])
-		}
-		rows[r] = string(row)
+		rows[r] = paintRow(cells, kinds, r, w)
 	}
 	return rows
 }
@@ -172,12 +263,18 @@ func brailleRune(bits int) string {
 // overlayMarkers paints the playhead, beatgrid, cues, and loop spans onto the
 // bit matrix. Indices are bounds-checked: a marker past the end is dropped
 // rather than indexing off the buffer.
-func overlayMarkers(cells [][]int, spec WaveSpec, w, h int) {
-	setCol := func(c, row, bits int) {
+//
+// It records a kind alongside each dot it sets. Where two markers share a cell
+// the later one wins, and the order below is the priority: a downbeat is more
+// useful than the beat it coincides with, and the playhead more useful than
+// either.
+func overlayMarkers(cells [][]int, kinds [][]cellKind, spec WaveSpec, w, h int) {
+	setCol := func(c, row, bits int, kind cellKind) {
 		if c < 0 || c >= w || row < 0 || row >= h {
 			return
 		}
 		cells[row][c] |= bits
+		kinds[row][c] = kind
 	}
 
 	// Loop spans: mark only the two edges. Filling the whole span would bury
@@ -192,34 +289,39 @@ func overlayMarkers(cells [][]int, spec WaveSpec, w, h int) {
 			end = w - 1
 		}
 		for r := 0; r < h; r++ {
-			setCol(start, r, int(brailleDot[0][2]))
-			setCol(end, r, int(brailleDot[0][2]))
+			setCol(start, r, int(brailleDot[0][2]), kindLoop)
+			setCol(end, r, int(brailleDot[0][2]), kindLoop)
 		}
 	}
 
 	// Beats: a full-height tick. A centre-line dot is invisible against a dense
 	// waveform, which is exactly when beats matter most.
+	//
+	// Downbeats are painted AFTER beats because setCol's kind assignment is a
+	// last-write-wins, and the two are drawn with the same glyph. Painted the
+	// other way round, every bar line took the ordinary-beat colour and the
+	// distinction the spec draws between them was invisible -- at exactly the
+	// column a DJ looks for.
 	for _, b := range spec.Beats {
 		for r := 0; r < h; r++ {
-			setCol(b, r, int(brailleDot[0][2]))
+			setCol(b, r, int(brailleDot[0][2]), kindBeat)
 		}
 	}
-	// Downbeats: a full-height tick.
 	for _, b := range spec.Downbeats {
 		for r := 0; r < h; r++ {
-			setCol(b, r, int(brailleDot[0][2]))
+			setCol(b, r, int(brailleDot[0][2]), kindDownbeat)
 		}
 	}
 	// Cues: a top marker.
 	for _, c := range spec.Cues {
-		setCol(c, 0, int(brailleDot[0][0]))
-		setCol(c, 1, int(brailleDot[0][1]))
+		setCol(c, 0, int(brailleDot[0][0]), kindCue)
+		setCol(c, 1, int(brailleDot[0][1]), kindCue)
 	}
 	// Playhead: a solid full-height column, drawn last so it wins over
 	// whatever waveform or marker already occupies those cells.
 	if spec.PlayCol >= 0 {
 		for r := 0; r < h; r++ {
-			setCol(spec.PlayCol, r, int(brailleDot[0][2])|int(brailleDot[1][2]))
+			setCol(spec.PlayCol, r, int(brailleDot[0][2])|int(brailleDot[1][2]), kindPlayhead)
 		}
 	}
 }
@@ -235,8 +337,17 @@ func RenderOverview(peaks Peaks, width, winStart, winEnd, playCell int) string {
 	// only row 0 and returned row 1, which was therefore always blank.
 	h := 1
 	cells := make([][]int, h)
+	kinds := make([][]cellKind, h)
 	for i := range cells {
 		cells[i] = make([]int, width)
+		kinds[i] = make([]cellKind, width)
+	}
+	for c := 0; c < width; c++ {
+		if playCell >= 0 && c <= playCell {
+			kinds[0][c] = kindPlayed
+		} else {
+			kinds[0][c] = kindUnplayed
+		}
 	}
 	const maxLvl = 3
 	cols := len(peaks.Max)
@@ -263,17 +374,15 @@ func RenderOverview(peaks Peaks, width, winStart, winEnd, playCell int) string {
 		for _, c := range []int{winStart, winEnd} {
 			if c >= 0 && c < width {
 				cells[0][c] = int(brailleDot[0][0]) | int(brailleDot[1][0])
+				kinds[0][c] = kindLoop
 			}
 		}
 	}
 	if playCell >= 0 && playCell < width {
 		for r := 0; r < h; r++ {
 			cells[r][playCell] |= int(brailleDot[0][2]) | int(brailleDot[1][2])
+			kinds[r][playCell] = kindPlayhead
 		}
 	}
-	row := make([]rune, width)
-	for c := 0; c < width; c++ {
-		row[c] = rune(brailleBase + cells[0][c])
-	}
-	return string(row)
+	return paintRow(cells, kinds, 0, width)
 }

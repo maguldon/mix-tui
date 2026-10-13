@@ -142,7 +142,7 @@ func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
 
 	rows := h - 1 // one header row
 	trackPane := trackRows(tracks, st, trackW, rows)
-	cratePane := crateRows(ix, crateW, rows)
+	cratePane := crateRows(ix, st, crateW, rows)
 
 	right := detailRows(tracks, st, detailW, rows)
 	if st.ShowSort {
@@ -156,8 +156,7 @@ func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
 // trackRows renders the middle pane.
 func trackRows(tracks []library.Track, st LibraryState, w, rows int) []string {
 	out := make([]string, 0, rows)
-	header := pad(trackHeader(w), w)
-	out = append(out, header)
+	out = append(out, pad(trackHeader(w, st.Pane == PaneTracks), w))
 	for i := 0; i < rows-1; i++ {
 		idx := i + scrollOffset(st, rows)
 		if idx < 0 || idx >= len(tracks) {
@@ -211,9 +210,17 @@ func colWidths(w int) (title, artist int) {
 // It takes the FULL pane width, not the post-cursor width the rows use, and
 // subtracts the cursor itself. Computing these separately is how every column
 // ends up one to the left of its header.
-func trackHeader(w int) string {
+// trackHeader labels the columns. The title is marked when this pane has pane
+// focus, matching the crates pane: TAB has to move something the user can see
+// it move, or the third stop in the cycle looks like a dead key.
+func trackHeader(w int, focused bool) string {
 	tw, aw := colWidths(w - cursorW)
-	return padRight("  "+cell(tw, "TITLE")+" "+cell(aw, "ARTIST")+" "+right("BPM", 7)+" "+right("KEY", keyColWidth)+" "+right("TIME", 6), w)
+	h := "  " + cell(tw, "TITLE") + " " + cell(aw, "ARTIST") + " " + right("BPM", 7) +
+		" " + right("KEY", keyColWidth) + " " + right("TIME", 6)
+	if focused {
+		return accentStyle.Render(padRight(h, w))
+	}
+	return padRight(h, w)
 }
 
 // cursorW is the width reserved for the selection cursor.
@@ -258,9 +265,21 @@ func trackLine(t library.Track, w int) string {
 }
 
 // crateRows renders the left pane: crate names plus the scan summary.
-func crateRows(ix *library.Index, w, rows int) []string {
+// crateRows renders the crates pane.
+//
+// sel is the crate-pane cursor and focused says whether this pane has pane
+// focus. Both were carried in LibraryState and read by nothing: TAB cycled a
+// cursor the user could not see, and the arrow keys moved it through rows that
+// were never marked. A focus indicator nobody can see is not focus.
+func crateRows(ix *library.Index, st LibraryState, w, rows int) []string {
+	sel := st.CrateSel
+	focused := st.Pane == PaneCrates
 	out := make([]string, 0, rows)
-	out = append(out, pad(dimStyle.Render("CRATES"), w))
+	title := dimStyle.Render("CRATES")
+	if focused {
+		title = accentStyle.Render("CRATES")
+	}
+	out = append(out, pad(title, w))
 
 	// Spec 8: a root that could not be read is listed as unreachable, with the
 	// reason. Without this an unmounted music drive produced an empty library
@@ -280,11 +299,15 @@ func crateRows(ix *library.Index, w, rows int) []string {
 	// the pane with "(crate 7: none saved)", which reads as lost data rather
 	// than as an absent feature -- an honest empty pane is better than a
 	// misleading full one. Once crates exist this becomes a real list.
-	for _, e := range entries {
+	for i, e := range entries {
 		if len(out) >= rows {
 			return out
 		}
-		out = append(out, pad(e, w))
+		if focused && i == sel {
+			out = append(out, pad(accentStyle.Render("> "+e), w))
+			continue
+		}
+		out = append(out, pad("  "+e, w))
 	}
 	// One line, not one per row: the pane is mostly empty, and filling it with
 	// the same placeholder reads as though something is wrong.
@@ -310,6 +333,13 @@ func detailRows(tracks []library.Track, st LibraryState, w, rows int) []string {
 		lines = append(lines, "")
 		lines = append(lines, truncate("BPM  "+bpmText(t), w))
 		lines = append(lines, truncate("KEY  "+keyText(t), w))
+		// The musical name belongs here and nowhere else: the track list stays
+		// Camelot-only (spec 6.5) because that is what a DJ matches against.
+		// analyze.Key.Name was cached and carried all the way to the deck and
+		// read by no view, so "C minor" was detectable and never displayed.
+		if t.KeyName != "" && t.KeyConfidence >= keyConfidenceThreshold {
+			lines = append(lines, truncate("     "+t.KeyName, w))
+		}
 		lines = append(lines, truncate("key conf "+fmt.Sprintf("%.0f%%", t.KeyConfidence*100), w))
 		lines = append(lines, "")
 		lines = append(lines, truncate("TIME "+mmss(t.Duration), w))

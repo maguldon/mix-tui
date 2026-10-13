@@ -1,32 +1,38 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-// The palette is chosen once, here. Every view refers to these names rather
-// than embedding a hex literal, so recolouring the whole interface is a single
-// edit and the colours cannot drift between panels.
-var (
-	played   = lipgloss.Color("#f97583") // waveform before the playhead
-	unplayed = lipgloss.Color("#316dca") // waveform after the playhead
-	beat     = lipgloss.Color("#ffa657") // beatgrid downbeats
-	cue      = lipgloss.Color("#d2a8ff") // hotcues
-	ok       = lipgloss.Color("#7ee787") // active/armed
-	dim      = lipgloss.Color("#3d444d") // box drawing
-	warn     = lipgloss.Color("#ffa657") // low-confidence key
-	border   = lipgloss.Color("#30363d")
-	text     = lipgloss.Color("#c9d1d9")
-	accent   = lipgloss.Color("#58a6ff")
+	"github.com/maguldon/mix-tui/internal/tui/palette"
 )
 
-// Shared styles. lipgloss styles are values, so these are cheap to copy.
+// The palette lives in internal/tui/palette so that internal/tui/views can
+// share it too. It was declared here and there separately, and the copies had
+// already drifted.
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	labelStyle = lipgloss.NewStyle().Foreground(text)
-	dimStyle   = lipgloss.NewStyle().Foreground(dim)
-	warnStyle  = lipgloss.NewStyle().Foreground(warn)
-	errStyle   = lipgloss.NewStyle().Bold(true).Foreground(warn)
-	okStyle    = lipgloss.NewStyle().Foreground(ok)
-	borderBox  = lipgloss.NewStyle().Foreground(border)
+	played    = palette.Played
+	unplayed  = palette.Unplayed
+	beat      = palette.Beat
+	cue       = palette.Cue
+	loopColor = palette.Loop
+	playhead  = palette.Playhead
+	ok        = palette.Ok
+	dim       = palette.Dim
+	warn      = palette.Warn
+	border    = palette.Border
+	text      = palette.Text
+	accent    = palette.Accent
+)
+
+// Shared styles, aliased from the single palette definition.
+var (
+	titleStyle = palette.TitleStyle
+	labelStyle = palette.LabelStyle
+	dimStyle   = palette.DimStyle
+	warnStyle  = palette.WarnStyle
+	errStyle   = palette.ErrStyle
+	okStyle    = palette.OkStyle
+	borderBox  = palette.BorderBox
 )
 
 // truncate cuts s to at most w display columns.

@@ -49,10 +49,19 @@ type ViewState struct {
 	Layout LayoutKind
 	// Focus is the focused deck index.
 	Focus int
-	// Zoom is the focused deck's zoom toggle, and ZoomBars its bar count
+	// Zoom is each deck's zoom toggle, and ZoomBars the bar count
 	// (2/4/8/16/32).
-	Zoom     bool
+	//
+	// It is per-deck rather than a single flag following focus, because spec 6.3
+	// says zoom is "a per-deck toggle available in every layout". With one flag,
+	// pressing TAB moved the zoom to the other deck and the two could never both
+	// be zoomed -- which is the state the beatmatching view is built around.
+	Zoom     []bool
 	ZoomBars int
+	// ZoomLength is the window duration both zoomed decks share, so a column
+	// means the same offset from the playhead on each. It is recomputed from the
+	// focused deck's tempo whenever zoom is toggled or the bar count changes.
+	ZoomLength time.Duration
 	// Xfade mirrors the crossfader for display. The engine Snapshot remains
 	// authoritative; this is only what the user last asked for.
 	Xfade float64
@@ -116,4 +125,77 @@ func layoutFromName(s string) LayoutKind {
 	default:
 		return LayoutD
 	}
+}
+
+// deckZoomed reports whether deck i has zoom on.
+func (v ViewState) deckZoomed(i int) bool {
+	if i < 0 || i >= len(v.Zoom) {
+		return false
+	}
+	return v.Zoom[i]
+}
+
+// setDeckZoom turns a deck's zoom on or off and returns the new state.
+func (v *ViewState) setDeckZoom(i int) bool {
+	if i < 0 || i >= len(v.Zoom) {
+		return false
+	}
+	v.Zoom[i] = !v.Zoom[i]
+	return v.Zoom[i]
+}
+
+// anyZoomed reports whether any deck is zoomed, which is what the shared window
+// length is computed for.
+func (v ViewState) anyZoomed() bool {
+	for _, z := range v.Zoom {
+		if z {
+			return true
+		}
+	}
+	return false
+}
+
+// zoomWindow returns the window for a deck and whether it should be zoomed at
+// all.
+//
+// A deck with no usable beatgrid stays on the full-track view: the window length
+// comes from tempo, so a deck without one has no scale to share and showing it
+// zoomed would put it on a different time scale from its neighbour -- worse than
+// not zooming it at all, because the comparison the view exists for would then
+// be quietly wrong.
+func (v ViewState) zoomWindow(d engine.DeckState) (ZoomWindow, bool) {
+	if !v.anyZoomed() || !v.deckZoomed(d.Index) || !d.HasBeatGrid {
+		return ZoomWindow{}, false
+	}
+	length := v.ZoomLength
+	if length <= 0 {
+		length = ZoomLength(v.ZoomBars, d.BPM)
+	}
+	return WindowAt(d.Position, length), true
+}
+
+// retargetZoom recomputes the shared window length from the focused deck.
+//
+// The reference deck is the focused one so that pressing z then tab keeps the
+// same scale; the alternative, deriving it per deck, is the bug this replaced.
+func (m *Model) retargetZoom() {
+	snap := m.eng.Snapshot()
+	if m.st.Focus < 0 || m.st.Focus >= len(snap.Decks) {
+		return
+	}
+	d := snap.Decks[m.st.Focus]
+	bpm := d.BPM
+	if d.HasBeatGrid {
+		bpm = d.BPM
+	}
+	m.st.ZoomLength = ZoomLength(m.st.ZoomBars, bpm)
+}
+
+// zoomSpan is how much track time a deck's zoomed window covers.
+func (v ViewState) zoomSpan(d engine.DeckState) time.Duration {
+	length := v.ZoomLength
+	if length <= 0 {
+		length = ZoomLength(v.ZoomBars, d.BPM)
+	}
+	return length
 }

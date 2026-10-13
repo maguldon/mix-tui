@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/maguldon/mix-tui/internal/analyze"
 )
 
 // Track is one entry in the library.
@@ -22,7 +24,10 @@ type Track struct {
 	BPM      float64
 	HasGrid  bool
 	// KeyCamelot is empty when no key was detected or confidence was low.
-	KeyCamelot    string
+	KeyCamelot string
+	// KeyName is the musical name ("C minor"), which the detail pane shows
+	// beside the Camelot code (spec 6.5). Empty when undetected.
+	KeyName       string
 	KeyConfidence float64
 	// InLibrary marks a track that is loaded in a deck, which the crate view
 	// highlights so the user can see what is playing.
@@ -98,6 +103,53 @@ func (ix *Index) Len() int {
 // Add inserts a track, ignoring duplicates by path. It lets a caller populate
 // an index from a cache or a crate without going through a filesystem scan.
 func (ix *Index) Add(t Track) bool { return ix.add(t) }
+
+// SetAnalysis fills in the detected values on an already-indexed track.
+//
+// Nothing ever wrote these before. The analyzer produced BPM and key, wrote them
+// to the analysis cache and to the engine's DeckState, and never touched the
+// library index -- which has no reference to either. So the browser's BPM and
+// KEY columns read "--" and "?" for every track forever, and sorting by BPM or by
+// key was a no-op on real data. The confidence machinery was reachable only by
+// tests that built Track literals by hand.
+//
+// A track that is not in the index is ignored: analysis can finish for a track
+// the user loaded directly, and that is not an error.
+func (ix *Index) SetAnalysis(path string, a Analysis) bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	for i := range ix.tracks {
+		if ix.tracks[i].Path != path {
+			continue
+		}
+		if a.HasGrid && a.BPM > 0 {
+			ix.tracks[i].BPM = a.BPM
+			ix.tracks[i].HasGrid = true
+		}
+		// The threshold is applied here as well as in the analyzer: this is the
+		// value the browser displays, and a low-confidence key shown as certain
+		// is worse than no key (spec 6.5).
+		if a.KeyCamelot != "" && a.KeyConfidence >= analyze.KeyConfidenceThreshold {
+			ix.tracks[i].KeyCamelot = a.KeyCamelot
+			ix.tracks[i].KeyConfidence = a.KeyConfidence
+			ix.tracks[i].KeyName = a.KeyName
+		}
+		return true
+	}
+	return false
+}
+
+// ApplyAnalysis fills every track it can match from a cached analysis map,
+// returning how many tracks it reached.
+func (ix *Index) ApplyAnalysis(all map[string]Analysis) int {
+	n := 0
+	for path, a := range all {
+		if ix.SetAnalysis(path, a) {
+			n++
+		}
+	}
+	return n
+}
 
 func (ix *Index) add(t Track) bool {
 	ix.mu.Lock()

@@ -33,11 +33,10 @@ func (m *Model) handleKey(k string) tea.Cmd {
 		return nil
 	}
 
-	// Mode-relative keys run BEFORE the universal exits. TAB and SHIFT+ENTER
-	// mean something different inside the browser (cycle panes, load to the
-	// other deck) and must reach it first -- handled after this, TAB changed
-	// which DECK was focused while the user was browsing, which is the moment a
-	// mistake is most expensive.
+	// Mode-relative keys run BEFORE the universal exits. TAB means something
+	// different inside the browser (cycle panes) and must reach it first --
+	// handled after this, TAB changed which DECK was focused while the user was
+	// browsing, which is the moment a mistake is most expensive.
 	//
 	// Settings is here for the same reason and one more: almost every key is
 	// text destined for the path field, so if it ran second, typing "esc" into
@@ -123,10 +122,17 @@ func (m *Model) handleKey(k string) tea.Cmd {
 		m.st.Layout = m.st.Layout.next()
 		return nil
 	case "z":
-		m.st.Zoom = !m.st.Zoom
+		// Zoom is per-deck (spec 6.3). Toggling applies to the focused deck,
+		// which is what "per-deck toggle" means; tab then z zooms the other one
+		// so both can be compared on a shared time scale.
+		m.st.setDeckZoom(m.st.Focus)
+		m.retargetZoom()
 		return nil
 	case "Z":
 		m.st.ZoomBars = ZoomBarOptions[ZoomIndex(zoomIndexOf(m.st.ZoomBars))]
+		// The bar count sets the shared window length, so it has to be
+		// recomputed or both decks keep showing the old scale.
+		m.retargetZoom()
 		return nil
 	case "up":
 		m.nudge(-1)
@@ -362,9 +368,10 @@ func (m *Model) loadSelected() { m.loadSelectedInto(m.st.Focus) }
 // loadSelectedInto loads the highlighted track into a specific deck and
 // returns to the decks so the user sees the result.
 //
-// SHIFT+ENTER targets the other deck (spec 6.5). With two decks that is the
-// whole of "load to the other deck"; with N it is the next one round, which is
-// what the two-deck MVP needs and does not pretend to be more.
+// "The other deck" is reached by moving deck focus first and pressing ENTER, not
+// by a modifier on ENTER. SHIFT+ENTER was bound here and was unreachable:
+// bubbletea has no Shift field, so an ordinary terminal's Shift+Enter arrives as
+// "enter" and the case never fired.
 func (m *Model) loadSelectedInto(deck int) {
 	tr, ok := m.selectedTrack()
 	if !ok {
@@ -492,7 +499,8 @@ func (m *Model) applyAction(a engine.Action) {
 		m.eng.Apply(a)
 		return
 	case engine.ZoomToggle:
-		m.st.Zoom = !m.st.Zoom
+		m.st.setDeckZoom(m.st.Focus)
+		m.retargetZoom()
 	case engine.ViewNext:
 		m.st.Layout = m.st.Layout.next()
 	case engine.MixerCrossfader:

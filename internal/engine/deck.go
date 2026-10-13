@@ -313,11 +313,25 @@ func (d *Deck) Peaks() (Peaks, int) {
 // BeatGrid returns the deck's grid, or nil when it has none.
 func (d *Deck) BeatGrid() *analyze.BeatGrid { return d.beatgrid }
 
+// beatGridUsable is the confidence below which a detected beatgrid is treated
+// as unusable.
+//
+// internal/analyze/beatgrid.go says a grid below roughly 0.5 "should be treated
+// as unusable, and beat-dependent features disabled", and nothing enforced it:
+// HasBeatGrid only tested Confidence > 0, so a 0.2 grid turned on sync,
+// quantise, beat loops, zoom and the delta-beat readout. A weak grid is worse
+// than none, because it makes those controls move without being right -- and
+// unlike a missing grid, a wrong one gives the user no reason to distrust it.
+//
+// Spec 8 asks for exactly this: analysis that fails *or is low-confidence*
+// leaves the deck playing with beat features disabled.
+const beatGridUsable = 0.5
+
 // HasBeatGrid reports whether beat-dependent features are available. Tasks 8
 // and 9 gate loops, quantize, and sync on this rather than on a nil check at
 // each call site.
 func (d *Deck) HasBeatGrid() bool {
-	return d.beatgrid != nil && d.beatgrid.Confidence > 0
+	return d.beatgrid != nil && d.beatgrid.Confidence >= beatGridUsable
 }
 
 // Play starts or resumes the deck.

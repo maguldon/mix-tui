@@ -126,6 +126,22 @@ func run(args appArgs) error {
 
 	cache := library.OpenCache(filepath.Join(cacheDir(), "analysis"))
 	analyzer := NewAnalyzer(cache, eng, slogLog)
+	// Push analysis results back into the library index as they land, so the
+	// browser's BPM and KEY columns fill in for tracks the user has actually
+	// played. The analyzer held no reference to the index before, so those
+	// columns read "--" and "?" for every track regardless of what had been
+	// analysed.
+	analyzer.OnResult(func(path string, r *analyze.Result) {
+		lib.SetAnalysis(path, analysisFrom(r))
+	})
+
+	// Fill the index from the cache so already-analysed tracks show their values
+	// immediately rather than only after a second play. Reading the cache
+	// directory once beats a lookup per track, which on a large collection was
+	// one failed file open per track to discover a mostly-empty cache.
+	if n := lib.ApplyAnalysis(cache.All()); n > 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: %d track(s) restored from the analysis cache\n", n)
+	}
 
 	for i, path := range []string{args.aPath, args.bPath} {
 		if path == "" {
@@ -219,17 +235,21 @@ func run(args appArgs) error {
 	if !args.noMIDI {
 		handler := model.MIDIHandler()
 		listener, err := midi.OpenListener(handler)
-		if err != nil {
-			// No controller is a normal state, not a failure. Spec 8 asks for
-			// the available devices and the mapping directory alongside it:
-			// "no MIDI" on its own leaves the user with no way to find out
-			// whether the device is missing, or the mapping.
-			fmt.Fprintf(os.Stderr, "mix-tui: no MIDI: %v (keyboard only)\n", err)
-			reportMIDIDevices()
-			fmt.Fprintf(os.Stderr, "mix-tui: mappings are read from %s\n", filepath.Join(configDir(), "mappings"))
-		} else {
+		state := midiStartup(err, openedPorts(listener))
+		if state == midiOK {
 			defer listener.Close()
 			model.AttachMIDI(handler)
+		} else {
+			// No controller is a normal state, not a failure. Spec 8 asks for the
+			// available devices and the mapping directory alongside it: "no
+			// MIDI" on its own leaves the user with no way to find out whether
+			// the device is missing, or the mapping.
+			for _, line := range midiReportLines(state, err, configDir()) {
+				fmt.Fprintln(os.Stderr, line)
+			}
+			if state == midiFailed {
+				reportMIDIDevices()
+			}
 		}
 	}
 
@@ -431,5 +451,64 @@ func reportMIDIDevices() {
 	fmt.Fprintf(os.Stderr, "mix-tui: MIDI inputs found:\n")
 	for _, d := range devices {
 		fmt.Fprintf(os.Stderr, "  %d  %s\n", d.Index, d.Name)
+	}
+}
+
+// midiStartupState is what happened when MIDI was opened.
+type midiStartupState int
+
+const (
+	// midiOK means a listener is running with at least one port attached.
+	midiOK midiStartupState = iota
+	// midiNoInputs means the driver is healthy but nothing is plugged in.
+	midiNoInputs
+	// midiFailed means the driver or the port enumeration failed.
+	midiFailed
+)
+
+// midiStartup classifies the result of opening MIDI.
+//
+// It exists because "the driver failed" and "nothing is plugged in" are
+// different problems with different advice, and only the first one ever
+// reached the user. OpenListener returns success with zero ports, so the
+// common case -- a healthy driver and no controller -- printed nothing at all
+// (spec 8).
+func midiStartup(err error, ports int) midiStartupState {
+	switch {
+	case err != nil:
+		return midiFailed
+	case ports <= 0:
+		return midiNoInputs
+	default:
+		return midiOK
+	}
+}
+
+// openedPorts counts a listener's attached ports, tolerating a nil listener so
+// the failure path can call it.
+func openedPorts(l *midi.Listener) int {
+	if l == nil {
+		return 0
+	}
+	return len(l.Devices())
+}
+
+// midiReportLines builds the keyboard-only notice.
+//
+// Both halves matter. "No MIDI" alone leaves the user unable to tell a missing
+// device from a missing mapping, which is the distinction spec 8 is asking for.
+func midiReportLines(state midiStartupState, err error, cfgDir string) []string {
+	var head string
+	switch state {
+	case midiNoInputs:
+		head = "mix-tui: no MIDI inputs are attached (keyboard only)"
+	case midiFailed:
+		head = fmt.Sprintf("mix-tui: no MIDI: %v (keyboard only)", err)
+	default:
+		return nil
+	}
+	return []string{
+		head,
+		"mix-tui: mappings are read from " + filepath.Join(cfgDir, "mappings"),
 	}
 }

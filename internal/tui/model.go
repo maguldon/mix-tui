@@ -111,13 +111,27 @@ func New(eng Engine, cfg *config.Config, keys *config.KeyResolver) *Model {
 		}
 		keys = k
 	}
+	// Zoom is per-deck, so the slice is sized to the engine's deck count rather
+	// than assumed. Two decks is the MVP; the slice means a third would not need
+	// a second change here.
+	n := 2
+	if eng != nil {
+		if c := eng.DeckCount(); c > 0 {
+			n = c
+		}
+	}
 	return &Model{
 		eng:  eng,
 		cfg:  cfg,
 		keys: keys,
-		st:   ViewState{Layout: layoutFromName(cfg.UI.DefaultView), Focus: 0, ZoomBars: 8},
-		w:    80,
-		h:    24,
+		st: ViewState{
+			Layout:   layoutFromName(cfg.UI.DefaultView),
+			Focus:    0,
+			ZoomBars: 8,
+			Zoom:     make([]bool, n),
+		},
+		w: 80,
+		h: 24,
 	}
 }
 
