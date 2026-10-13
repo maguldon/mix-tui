@@ -4,9 +4,6 @@ A terminal DJ mixing system. Two decks, pitch, EQ, filters, a crossfader,
 beatgrid sync, hotcues, and loops — driven by MIDI controllers and the
 keyboard, rendered as a text-mode interface.
 
-> **Status: in development.** The design and implementation plan are complete;
-> the code is not written yet. See [Status](#status) below.
-
 Mix the way Serato, Mixxx, or Traktor do — but in a terminal.
 
 ## What it is
@@ -21,14 +18,266 @@ can cue one track in your headphones over the other) and speaks **MIDI** to
 class-compliant controllers — the primary target being the
 [Allen & Heath Xone K2](https://allen-heath.com/hardware/xone-k2/).
 
+## Status
+
+**Working and testable.** ~15,500 lines of Go plus ~12,500 lines of tests; the
+full suite passes (`go test ./...`). All four binaries build and run.
+
+| Component | State |
+|---|---|
+| `internal/audio` — pure-Go wav/mp3/flac/ogg decoding, lock-free SPSC ring | Complete |
+| `internal/dsp` — resampler, 3-band EQ, filter, limiter | Complete |
+| `internal/analyze` — beatgrid + Camelot key detection | Complete |
+| `internal/engine` — decks, mixer, loops, sync, command queue | Complete |
+| `internal/pipewire` — MAIN + CUE output, pump | Complete |
+| `internal/midi` — message parsing, mappings, modifiers, hot reload | Complete |
+| `internal/tui` — four layouts, waveforms, library browser, overlays | Complete |
+| `internal/config` — YAML config and keybindings | Complete |
+
+Known gaps, so nothing here is a surprise:
+
+- **10 of the 45 declared actions have no consumer yet** — `ViewPrev`,
+  `FocusNext`, `ZoomIn`, `ZoomOut`, `DebugToggle`, `HelpToggle`, `LibraryLoad`,
+  `LibrarySearch`, `LibrarySort`, `LibraryFocusNext`. They parse from mapping
+  files and are emitted by the engine, but neither the engine nor the TUI acts
+  on them. The features they name are reachable by key instead.
+- **The library crates pane is a stub.** It renders "All tracks" plus a scan
+  summary and nothing else; there is no crate store yet.
+- **Sample-rate negotiation is not implemented.** The engine renders at the
+  rate your config asks for (default 44100) and relies on PipeWire's graph to
+  resample. If the daemon grants a different rate, `mixplay -stats` reports
+  `RATE MISMATCH` rather than rebuilding the engine.
+- **No controller has been validated against real hardware.** Nothing is
+  installed into your config directory; the only mapping in the tree is
+  `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests
+  whose CC numbers are guesses. Write your own and check it with
+  `midimapdump`.
+- **Downbeats assume 4/4.** A 3/4 or 7/8 track gets a correct tempo and beat
+  phase but the wrong bar lines.
+
+## Requirements
+
+- Linux
+- Go 1.27.1+
+- `libpipewire-0.3-dev` — audio output
+- `libasound2-dev` — ALSA-seq MIDI (pulled in transitively by the MIDI driver)
+
+```bash
+sudo apt install libpipewire-0.3-dev libasound2-dev
+```
+
+`internal/pipewire` is the only package that imports `C`. Everything above it —
+including MIDI parsing, mapping, and the entire engine — is pure Go and tests
+without a device attached.
+
+## Build
+
+```bash
+go build ./cmd/...
+# or install one
+go install github.com/maguldon/mix-tui/cmd/mix-tui@latest
+```
+
+## The binaries
+
+| Command | What it does |
+|---|---|
+| `mix-tui` | The application. Two decks, mixer, library browser, MIDI and keyboard control, out to a PipeWire device. |
+| `mixrender` | Renders an engine state to a WAV file, offline. The verification harness — no device, no terminal. |
+| `mixplay` | Plays that same mix to a real device, with MAIN and CUE streams, so you can hear what `mixrender` renders. |
+| `midimapdump` | Prints every binding a mapping file defines, so a mis-mapped controller is diagnosable without attaching one. |
+
+### mix-tui
+
+```bash
+mix-tui -a trackA.mp3 -b trackB.mp3
+```
+
+| Flag | Meaning |
+|---|---|
+| `-a PATH` | Track for deck A. |
+| `-b PATH` | Track for deck B. Requires `-a`. |
+| `-library DIR` | Library root to scan at startup. |
+| `-config PATH` | Config file. Defaults to `$XDG_CONFIG_HOME/mix-tui/config.yaml`. |
+| `-view A\|B\|C\|D` | Default layout. |
+| `-xf N` | Crossfader position at startup, -1..1. |
+| `-no-midi` | Disable MIDI input; keyboard only. |
+| `-no-audio` | Run the interface without opening a device. |
+| `-seed-test-midi` | Apply a scripted performance through the real MIDI path, with no hardware. |
+| `-screenshot PATH` | Render one frame to a file and exit. |
+| `-width N` / `-height N` | Render size for `-screenshot`. Defaults to 120×40. |
+
+A missing config, a failed audio device, a failed library scan, and no MIDI
+inputs at all are each warnings, not errors: the application starts anyway.
+Diagnostics go to `$XDG_CACHE_HOME/mix-tui.log`, because the TUI owns the
+terminal.
+
+### mixrender and mixplay
+
+```bash
+mixrender -out mix.wav -a track1.mp3 -b track2.wav -play 0 -play 1 \
+          -bpm-a 128 -bpm-b 124 -sync -loop-a 4 -xf 0.4 -stats
+
+mixplay -a track1.mp3 -b track2.wav -play 0 -seconds 8 \
+        -bpm-a 128 -bpm-b 124 -sync -loop-a 4 -stats
+```
+
+Both take the same control flags — `-play`, `-seconds`, `-xf`, `-loop-a`,
+`-loop-b`, `-roll`, `-sync`, `-quantize`, `-bpm-a`, `-bpm-b`. Neither runs
+beat detection; declare the tempo with `-bpm-a`/`-bpm-b` or the beat-dependent
+controls will refuse, clearly, rather than invent a tempo. `mixplay` adds
+`-main-target`, `-cue-target`, `-ring-frames`, and `-dump`. See
+[`cmd/mixrender/README.md`](cmd/mixrender/README.md) and
+[`cmd/mixplay/README.md`](cmd/mixplay/README.md).
+
+`mixplay -dump mix.wav` records what the device actually played, so you can
+compare it against `mixrender -out mix.wav` for the same flags: one is the
+offline path, one is the realtime path. Compare over the frames both produced —
+the dump length varies run to run, because the realtime pump is driven by the
+wall clock and stops wherever `-seconds` lands.
+
+### Headless rendering
+
+```bash
+mix-tui -a track.mp3 -no-audio -screenshot /tmp/shot.txt
+mix-tui -a track.mp3 -no-audio -width 80 -height 24 -screenshot /tmp/shot80.txt
+```
+
+This is how layout work gets checked. Every view is a pure function of
+(width, height, state) to a string, so a frame can be asserted on directly.
+
+## Configuration
+
+`$XDG_CONFIG_HOME/mix-tui/config.yaml`. A missing file is not an error: the
+application runs on defaults.
+
+```yaml
+audio:
+  sample_rate: 0            # 0 = the 44100 Hz default
+  main_target: ""           # route MAIN to this PipeWire node
+  cue_target: ""            # route CUE to this PipeWire node
+  ring_frames: 8820         # ~200ms at 44.1kHz
+  target_latency_frames: 8820
+ui:
+  default_view: D
+keys:
+  space: {action: DeckPlay}
+  c: {action: DeckCue, target: 0, value: toggle}
+  "-": {action: MasterGain, value: dec}
+```
+
+Unknown fields are **errors**, not warnings. These files are user-editable, and
+a silently ignored typo produces a controller that mysteriously does nothing.
+
+### Mappings
+
+Mapping files live in `$XDG_CONFIG_HOME/mix-tui/mappings/*.yaml`:
+
+```yaml
+device: "Xone K2"
+match: substring          # controllers rename themselves across reconnects
+modifiers:
+  shift: {kind: cc, chan: 1, num: 49, pressed: 127, released: 0, mode: momentary}
+controls:
+  - midi: {kind: cc, chan: 1, num: 9}
+    action: {kind: DeckPitch, target: 0}
+  - midi: {kind: note, chan: 1, num: 40}
+    mods: [shift]
+    action: {kind: DeckHotcueDelete, target: 0}
+    slot: 1
+```
+
+Mappings hot-reload while a device is connected: edit a file mid-set and it is
+picked up within two seconds, without dropping audio. A file is installed only
+if it both parses *and* compiles, and its timestamp is recorded only on
+success — so a broken file is retried on every scan, and fixing it takes effect
+immediately rather than requiring a restart. One bad file never blocks the rest.
+
+```bash
+midimapdump ~/.config/mix-tui/mappings/xone-k2.yaml   # what does this define?
+midimapdump -all ~/.config/mix-tui/mappings/          # every mapping
+midimapdump -json xone-k2.yaml                        # machine-readable
+```
+
+## Keyboard
+
+Navigation keys are checked **before** config bindings and cannot be rebound:
+if a mistyped mapping could shadow `esc` or `tab`, you could lock yourself out
+of the screen you are on with no way back and no error.
+
+| Key | Action |
+|---|---|
+| `tab` / `shift+tab` | Move deck focus (pane focus inside the library) |
+| `v` | Cycle layout: A → B → C → D |
+| `z` / `Z` | Toggle the zoomed waveform / cycle zoom bar count |
+| `↑` `↓` | Nudge the crossfader |
+| `/` | Library browser |
+| `l` | Quick-load overlay (load without leaving the decks) |
+| `?` | Help · `` ` `` debug overlay · `esc` back |
+
+Remappable deck controls:
+
+| Key | Action |
+|---|---|
+| `space` | Play the focused deck |
+| `c` | Cue (stop and return) |
+| `[` `]` | Pitch down / up |
+| `s` | Sync toggle · `q` quantize to nearest beat |
+| `1`–`8` | Set / jump hotcue slots 1–4 |
+| `9` / `0` | Loop in / loop out |
+| `w` `e` `y` `u` | 2 / 4 / 8 / 16 beat loop |
+| `i` / `o` / `\` | Save loop · recall loop · release loop |
+| `r` | Roll, 1 beat (toggles) |
+| `m` | Cue/program mix · `-` `=` master gain |
+
+In the library: `↑↓` select, `⏎` load to the focused deck, `shift+⏎` load to
+the other deck, `s` sort, `d` reverse, and any other printable key filters the
+list. Press `?` in the application for the live list.
+
+## Architecture at a glance
+
+```
+internal/
+  audio/      decoding to one canonical PCM format; lock-free SPSC ring
+  dsp/        resampler, EQ, filter, limiter — pure Go, no device
+  analyze/    STFT → beatgrid and Camelot key
+  engine/     all playback state; the only thing that touches audio
+  pipewire/   MAIN + CUE output and the producer pump   ← the only cgo
+  midi/       raw bytes → Message → Action, with modifiers and hot reload
+  config/     YAML config and keybindings
+  tui/        four layouts, waveforms, library browser, overlays
+```
+
+Four ideas do most of the work:
+
+- **The engine owns all state.** The TUI and MIDI are producers of named
+  `engine.Action` values; the engine is the only thing that touches audio. This
+  keeps knob turns responsive — a control change is posted to a lock-free
+  command queue and lands at the start of the next 512-frame block, so it can
+  never queue behind a repaint — and makes the engine testable with no terminal
+  and no sound card.
+- **A loop wrap is a seek.** Hotcues, nudges, sync, and loop wraps all reduce to
+  advancing the read head with correct resampler state, through one primitive
+  that primes the resampler *and* the EQ and filter delay lines from the
+  destination's own past. One code path, tested for continuity by maximum
+  sample delta, gives all of them seamless behaviour by construction.
+- **Pure-Go audio decoding.** mp3, wav, flac, and ogg decode with no system
+  codec dependency, detected by magic bytes rather than extension. cgo appears
+  only at the PipeWire edge, and only transitively at the MIDI one.
+- **Tested by measurement, not by listening.** The engine renders to a WAV you
+  can assert on — RMS, peak, zero-crossing rate, spectral content — because a
+  subtly-detuned pitch shifter still passes a file diff.
+
 ## Design goals
 
 - **Mixable by ear and eye.** Beatgrid detection, tempo sync, and beat quantize,
-  plus a CDJ-style zoomed waveform that tracks playback so you can align beats
-  visually — the affordance that usually needs a third screen.
+  plus a CDJ-style zoomed waveform with a ΔBEAT readout that tracks playback, so
+  you can align beats visually — the affordance that usually needs a third
+  screen.
 - **Keyboard-complete.** Every action is reachable from the keyboard alone.
 - **Fully remappable.** MIDI mappings are per-device YAML files, hot-reloaded
-  without dropping audio.
+  without dropping audio. Keys and controllers share one action vocabulary, so
+  they cannot drift apart.
 - **Sample-exact.** Loop wraps, hotcue jumps, and seeks all share one primitive
   that primes the resampler correctly, so they are seamless by construction.
 - **Honest about failure.** A track with no detectable beat degrades the
@@ -36,11 +285,17 @@ class-compliant controllers — the primary target being the
   detection below the confidence threshold renders as *undetected* rather than
   as a confident guess.
 
-## Status
+## Verifying
 
-The design specification and a full implementation plan are complete. **No
-functional code exists yet** — the repository currently contains the spec, four
-implementation plans, and this README.
+```bash
+go test ./... -race && go vet ./... && gofmt -l .
+```
+
+The engine and DSP tests assert on rendered samples; the TUI tests assert on
+rendered frames. The whole suite runs with no sound card, no MIDI controller,
+and no terminal.
+
+## Design documents
 
 | Artifact | Description |
 |---|---|
@@ -49,27 +304,6 @@ implementation plans, and this README.
 | [`docs/superpowers/plans/2026-10-11-device-output.md`](docs/superpowers/plans/2026-10-11-device-output.md) | Plan 2 — PipeWire output |
 | [`docs/superpowers/plans/2026-10-11-control-layer.md`](docs/superpowers/plans/2026-10-11-control-layer.md) | Plan 3 — MIDI and config |
 | [`docs/superpowers/plans/2026-10-11-interface.md`](docs/superpowers/plans/2026-10-11-interface.md) | Plan 4 — the terminal interface |
-
-## Architecture at a glance
-
-- **Engine owns all state.** The TUI and MIDI are producers of named
-  `Action`s; the engine is the only thing that touches audio. This keeps knob
-  turns responsive (they don't queue behind repaints) and makes the engine
-  testable with no terminal and no sound card.
-- **A loop wrap is a seek.** Hotcues, nudges, sync, and loop wraps all reduce to
-  advancing the read head with correct resampler state. One primitive, tested
-  for continuity, gives all of them seamless behaviour.
-- **Pure-Go audio decoding.** mp3, wav, flac, and ogg decode without system
-  codec dependencies. cgo appears only at the PipeWire and ALSA edges.
-- **Tested by measurement, not by listening.** The engine renders to a WAV you
-  can assert on — RMS, peak, zero-crossing rate, spectral content — because a
-  subtly-detuned pitch shifter still passes a file diff.
-
-## Requirements (planned)
-
-- Linux
-- Go 1.27+
-- `libpipewire-0.3-dev` and `libasound2-dev` (for audio output and MIDI)
 
 ## License
 
