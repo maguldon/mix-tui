@@ -141,3 +141,104 @@ func TestBeatPeriodIsSixtySecondsOverBPM(t *testing.T) {
 		t.Errorf("nil grid: BeatPeriod() = %v, want 0", got)
 	}
 }
+
+// drumPatternFor returns a buffer of `seconds` length holding drumPattern's
+// first `active` seconds and silence after that.
+//
+// The silence has to be part of the signal, not a truncation of it: cutting the
+// audio short would also cut the analysed span, so the detector would never see
+// that the track goes quiet and coverage would still read as full.
+func drumPatternFor(bpm, seconds, active float64) dsp.Stereo {
+	out := make(dsp.Stereo, int(seconds*dsp.SampleRate)*2)
+	copy(out, drumPattern(bpm, active))
+	return out
+}
+
+// Confidence must account for how much of the track the grid actually covers.
+//
+// Regularity alone cannot see this: a short chain can be perfectly consistent,
+// which is how a 6-beat grid over a 431-second track reported 0.60 confidence
+// and left beat features switched on.
+func TestBeatGridConfidenceFallsWithCoverage(t *testing.T) {
+	const bpm = 128.0
+	whole := drumPattern(bpm, 60)
+	part := drumPatternFor(bpm, 60, 4) // 4s of beats, then 56s of silence
+
+	full, err := AnalyzeBeatGrid(whole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sparse, err := AnalyzeBeatGrid(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sparse.Confidence >= full.Confidence {
+		t.Errorf("a grid covering 4s of 60s scored %v, not below the full track's %v",
+			sparse.Confidence, full.Confidence)
+	}
+	// 4/60 of the beats is ~7% coverage, well under the half-track threshold,
+	// so confidence must collapse rather than merely dip.
+	if sparse.Confidence > 0.3 {
+		t.Errorf("7%% coverage got confidence %v, want <= 0.3", sparse.Confidence)
+	}
+	if full.Confidence < 0.5 {
+		t.Errorf("full coverage got confidence %v, want >= 0.5", full.Confidence)
+	}
+}
+
+// A real track with a breakdown should NOT be punished: coverage is full credit
+// at half the track, because music legitimately goes quiet.
+func TestBeatGridConfidenceToleratesGaps(t *testing.T) {
+	pcm := drumPatternFor(128, 60, 40) // 40s of beats then 20s of silence
+	g, err := AnalyzeBeatGrid(pcm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Confidence < 0.5 {
+		t.Errorf("two thirds coverage got confidence %v, want >= 0.5", g.Confidence)
+	}
+}
+
+// Octave resolution must hold across the whole search range, including the
+// tempi where the half-time peak genuinely outscores the true one.
+//
+// On synthetic kick-plus-hat patterns the half-time autocorrelation peak
+// exceeds the true peak for some tempi -- 1.09x at 128 BPM, 1.23x at 150 BPM --
+// because that is what a backbeat looks like. The old rules doubled the lag
+// whenever the other peak was within 15%, which reported 150 BPM as 74.962.
+// The existing octave test only covered 124/128/132 on a bare impulse train,
+// where the peak is unambiguous and the rule never bit.
+func TestBeatGridAvoidsOctaveErrorsAcrossRange(t *testing.T) {
+	for _, bpm := range []float64{70, 85, 100, 108, 120, 128, 135, 140, 150, 160, 174, 190} {
+		g, err := AnalyzeBeatGrid(drumPattern(bpm, 40))
+		if err != nil {
+			t.Fatalf("bpm %v: %v", bpm, err)
+		}
+		ratio := g.BPM / bpm
+		if math.Abs(ratio-1) > 0.03 {
+			t.Errorf("detected %v for a %v track (ratio %v) — octave error", g.BPM, bpm, ratio)
+		}
+	}
+}
+
+// preferredTempo must be symmetric in octaves: one octave below the centre is
+// exactly as plausible as one above. Asymmetry is what makes a prior drag a
+// tempo toward the middle instead of only breaking near-ties.
+func TestPreferredTempoIsSymmetricInOctaves(t *testing.T) {
+	half := preferredTempo(preferredBPM / 2)
+	double := preferredTempo(preferredBPM * 2)
+	if rel := math.Abs(half-double) / half; rel > 1e-9 {
+		t.Errorf("an octave down is %v but an octave up is %v; want equal", half, double)
+	}
+	if got := preferredTempo(preferredBPM); math.Abs(got-1) > 1e-9 {
+		t.Errorf("preferredTempo(%v) = %v, want 1", preferredBPM, got)
+	}
+	if got := preferredTempo(0); got != 0 {
+		t.Errorf("preferredTempo(0) = %v, want 0", got)
+	}
+	// It must fall off, not merely be symmetric.
+	if preferredTempo(preferredBPM*8) >= preferredTempo(preferredBPM) {
+		t.Error("eight octaves up is no less plausible than the centre")
+	}
+}
