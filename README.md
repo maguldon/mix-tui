@@ -228,7 +228,7 @@ of the screen you are on with no way back and no error.
 
 | Key | Action |
 |---|---|
-| `tab` / `shift+tab` | Move deck focus (pane focus inside the library) |
+| `tab` / `shift+tab` | Move deck focus (pane focus inside the library, deck focus in the overlay) |
 | `v` | Cycle layout: A → B → C → D |
 | `z` / `Z` | Toggle the zoomed waveform / cycle zoom bar count |
 | `↑` `↓` | Nudge the crossfader |
@@ -252,9 +252,28 @@ Remappable deck controls:
 | `r` | Roll, 1 beat (toggles) |
 | `m` | Cue/program mix · `-` `=` master gain |
 
-In the library: `↑↓` select, `⏎` load to the focused deck, `shift+⏎` load to
-the other deck, `s` sort, `d` reverse, and any other printable key filters the
-list. Press `?` in the application for the live list.
+In the library: `↑↓` select, `⏎` load to the focused deck, `s` sort, `d` reverse, and
+any other printable key filters the list. Press `?` in the application for the
+live list.
+
+To load to the **other** deck, move deck focus first and then press `⏎`:
+`tab` in the mix view, or `tab` inside the quick-load overlay, which also moves
+deck focus. There is no `shift+⏎` — see [Keyboard notes](#keyboard-notes).
+
+<a id="keyboard-notes"></a>
+**Keyboard notes.** These are transport facts, not preferences, and each one
+cost a binding that looked implemented:
+
+- **`shift+⏎` does not exist.** A terminal sends Enter's bytes for both, and the
+  terminal library reports `enter` for both. A keybinding on `shift+enter` is
+  unreachable. Use `tab` then `⏎`.
+- **`tab` means different things in different modes.** In the mix view and the
+  quick-load overlay it moves *deck* focus. In the full library browser it
+  cycles *pane* focus, because that view really does render crates, tracks and
+  a filter field.
+- Keys that mean navigation are checked before your config bindings and cannot
+  be rebound. That is deliberate — a mistyped mapping must not be able to
+  shadow `esc` — and it is why `tab`, `l`, `S` and `?` are not remappable.
 
 The full browser needs 120 columns and says so when it does not have them. The
 quick-load overlay and the settings screen render at any width, so a narrow

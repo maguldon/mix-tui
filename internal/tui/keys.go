@@ -71,7 +71,12 @@ func (m *Model) handleKey(k string) tea.Cmd {
 	case "tab":
 		m.moveFocus(1)
 		return nil
-	case "backtab":
+	case "shift+tab":
+		// The string bubbletea emits for the back-tab sequence "\x1b[Z". It used
+		// to match "backtab", which no terminal has ever sent, so reverse deck
+		// focus was unreachable -- the same class of bug as SHIFT+ENTER, missed
+		// for the same reason: the test called handleKey with a string the
+		// transport cannot produce.
 		m.moveFocus(-1)
 		return nil
 	case "?":
@@ -281,25 +286,51 @@ func (m *Model) handleBrowserKey(name string) bool {
 		}
 		m.st.TrackSel = minInt(m.st.TrackSel+1, maxInt(0, m.trackCount()-1))
 		return true
-	case "tab":
-		// Spec 6.5: TAB cycles pane focus inside the library. It previously fell
-		// through to the global TAB, which moved DECK focus -- so browsing and
-		// pressing tab silently changed which deck ENTER would load into.
-		m.st.LibPane = (m.st.LibPane + 1) % views.PaneCount
+	case "tab", "shift+tab":
+		// The full browser renders three panes, so TAB cycles between them
+		// (spec 6.5). It used to fall through to the global TAB, which moved
+		// DECK focus -- so browsing a library and pressing tab silently changed
+		// which deck ENTER would load into.
+		//
+		// The overlay renders one. views.OverlayRows draws only the track list:
+		// it references no pane at all, so a pane cursor there was a focus the
+		// user could neither see nor act on, and pressing TAB did nothing
+		// visible whatsoever. The overlay returns false instead, letting the key
+		// reach the global TAB and move DECK focus -- which is what someone
+		// pressing it mid-search wants, since that is how they aim ENTER at the
+		// other deck.
+		//
+		// SHIFT+TAB is handled here for the same reason TAB is: it was not
+		// matched at all, so it fell through to the global handler and moved
+		// deck focus while the user was browsing. The pane-cycling test only
+		// ever exercised TAB.
+		if m.st.Mode != ModeLibrary {
+			return false
+		}
+		delta := 1
+		if name == "shift+tab" {
+			delta = -1
+		}
+		n := int(views.PaneCount)
+		m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
 		return true
 	case "left":
 		m.st.Query = dropLastRune(m.st.Query)
 		return true
 	case "right":
 		return true
-	case "shift+enter":
-		// Spec 6.5: SHIFT+ENTER loads to the OTHER deck. It was absent
-		// entirely, so every load went to the focused deck.
-		m.loadSelectedInto(1 - m.st.Focus)
-		return true
 	case "enter":
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
 		// did nothing before, so the browser had no way to load anything.
+		//
+		// The "other deck" is reached by moving deck focus first -- TAB in the
+		// mix view, or TAB inside the overlay -- not by a modifier on ENTER.
+		// SHIFT+ENTER was bound here and was unreachable: bubbletea has no
+		// Shift field, and only reports "shift+enter" under the kitty keyboard
+		// protocol. An ordinary terminal sends ENTER's bytes for both, so
+		// bubbletea reported "enter" and the case never fired. The test passed
+		// only because it called handleKey with the string directly, bypassing
+		// the transport the application actually uses.
 		m.loadSelected()
 		return true
 	case "backspace":
@@ -505,13 +536,13 @@ func zoomIndexOf(bars int) int {
 func modeFooter(m Mode) string {
 	switch m {
 	case ModeLibrary:
-		return "↑↓ select   ⏎ load deck   shift+⏎ other deck   tab pane   s sort   esc back"
+		return "↑↓ select   ⏎ load focused deck   tab pane   s sort   esc back"
 	case ModeHelp:
 		return "esc back"
 	case ModeDebug:
 		return "` close   esc back"
 	case ModeOverlay:
-		return "type to filter   ⏎ load   esc cancel"
+		return "type to filter   tab other deck   ⏎ load   esc cancel"
 	case ModeSettings:
 		return "type a path   ⏎ scan and save   esc cancel"
 	default:

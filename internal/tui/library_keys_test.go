@@ -77,26 +77,74 @@ func TestTabStillSwitchesDecksOutsideTheBrowser(t *testing.T) {
 	}
 }
 
-// TestShiftEnterLoadsToTheOtherDeck covers spec 6.5's SHIFT+ENTER, which was
-// absent entirely: every load went to the focused deck.
-func TestShiftEnterLoadsToTheOtherDeck(t *testing.T) {
+// TestTabThenEnterLoadsToTheOtherDeck replaces the SHIFT+ENTER test.
+//
+// SHIFT+ENTER was spec 6.5's way to load to the other deck, and it was
+// unreachable: bubbletea has no Shift field, so on an ordinary terminal it
+// reported "enter" and the case never fired. The test passed because it called
+// handleKey("shift+enter") directly, bypassing the transport.
+//
+// The reachable path is to move deck focus and press ENTER. This drives it the
+// way the application receives keys, so it cannot pass on a binding no terminal
+// sends.
+func TestTabThenEnterLoadsToTheOtherDeck(t *testing.T) {
 	m, f := libraryModel(t)
 	m.st.Focus = 0
+	m.st.Mode = ModeMix
 	m.st.TrackSel = 0
 
-	m.handleKey("shift+enter")
+	press(t, m, "tab")
+	if m.st.Focus != 1 {
+		t.Fatalf("tab left deck focus at %d, want 1", m.st.Focus)
+	}
+
+	m.st.Mode = ModeLibrary
+	press(t, m, "enter")
 
 	if len(f.applied) != 1 {
-		t.Fatalf("shift+enter produced %d loads, want 1", len(f.applied))
+		t.Fatalf("enter produced %d loads, want 1", len(f.applied))
 	}
 	if got := f.applied[0].Target; got != 1 {
-		t.Errorf("shift+enter loaded into deck %d, want deck 1 (focus was 0)", got)
+		t.Errorf("loaded into deck %d, want deck 1 (focus was 1)", got)
 	}
 	if m.st.Focus != 1 {
-		t.Errorf("focus stayed on deck %d; it should follow the load", m.st.Focus)
+		t.Errorf("focus = %d; it should follow the load", m.st.Focus)
 	}
 	if m.st.Mode != ModeMix {
-		t.Errorf("shift+enter left the browser open (mode %v)", m.st.Mode)
+		t.Errorf("enter left the browser open (mode %v)", m.st.Mode)
+	}
+}
+
+// TestShiftTabCyclesLibraryPanesBackwards covers the other half of the pair.
+// SHIFT+TAB was not matched in the browser at all, so it reached the global
+// handler and moved DECK focus while the user was browsing -- the exact mistake
+// the TAB case exists to prevent, and the pane test only ever exercised TAB.
+func TestShiftTabCyclesLibraryPanesBackwards(t *testing.T) {
+	m, _ := libraryModel(t)
+	deckBefore := m.st.Focus
+	paneBefore := m.st.LibPane
+
+	press(t, m, "shift+tab")
+
+	if m.st.Focus != deckBefore {
+		t.Errorf("shift+tab changed deck focus from %d to %d while browsing", deckBefore, m.st.Focus)
+	}
+	if m.st.LibPane == paneBefore {
+		t.Errorf("shift+tab did not move the pane focus (stayed at %v)", paneBefore)
+	}
+}
+
+// TestShiftTabMovesDeckFocusBackwards keeps reverse deck focus reachable in the
+// mix view. It used to match "backtab", which no terminal emits, so the key did
+// nothing at all.
+func TestShiftTabMovesDeckFocusBackwards(t *testing.T) {
+	m, _ := testModel(t)
+	m.st.Focus = 0
+
+	press(t, m, "shift+tab")
+
+	if m.st.Focus != len(m.eng.Snapshot().Decks)-1 {
+		t.Errorf("shift+tab left focus at %d, want it to wrap to the last deck", m.st.Focus)
 	}
 }
 
