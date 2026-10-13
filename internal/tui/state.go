@@ -23,6 +23,7 @@ const (
 	ModeOverlay
 	ModeHelp
 	ModeDebug
+	ModeSettings
 )
 
 // LayoutKind selects one of the four layouts (spec §6.1). D is the default: the
@@ -83,6 +84,19 @@ type ViewState struct {
 	// LastErr and LastErrAt drive the auto-expiring error line.
 	LastErr   string
 	LastErrAt time.Time
+	// SettingInput is the editable library path in the settings view. It is
+	// seeded from config on entry rather than carried across openings, so the
+	// field always shows what is actually in effect.
+	SettingInput string
+	// SettingNote is the last settings result: what was saved, or what a scan
+	// found. It is the only feedback a save produces, and a save is otherwise
+	// invisible.
+	SettingNote string
+	// ScanBusy is true between asking for a rescan and the scan returning. It
+	// exists so the view can say what is happening: a scan of a real collection
+	// runs for seconds, and without it the interface looks identical whether
+	// the key worked or not.
+	ScanBusy bool
 }
 
 // nextLayout cycles A->B->C->D->A.

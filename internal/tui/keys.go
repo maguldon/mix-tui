@@ -2,19 +2,24 @@ package tui
 
 import (
 	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/maguldon/mix-tui/internal/config"
 	"github.com/maguldon/mix-tui/internal/engine"
 	"github.com/maguldon/mix-tui/internal/tui/library"
 	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
-// handleKey routes a key press.
+// handleKey routes a key press and returns a command to run, if any.
 //
 // UI keys are checked BEFORE config lookups. Navigation has to work no matter
 // what the user bound: if a config binding could shadow "esc" or "tab", a
 // mistyped mapping would lock the user out of the screen they are on, with no
 // way back and no error. The cost is that those keys cannot be rebound, which
 // is the right trade.
-func (m *Model) handleKey(k string) {
+func (m *Model) handleKey(k string) tea.Cmd {
 	name := bindingName(k)
 
 	// The error screen's way out. Checked before anything else because the
@@ -25,7 +30,7 @@ func (m *Model) handleKey(k string) {
 		case "q", "ctrl+c":
 			m.quitting = true
 		}
-		return
+		return nil
 	}
 
 	// Mode-relative keys run BEFORE the universal exits. TAB and SHIFT+ENTER
@@ -33,9 +38,18 @@ func (m *Model) handleKey(k string) {
 	// other deck) and must reach it first -- handled after this, TAB changed
 	// which DECK was focused while the user was browsing, which is the moment a
 	// mistake is most expensive.
+	//
+	// Settings is here for the same reason and one more: almost every key is
+	// text destined for the path field, so if it ran second, typing "esc" into
+	// a path would close the screen instead of typing four characters.
 	if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
 		if m.handleBrowserKey(k) {
-			return
+			return nil
+		}
+	}
+	if m.st.Mode == ModeSettings {
+		if cmd, done := m.handleSettingsKey(k); done {
+			return cmd
 		}
 	}
 
@@ -53,24 +67,24 @@ func (m *Model) handleKey(k string) {
 			m.st.LibPane = views.PaneTracks
 		}
 		m.st.Mode = ModeMix
-		return
+		return nil
 	case "tab":
 		m.moveFocus(1)
-		return
+		return nil
 	case "backtab":
 		m.moveFocus(-1)
-		return
+		return nil
 	case "?":
 		m.st.Mode = toggleMode(m.st.Mode, ModeHelp)
-		return
+		return nil
 	case "`":
 		m.st.Mode = toggleMode(m.st.Mode, ModeDebug)
-		return
+		return nil
 	case "/":
 		// Focus the track list on entry, for the same reason LibraryOpen does.
 		m.st.LibPane = views.PaneTracks
 		m.st.Mode = toggleMode(m.st.Mode, ModeLibrary)
-		return
+		return nil
 	case "l":
 		// The quick-load overlay, reachable from the mix view. Without this the
 		// overlay had no producer at all: a view nothing can open is dead code,
@@ -85,35 +99,134 @@ func (m *Model) handleKey(k string) {
 			// and only the first result was ever reachable.
 			m.st.LibPane = views.PaneTracks
 		}
-		return
+		return nil
+	case "S":
+		// The settings view, from which the library root can be set.
+		//
+		// Uppercase on purpose. Every lowercase letter in this application is
+		// either a deck control or bound by DefaultKeys, and shadowing one to
+		// reach a settings screen would take a control away rather than add a
+		// way in.
+		if m.st.Mode == ModeMix {
+			m.openSettings()
+		}
+		return nil
 	}
 
 	switch name {
 	case "v":
 		m.st.Layout = m.st.Layout.next()
-		return
+		return nil
 	case "z":
 		m.st.Zoom = !m.st.Zoom
-		return
+		return nil
 	case "Z":
 		m.st.ZoomBars = ZoomBarOptions[ZoomIndex(zoomIndexOf(m.st.ZoomBars))]
-		return
+		return nil
 	case "up":
 		m.nudge(-1)
-		return
+		return nil
 	case "down":
 		m.nudge(1)
-		return
+		return nil
 	}
 
 	if m.keys == nil {
-		return
+		return nil
 	}
 	a, ok := m.keys.Resolve(name)
 	if !ok {
-		return // unknown key: no state change, no action
+		return nil // unknown key: no state change, no action
 	}
 	m.applyAction(a)
+	return nil
+}
+
+// openSettings enters the settings view, seeding the path field with what is
+// currently configured.
+//
+// Seeding rather than starting blank matters: the user arrives at this screen
+// to edit an existing value, and an empty field invites them to retype a path
+// they can already see one line above.
+func (m *Model) openSettings() {
+	if m.cfg != nil {
+		m.st.SettingInput = m.cfg.UI.LibraryRoot
+	}
+	m.st.SettingNote = ""
+	m.st.Mode = ModeSettings
+}
+
+// handleSettingsKey handles the settings view's own keys. It reports whether it
+// consumed the key.
+//
+// Like handleBrowserKey it takes the RAW key string, so the space bar types a
+// space. Library directories named "DJ Music" or "My Tracks" are ordinary, and
+// a field that silently drops the space in the path the user is typing is a
+// field that produces a path that does not exist.
+func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
+	switch k {
+	case "enter":
+		root := strings.TrimSpace(m.st.SettingInput)
+		if root == "" {
+			// Clearing the library is a real request, so it needs a real path to
+			// clear to. Treating an empty field as "scan nothing" would make
+			// backspacing a directory away silently empty the library.
+			m.setError("type a directory, or esc to cancel")
+			return nil, true
+		}
+		root = config.ExpandHome(root)
+		if m.saveFunc != nil {
+			if err := m.saveFunc(root); err != nil {
+				m.setError(err.Error())
+				return nil, true
+			}
+		}
+		if m.cfg != nil {
+			m.cfg.UI.LibraryRoot = root
+		}
+		m.setError("")
+		if m.scanFunc == nil {
+			m.st.SettingNote = "saved; rescanning is unavailable in this build"
+			return nil, true
+		}
+		m.st.SettingNote = ""
+		m.st.ScanBusy = true
+		return m.scanCmd(root), true
+
+	case "backspace", "left":
+		m.st.SettingInput = dropLastRune(m.st.SettingInput)
+		return nil, true
+	case "ctrl+u":
+		m.st.SettingInput = ""
+		return nil, true
+	}
+
+	// Anything printable goes in the path. Not just letters: a path is mostly
+	// slashes, dots and tildes, and a view that accepted only alphanumerics
+	// would be unusable for the thing it exists to do.
+	if r := []rune(k); len(r) == 1 && r[0] >= ' ' {
+		m.st.SettingInput += k
+		return nil, true
+	}
+	return nil, false
+}
+
+// scanCmd runs a rescan off the UI goroutine.
+//
+// It has to: a scan of a real collection walks tens of thousands of files and
+// takes seconds. Run inline, it would stop the tick that drives the level
+// meters, so a DJ pressing enter to repoint their library would watch the
+// interface freeze with no indication anything was happening -- the worst
+// possible read of a keypress that did work.
+func (m *Model) scanCmd(root string) tea.Cmd {
+	scan := m.scanFunc
+	return func() tea.Msg {
+		if scan == nil {
+			return scanDoneMsg{root: root, err: fmt.Errorf("rescanning is not available")}
+		}
+		ix, err := scan(root)
+		return scanDoneMsg{root: root, index: ix, err: err}
+	}
 }
 
 // handleBrowserKey handles the browser's own keys. It reports whether it
@@ -224,6 +337,11 @@ func (m *Model) loadSelected() { m.loadSelectedInto(m.st.Focus) }
 func (m *Model) loadSelectedInto(deck int) {
 	tr, ok := m.selectedTrack()
 	if !ok {
+		// Say so. This returned silently, so ENTER on an empty library was
+		// indistinguishable from ENTER not being wired to anything -- and the
+		// usual reason the list is empty is that no library root is set, which
+		// is exactly what the message should point at.
+		m.setError(m.nothingToLoadReason())
 		return
 	}
 	if n := m.eng.DeckCount(); n > 0 {
@@ -246,6 +364,21 @@ func (m *Model) selectedTrack() (library.Track, bool) {
 		return library.Track{}, false
 	}
 	return views.MatchTrack(m.lib.Tracks(), m.st.Query, m.st.TrackSel)
+}
+
+// nothingToLoadReason explains an ENTER that loaded nothing, naming whichever of
+// the three causes applies rather than reporting the same non-answer each time.
+func (m *Model) nothingToLoadReason() string {
+	if m.trackCount() == 0 && m.st.Query != "" {
+		return fmt.Sprintf("no tracks match %q -- backspace to clear the filter", m.st.Query)
+	}
+	if m.lib == nil || m.lib.Len() == 0 {
+		if m.cfg != nil && m.cfg.UI.LibraryRoot == "" {
+			return "the library is empty -- press S to set a library root"
+		}
+		return "the library is empty -- press S to check the library root"
+	}
+	return "no track selected"
 }
 
 // trackCount is how many tracks the filtered library holds.
@@ -379,8 +512,10 @@ func modeFooter(m Mode) string {
 		return "` close   esc back"
 	case ModeOverlay:
 		return "type to filter   ⏎ load   esc cancel"
+	case ModeSettings:
+		return "type a path   ⏎ scan and save   esc cancel"
 	default:
-		return "tab focus   v layout   z zoom   / library   ? help   ` debug"
+		return "tab focus   v layout   z zoom   / library   l load   S settings   ? help"
 	}
 }
 

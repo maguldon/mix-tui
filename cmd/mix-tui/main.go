@@ -26,6 +26,12 @@ import (
 	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
+// scanTimeout bounds a library scan. It is generous because scanning only
+// stats files -- it decodes nothing -- and a real collection is tens of
+// thousands of them, but it is a bound rather than an open-ended walk so a
+// root on a stalled network mount cannot hang startup forever.
+const scanTimeout = 30 * time.Second
+
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		fmt.Print(flagText())
@@ -103,10 +109,16 @@ func run(args appArgs) error {
 	})
 
 	// 4. Tracks, with cached analysis attached so BPM and key show immediately.
+	//
+	//    The root comes from -library if given, else ui.library_root. The flag
+	//    wins because a path typed at the prompt is an explicit request for this
+	//    run; the config value is the fallback, and was the only way to point at
+	//    a library without retyping the flag on every launch.
 	lib := library.NewIndex()
-	if root := args.libraryRoot; root != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := lib.Scan(ctx, []string{root}, nil, nil); err != nil {
+	libRoot := config.ResolveLibraryRoot(args.libraryRoot, cfg.UI.LibraryRoot)
+	if libRoot != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
+		if err := lib.Scan(ctx, []string{libRoot}, nil, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "mix-tui: library scan: %v\n", err)
 		}
 		cancel()
@@ -172,6 +184,37 @@ func run(args appArgs) error {
 		return nil
 	}
 	model.SetLoader(loadInto)
+
+	// The settings view's two back-ends. Both are the binary's for the same
+	// reason the loader is: scanning a filesystem and rewriting the user's
+	// config are not things a view layer should be able to do.
+	//
+	// The rescan builds a NEW index and swaps it in, so a root that cannot be
+	// read leaves the library the user already had rather than emptying it.
+	model.SetLibraryScanner(func(root string) (*library.Index, error) {
+		ix := library.NewIndex()
+		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
+		defer cancel()
+		err := ix.Scan(ctx, []string{root}, nil, nil)
+		return ix, err
+	})
+	model.SetLibrarySources(configPath(args.configPath), args.libraryRoot)
+	if args.configPath == "" && discoverConfig("") == "" {
+		// No config file on disk. Say so once, on stderr, which the alt-screen
+		// program has not taken yet: otherwise the first save from inside the
+		// application creates a file the user never knew did not exist.
+		fmt.Fprintf(os.Stderr, "mix-tui: no config file at %s; one will be written if you save a setting\n",
+			configPath(""))
+	}
+	if args.configPath == "" {
+		model.SetConfigSaver(func(root string) error {
+			return config.SaveLibraryRoot(configPath(""), root)
+		})
+	} else {
+		model.SetConfigSaver(func(root string) error {
+			return config.SaveLibraryRoot(args.configPath, root)
+		})
+	}
 
 	if !args.noMIDI {
 		handler := model.MIDIHandler()

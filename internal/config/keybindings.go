@@ -199,6 +199,11 @@ func (r *KeyResolver) Repeats(key string) bool {
 // keyDescriptions give the help view something to say about each key. Without
 // these the help screen is a list of bare key names, which tells a user
 // nothing they did not already know.
+//
+// Only rebindable keys belong here. The navigation keys are listed in uiKeys
+// instead: a row here would be consulted even for a key the user has rebound,
+// so binding "l" to a real action would still be described as the quick-load
+// overlay -- a help screen that contradicts what the key does.
 var keyDescriptions = map[string]string{
 	"space":  "play/pause focused deck",
 	"c":      "cue focused deck",
@@ -211,9 +216,7 @@ var keyDescriptions = map[string]string{
 	"Z":      "zoom level",
 	"v":      "cycle layout",
 	"/":      "library",
-	"l":      "quick-load overlay",
-	"tab":    "move deck focus",
-	"escape": "close overlay",
+	"escape": "close the browser, overlay or settings",
 	"ctrl+c": "quit",
 }
 
@@ -240,6 +243,21 @@ func splitBinding(b string) (key, desc string) {
 	return strings.TrimSpace(b), ""
 }
 
+// uiKeys are the navigation keys the TUI handles before any config lookup.
+//
+// They are checked first and cannot be rebound (see internal/tui/keys.go), so
+// nothing else records them: a key that a user can press but that appears in
+// no binding table is a key the help screen would omit. "l" and "tab" were
+// already in this position and missing from the help listing.
+var uiKeys = []struct{ key, desc string }{
+	{"tab", "move deck focus"},
+	{"shift+tab", "move deck focus back"},
+	{"l", "quick-load overlay"},
+	{"S", "settings: library root"},
+	{"?", "this help"},
+	{"`", "debug overlay"},
+}
+
 // DescribeLines returns the help lines as "key  description", sorted.
 //
 // The result is cached: the binding table only changes when a new resolver is
@@ -248,13 +266,24 @@ func (r *KeyResolver) DescribeLines() []string {
 	if r.lines != nil {
 		return r.lines
 	}
-	out := make([]string, 0, len(r.bindings))
+	seen := make(map[string]bool, len(r.bindings)+len(uiKeys))
+	out := make([]string, 0, len(r.bindings)+len(uiKeys))
 	for k := range r.bindings {
 		desc := keyDescriptions[k]
 		if desc == "" {
 			desc = r.bindings[k].action.String()
 		}
+		seen[k] = true
 		out = append(out, k+"  "+desc)
+	}
+	// A rebindable binding wins the description. If the user moved "l" onto a
+	// real action, the hardcoded row for "l" would be wrong, and the binding
+	// table is the one that actually fires.
+	for _, u := range uiKeys {
+		if seen[u.key] {
+			continue
+		}
+		out = append(out, u.key+"  "+u.desc)
 	}
 	sort.Strings(out)
 	r.lines = out

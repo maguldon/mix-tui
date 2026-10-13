@@ -91,10 +91,30 @@ func flagText() string {
 	return "mix-tui — a terminal DJ application\n\n" + b.String()
 }
 
-// discoverConfig resolves the config path: an explicit flag wins, then the XDG
-// location. A missing file yields "" rather than an error, so a fresh install
-// runs on defaults.
+// discoverConfig resolves the config path for LOADING: an explicit flag wins,
+// then the XDG location. A missing file yields "" rather than an error, so a
+// fresh install runs on defaults.
 func discoverConfig(explicit string) string {
+	p := configPath(explicit)
+	if p == "" {
+		return ""
+	}
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
+// configPath resolves the config path for WRITING, without requiring the file
+// to exist.
+//
+// This is separate from discoverConfig because the two disagree exactly when it
+// matters: discoverConfig returns "" for a config that does not exist, which is
+// right for loading and useless for saving. A user with no config file is the
+// user most likely to be opening the settings screen, and returning "" there
+// would mean the one action that could fix their setup was the one action
+// unavailable.
+func configPath(explicit string) string {
 	if explicit != "" {
 		return explicit
 	}
@@ -106,9 +126,5 @@ func discoverConfig(explicit string) string {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	p := filepath.Join(base, "mix-tui", "config.yaml")
-	if _, err := os.Stat(p); err != nil {
-		return ""
-	}
-	return p
+	return filepath.Join(base, "mix-tui", "config.yaml")
 }

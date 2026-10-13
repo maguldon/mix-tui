@@ -97,7 +97,7 @@ mix-tui -a trackA.mp3 -b trackB.mp3
 |---|---|
 | `-a PATH` | Track for deck A. |
 | `-b PATH` | Track for deck B. Requires `-a`. |
-| `-library DIR` | Library root to scan at startup. |
+| `-library DIR` | Library root to scan at startup. Overrides `ui.library_root`. |
 | `-config PATH` | Config file. Defaults to `$XDG_CONFIG_HOME/mix-tui/config.yaml`. |
 | `-view A\|B\|C\|D` | Default layout. |
 | `-xf N` | Crossfader position at startup, -1..1. |
@@ -160,6 +160,7 @@ audio:
   target_latency_frames: 8820
 ui:
   default_view: D
+  library_root: "~/Music/DJ Music"   # scanned at startup; -library overrides
 keys:
   space: {action: DeckPlay}
   c: {action: DeckCue, target: 0, value: toggle}
@@ -168,6 +169,26 @@ keys:
 
 Unknown fields are **errors**, not warnings. These files are user-editable, and
 a silently ignored typo produces a controller that mysteriously does nothing.
+
+`~` is expanded in `library_root`, so the obvious thing to write works.
+
+### The library
+
+`ui.library_root` is the directory scanned for tracks at startup. It is also
+editable from inside the application: press **`S`** for the settings screen,
+which shows the active root, the track count, and the config file it writes to.
+Type a path, press `⏎`, and it is saved and re-scanned without a restart.
+
+The scan runs off the render path, so the decks keep playing and the meters keep
+moving while it works — a real collection is tens of thousands of files. If the
+root cannot be read the existing library is kept rather than emptied.
+
+Precedence is `-library` flag, then `ui.library_root`. The flag wins because a
+path typed at the prompt is a request for this run. When one is set, the
+settings screen says so, so editing the config is not a silent no-op.
+
+There is no way to load a track by typing a path elsewhere: the scan is the only
+source of loadable tracks, and `-a`/`-b` remain the one-shot path loaders.
 
 ### Mappings
 
@@ -213,6 +234,7 @@ of the screen you are on with no way back and no error.
 | `↑` `↓` | Nudge the crossfader |
 | `/` | Library browser |
 | `l` | Quick-load overlay (load without leaving the decks) |
+| `S` | Settings: library root, track count, config path |
 | `?` | Help · `` ` `` debug overlay · `esc` back |
 
 Remappable deck controls:
@@ -233,6 +255,10 @@ Remappable deck controls:
 In the library: `↑↓` select, `⏎` load to the focused deck, `shift+⏎` load to
 the other deck, `s` sort, `d` reverse, and any other printable key filters the
 list. Press `?` in the application for the live list.
+
+The full browser needs 120 columns and says so when it does not have them. The
+quick-load overlay and the settings screen render at any width, so a narrow
+terminal is not a dead end.
 
 ## Architecture at a glance
 

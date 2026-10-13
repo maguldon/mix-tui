@@ -31,7 +31,17 @@ type AudioConfig struct {
 type UIConfig struct {
 	// DefaultView is one of A, B, C, D. D is the default per spec §6.1.
 	DefaultView string `yaml:"default_view"`
-	LibraryNode string `yaml:"library_root"`
+	// LibraryRoot is the directory scanned for tracks at startup, and the one
+	// the settings screen edits.
+	//
+	// It was declared as LibraryNode and never read by anything: the scan
+	// consulted the -library flag alone, so a config setting library_root
+	// parsed, validated, and was then discarded. Because unknown fields are
+	// errors here, a user who wrote it got a config that looked accepted and
+	// did nothing -- the most expensive kind of silent failure.
+	//
+	// A leading "~" is expanded at load; see ExpandHome.
+	LibraryRoot string `yaml:"library_root"`
 }
 
 // KeyBinding binds one key name ("q", "ctrl+s", "f1") to an action.

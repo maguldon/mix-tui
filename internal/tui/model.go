@@ -47,6 +47,21 @@ type Model struct {
 	// itself: that is the audio package's job, and doing it here would put file
 	// I/O in the view layer. The binary supplies it.
 	loadFunc func(deck int, path string) error
+	// scanFunc re-scans a library root and returns a fresh index. Like
+	// loadFunc it is supplied by the binary, for the same reason: walking a
+	// filesystem is not the view layer's business.
+	//
+	// It returns a new index rather than mutating the attached one so that a
+	// failed scan cannot leave the browser half-populated.
+	scanFunc func(root string) (*library.Index, error)
+	// saveFunc persists a library root to the config file. It is the write
+	// counterpart of config.Load and is likewise the binary's, since the TUI
+	// has no config path of its own and no business writing to one.
+	saveFunc func(root string) error
+	// configPath and flagRoot are shown in the settings view. Without
+	// flagRoot a user whose -library flag overrides the config cannot tell why
+	// editing the file changes nothing.
+	configPath, flagRoot string
 	// statsFunc is supplied by the binary to report device and pump health.
 	//
 	// It is a function rather than a pipewire type so the TUI does not import
@@ -118,6 +133,22 @@ func (m *Model) SetLibrary(ix *library.Index) { m.lib = ix }
 
 // SetLoader supplies the track-loading function the library and overlay use.
 func (m *Model) SetLoader(f func(deck int, path string) error) { m.loadFunc = f }
+
+// SetLibraryScanner supplies the rescan the settings view calls when a new
+// library root is applied.
+func (m *Model) SetLibraryScanner(f func(root string) (*library.Index, error)) { m.scanFunc = f }
+
+// SetConfigSaver supplies the function that persists a library root to the
+// config file.
+func (m *Model) SetConfigSaver(f func(root string) error) { m.saveFunc = f }
+
+// SetLibrarySources records where the library came from, for the settings
+// view. configPath is the file a save would write to, which is not necessarily
+// the one that was loaded: the loaded path is "" on a fresh install, and that
+// is precisely the install where a save has to create the file.
+func (m *Model) SetLibrarySources(configPath, flagRoot string) {
+	m.configPath, m.flagRoot = configPath, flagRoot
+}
 
 // LoadSelected loads a path into a deck, reporting why it failed.
 func (m *Model) LoadSelected(deck int, path string) error {
@@ -193,11 +224,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case keyMsg:
-		m.handleKey(string(msg))
+		cmd := m.handleKey(string(msg))
 		if m.quitting {
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, cmd
 
 	case tea.KeyMsg:
 		// The real input path. Everything below handleKey was written and
@@ -208,15 +239,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//
 		// Tests could not catch it because they call Update with keyMsg
 		// directly, bypassing the transport the application actually uses.
-		m.handleKey(msg.String())
+		cmd := m.handleKey(msg.String())
 		if m.quitting {
 			return m, tea.Quit
 		}
+		return m, cmd
+
+	case scanDoneMsg:
+		m.st.ScanBusy = false
+		if msg.index != nil {
+			m.lib = msg.index
+		}
+		n := 0
+		if m.lib != nil {
+			n = m.lib.Len()
+		}
+		// A root that could not be read is worth an error; a root that was read
+		// and held nothing is not -- an empty folder is a fact about the user's
+		// music, not a fault. Report them differently, because the first has a
+		// fix and the second usually does not.
+		switch {
+		case msg.err != nil && n == 0:
+			m.setError(fmt.Sprintf("library scan of %s: %v", msg.root, msg.err))
+		case n == 0:
+			m.st.SettingNote = fmt.Sprintf("no tracks found under %s", msg.root)
+		default:
+			m.st.SettingNote = fmt.Sprintf("saved %s: %d tracks", msg.root, n)
+		}
+		// The old cursor is meaningless against a different collection, and
+		// leaving it set would clamp into the new list at an arbitrary offset.
+		m.st.TrackSel = 0
+		m.st.Query = ""
 		return m, nil
 
 	default:
 		return m, nil
 	}
+}
+
+// scanDoneMsg is the result of a rescan started from the settings view.
+type scanDoneMsg struct {
+	root  string
+	index *library.Index
+	err   error
 }
 
 // bindingName maps a physical key to the spelling config uses.
@@ -320,6 +385,8 @@ func (m *Model) RenderAt(w, h int) string {
 		body = views.RenderHelp(w, h, bindings)
 	case ModeDebug:
 		body = views.RenderDebug(w, h, m.snapshot(), m.stats)
+	case ModeSettings:
+		body = views.RenderSettings(w, h, m.settingsState())
 	default:
 		body = Render(w, h-1, m.snapshot(), m.st)
 	}
@@ -346,12 +413,30 @@ func (m *Model) RenderAt(w, h int) string {
 	if msg := m.st.LastErr; msg != "" && h > 1 {
 		out[h-2] = padRight(errStyle.Render(truncate("! "+msg, w)), w)
 	}
-	if h > 0 && m.st.Mode == ModeMix {
+	if h > 0 && footerVisible(m.st.Mode) {
 		// The footer names the active mode's keys, so a key that means
 		// different things in two places is never a surprise.
+		//
+		// It is drawn for every full-screen mode, not just the mix view.
+		// Gating it on ModeMix left the library, overlay, help and debug
+		// branches of modeFooter unreachable: dead text, documenting keys the
+		// screen never showed. The overlay and debug dump are the exceptions --
+		// the overlay is composited over the deck view and would overwrite a
+		// rendered row, and the debug screen is already as dense as it
+		// usefully gets.
 		out[h-1] = padRight(dimStyle.Render(truncate(modeFooter(m.st.Mode), w)), w)
 	}
 	return strings.Join(out, "\n")
+}
+
+// footerVisible reports whether a mode draws the key footer.
+func footerVisible(m Mode) bool {
+	switch m {
+	case ModeOverlay, ModeDebug:
+		return false
+	default:
+		return true
+	}
 }
 
 // libOrEmpty returns the library, or an empty one, so a view is never handed a
@@ -361,6 +446,22 @@ func (m *Model) libOrEmpty() *library.Index {
 		return m.lib
 	}
 	return library.NewIndex()
+}
+
+// settingsState collects what the settings view needs.
+func (m *Model) settingsState() views.SettingsState {
+	st := views.SettingsState{
+		Root:       m.cfg.UI.LibraryRoot,
+		FlagRoot:   m.flagRoot,
+		ConfigPath: m.configPath,
+		Input:      m.st.SettingInput,
+		Note:       m.st.SettingNote,
+		Busy:       m.st.ScanBusy,
+	}
+	if m.lib != nil {
+		st.Tracks = m.lib.Len()
+	}
+	return st
 }
 
 func (m *Model) libState() views.LibraryState {
