@@ -631,3 +631,50 @@ func TestLoopRollTogglesFromTheKeyboard(t *testing.T) {
 		t.Errorf("release applied Value %v, want 0", last.Value)
 	}
 }
+
+// A real keystroke must reach the key handler.
+//
+// Every other test in this file drives Update with keyMsg, the plain string
+// form. That skipped the transport entirely, and it is why the missing
+// tea.KeyMsg case shipped: the interface rendered and ignored every key, while
+// every test that "proved" key handling passed.
+//
+// This goes through the message type bubbletea actually delivers.
+func TestRealKeyPressReachesTheKeyHandler(t *testing.T) {
+	// Update has a pointer receiver and mutates in place, so the resulting
+	// mode/layout has to be read immediately rather than compared later
+	// through the returned pointer.
+	pressRune := func(m *Model, k rune) LayoutKind {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{k}})
+		return m.State().Layout
+	}
+	pressMode := func(m *Model, k rune) Mode {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{k}})
+		return m.State().Mode
+	}
+
+	m, _ := testModel(t)
+
+	// "v" cycles the layout.
+	before := m.State().Layout
+	after := pressRune(m, 'v')
+	if before == after {
+		t.Errorf("pressing v left the layout at %v: keyboard input is not reaching the handler", after)
+	}
+
+	// "?" opens help.
+	if got := pressMode(m, '?'); got != ModeHelp {
+		t.Errorf("pressing ? gave mode %v, want ModeHelp", got)
+	}
+}
+
+// ctrl+c must quit, which the default keymap routes through the Quit action.
+// Without it a running session can only be left with SIGTERM from another
+// terminal.
+func TestRealCtrlCQuits(t *testing.T) {
+	m, _ := testModel(t)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m2.(*Model).quitting {
+		t.Error("ctrl+c did not set quitting")
+	}
+}

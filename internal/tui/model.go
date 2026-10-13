@@ -122,7 +122,13 @@ func (m *Model) SetLoader(f func(deck int, path string) error) { m.loadFunc = f 
 // LoadSelected loads a path into a deck, reporting why it failed.
 func (m *Model) LoadSelected(deck int, path string) error {
 	if m.loadFunc == nil {
-		return fmt.Errorf("loading is not available")
+		// Report it like every other failure. Returning the error without
+		// recording it meant a load that could never work -- which is what a
+		// headless or unwired model does -- looked exactly like ENTER doing
+		// nothing.
+		err := fmt.Errorf("loading is not available")
+		m.setError(err.Error())
+		return err
 	}
 	if err := m.loadFunc(deck, path); err != nil {
 		m.setError(err.Error())
@@ -188,6 +194,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keyMsg:
 		m.handleKey(string(msg))
+		if m.quitting {
+			return m, tea.Quit
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		// The real input path. Everything below handleKey was written and
+		// tested against keyMsg, which no production code ever produced, so
+		// every keystroke bubbletea delivered fell through to default and was
+		// dropped: the interface rendered, responded to resize and to ticks,
+		// and ignored the keyboard completely.
+		//
+		// Tests could not catch it because they call Update with keyMsg
+		// directly, bypassing the transport the application actually uses.
+		m.handleKey(msg.String())
 		if m.quitting {
 			return m, tea.Quit
 		}
@@ -317,6 +338,13 @@ func (m *Model) RenderAt(w, h int) string {
 		} else {
 			out[i] = spaces(w)
 		}
+	}
+	// A failed load is recorded in LastErr but, until this, nothing ever
+	// rendered it. Pressing ENTER on an unreadable track therefore looked
+	// exactly like ENTER doing nothing, which is the most expensive possible
+	// failure to debug from the user's side of the screen.
+	if msg := m.st.LastErr; msg != "" && h > 1 {
+		out[h-2] = padRight(errStyle.Render(truncate("! "+msg, w)), w)
 	}
 	if h > 0 && m.st.Mode == ModeMix {
 		// The footer names the active mode's keys, so a key that means
