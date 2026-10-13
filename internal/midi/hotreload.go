@@ -20,6 +20,11 @@ type fileStamp struct {
 // a file changes. Polling rather than fsnotify: the config directory is tiny and
 // a 2s interval is imperceptible, and it avoids a dependency for something this
 // simple (plan constraint: no new deps beyond gomidi and yaml.v3).
+//
+// Its messages carry no program name. They used to hardcode "mixplay: ", but
+// mixplay never wires a Watcher up at all -- cmd/mix-tui is the only production
+// caller -- so mix-tui was printing "mixplay: reloaded 2 mapping(s)" on its own
+// stderr. A package cannot know who is logging it, so the caller prefixes.
 type Watcher struct {
 	dir  string
 	h    *Handler
@@ -85,13 +90,13 @@ func (w *Watcher) ReloadOnce() (changed int, errs []error) {
 		m, err := ParseMapping(path, data)
 		if err != nil {
 			errs = append(errs, err)
-			w.logf("mixplay: keeping previous mapping: %v", err)
+			w.logf("mappings: keeping previous table: %v", err)
 			continue
 		}
 		tab, err := m.Compile()
 		if err != nil {
 			errs = append(errs, err)
-			w.logf("mixplay: keeping previous mapping: %v", err)
+			w.logf("mappings: keeping previous table: %v", err)
 			continue
 		}
 		// Accumulate rather than install immediately. Setting one table per
@@ -122,10 +127,10 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-t.C:
 			n, errs := w.ReloadOnce()
 			if n > 0 {
-				w.logf("mixplay: reloaded %d mapping(s)", n)
+				w.logf("mappings: reloaded %d file(s)", n)
 			}
 			for _, e := range errs {
-				w.logf("mixplay: mapping error: %v", e)
+				w.logf("mappings: %v", e)
 			}
 		}
 	}

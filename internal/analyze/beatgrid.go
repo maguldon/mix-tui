@@ -75,7 +75,16 @@ func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 	beats := trackBeats(onset, bpm, spec)
 	downbeats := markDownbeats(beats)
 
-	confidence := combineConfidence(tempoConf, rawPeak, beats)
+	// Coverage: beats actually placed against beats the analysed span and the
+	// tempo imply. Regularity alone is not enough -- a short irregular chain
+	// can look perfectly consistent, and that is how a 6-beat grid over a
+	// 431-second track reported 0.60 confidence with beat features enabled.
+	coverage := 1.0
+	if expected := spec.duration().Seconds() * bpm / 60; expected > 0 {
+		coverage = float64(len(beats)) / expected
+	}
+
+	confidence := combineConfidence(tempoConf, rawPeak, coverage, beats)
 	return &BeatGrid{
 		BPM:        bpm,
 		Confidence: confidence,
@@ -146,6 +155,30 @@ func normalise(v []float64) {
 	}
 }
 
+// preferredTempo weights a tempo by how likely a listener is to tap it.
+//
+// Autocorrelation cannot choose the metrical level on its own, because the
+// half-time peak of real music is nearly as strong as the beat: a 150 BPM kick
+// pattern correlates almost as well at 75. Human tempo perception does not have
+// that ambiguity, and the usual account of why is that tempi cluster near 125
+// BPM and fall off by about an octave either way. Expressed in log2 so the
+// falloff is symmetric: one octave down is exactly as plausible as one up.
+//
+// The centre is 125 rather than 120 because this application targets dance
+// music, whose typical range sits above the classical 120 anchor.
+const (
+	preferredBPM  = 125.0
+	preferredWide = 1.0 // in octaves
+)
+
+func preferredTempo(bpm float64) float64 {
+	if bpm <= 0 {
+		return 0
+	}
+	octaves := math.Log2(bpm / preferredBPM)
+	return math.Exp(-0.5 * (octaves / preferredWide) * (octaves / preferredWide))
+}
+
 // estimateTempo autocorrelates the onset envelope and takes the strongest
 // peak in the plausible tempo range.
 func estimateTempo(env []float64, spec *Spectrogram) (float64, float64) {
@@ -190,20 +223,39 @@ func estimateTempo(env []float64, spec *Spectrogram) (float64, float64) {
 		return 0, 0
 	}
 
-	// Octave correction: a genuine tempo has comparable energy at twice its
-	// period (the backbeat). If the peak at 2*lag is nearly as strong, the
-	// tracker has locked onto double-time, which is the classic failure and
-	// would report half the real tempo.
-	lag := bestLag
-	score := bestScore
-	if 2*lag <= maxLag && scores[2*lag] > 0.85*score {
-		lag = 2 * lag
-		score = scores[lag]
-	}
-	// Likewise a peak at half the period suggests half-time reading.
-	if lag/2 >= minLag && scores[lag/2] > 0.85*score {
-		lag = lag / 2
-		score = scores[lag]
+	// Octave resolution: ONE decision over the family {lag, 2lag, 4lag, lag/2,
+	// lag/4}, weighted by autocorrelation strength AND by how plausible that
+	// tempo is to a listener.
+	//
+	// This used to be two sequential rules -- prefer 2*lag, then prefer lag/2 --
+	// where the second compared against the score the first had already
+	// replaced. Doubling was therefore silently undone whenever the two peaks
+	// fell in the ratio band (0.85, 1.18], so surviving rule 1 needed closer to
+	// an 18% margin than the 0.85 constant claimed.
+	//
+	// Correcting that exposed why the peak cannot decide alone. On synthetic
+	// kick-plus-hat patterns the HALF-time peak genuinely outscores the true
+	// one for some tempi -- 1.09x at 128 BPM, 1.23x at 150 BPM -- which is what a
+	// backbeat looks like. Any threshold on peak strength alone is therefore
+	// unreliable in both directions: asking "is the other peak almost as strong"
+	// fired on 150 and halved the tempo, and leaving the peak untouched broke
+	// 128 and 150 the same way.
+	//
+	// Perceptual plausibility is the extra information, and it is why listeners
+	// hear 150 rather than 75. Over 70..190 BPM every tempo resolves correctly
+	// with preferredWide at one octave: at 0.9 it fixes 150 but flips 190, which
+	// the true peak already had right and which the prior is not entitled to
+	// override.
+	lag, score := bestLag, bestScore
+	bestWeight := scores[bestLag] * preferredTempo(60.0*framesPerSecond/float64(bestLag))
+	for _, c := range []int{2 * bestLag, 4 * bestLag, bestLag / 2, bestLag / 4} {
+		if c < minLag || c > maxLag || scores[c] <= 0 {
+			continue
+		}
+		if w := scores[c] * preferredTempo(60.0*framesPerSecond/float64(c)); w > bestWeight {
+			bestWeight = w
+			lag, score = c, scores[c]
+		}
 	}
 
 	bpm := 60.0 * framesPerSecond / float64(lag)
@@ -443,6 +495,16 @@ func markDownbeats(beats []time.Duration) []int {
 	return down
 }
 
+// duration is the span of audio the spectrogram covers. Frame f covers
+// [f*hop, f*hop+WindowLen), so the last frame reaches the end of the signal.
+func (s *Spectrogram) duration() time.Duration {
+	if len(s.Frames) == 0 {
+		return 0
+	}
+	frames := (len(s.Frames) - 1) * s.HopSize
+	return time.Duration(float64(frames+s.WindowLen) / float64(s.SampleRate) * float64(time.Second))
+}
+
 // frameToDuration converts a frame index to a time position.
 //
 // Frame f covers samples [f*hop, f*hop+WindowLen): the window is NOT centred on
@@ -470,7 +532,7 @@ func frameToDuration(f int, spec *Spectrogram) time.Duration {
 // regularity and tempo score alone will happily certify a sine as a beat. The
 // absolute size of the flux is what says no: a real onset jumps the spectrum by
 // orders of magnitude, a tone's ripple does not.
-func combineConfidence(tempoConf, rawPeak float64, beats []time.Duration) float64 {
+func combineConfidence(tempoConf, rawPeak, coverage float64, beats []time.Duration) float64 {
 	if len(beats) < 4 {
 		return math.Min(tempoConf*0.5, 0.4)
 	}
@@ -498,5 +560,10 @@ func combineConfidence(tempoConf, rawPeak float64, beats []time.Duration) float6
 	// sine near 0.09, so the knee sits between them with room to spare.
 	energyTerm := math.Min(1, rawPeak*4)
 
-	return math.Max(0, math.Min(1, 0.5*tempoConf+0.5*regularity)*energyTerm)
+	// Coverage, full credit at half the track and above. Real music has
+	// breakdowns and quiet bars, so demanding 1.0 would punish honest gaps; a
+	// grid that only reached a sliver of the track is the case that matters.
+	coverageTerm := math.Min(1, coverage/0.5)
+
+	return math.Max(0, math.Min(1, 0.5*tempoConf+0.5*regularity)*energyTerm*coverageTerm)
 }
