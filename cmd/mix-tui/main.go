@@ -207,7 +207,7 @@ func run(args appArgs) error {
 		dir := filepath.Join(configDir(), "mappings")
 		if _, err := os.ReadDir(dir); err == nil {
 			w := midi.NewWatcher(dir, handler, func(f string, a ...any) {
-				fmt.Fprintf(os.Stderr, f+"\n", a...)
+				fmt.Fprintf(os.Stderr, "mix-tui: "+f+"\n", a...)
 			})
 			// One scan, not two. The second ReloadOnce always saw nothing new,
 			// so "loaded N mapping(s)" could never print -- a user with a
