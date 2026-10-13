@@ -47,7 +47,15 @@ type UIConfig struct {
 // KeyBinding binds one key name ("q", "ctrl+s", "f1") to an action.
 type KeyBinding struct {
 	Action string `yaml:"action"`
-	Target int    `yaml:"target"`
+	// Target is the deck an action applies to, or nil for the focused deck.
+	//
+	// It is a pointer because "no deck named" and "deck 0" have to be told
+	// apart. As a plain int an omitted target reads as 0, every deck-scoped key
+	// therefore resolved to deck A, and space played deck A while the deck
+	// panel said B was focused -- a keyboard-complete application in which the
+	// right-hand deck could not be played at all. Naming a target pins the key
+	// to that deck, which is the point of the field.
+	Target *int `yaml:"target"`
 	// Slot is the hotcue or loop slot for actions that take one. Without it no
 	// hotcue, loop or roll is reachable from the keyboard at all, since MIDI
 	// mappings carry a slot and key bindings could not.
@@ -56,6 +64,15 @@ type KeyBinding struct {
 	Value string `yaml:"value"`
 	// Repeat allows the binding to fire on auto-repeat while held.
 	Repeat bool `yaml:"repeat"`
+}
+
+// DeckTarget returns the pinned deck, or -1 when the binding names none and the
+// action should follow the focused deck.
+func (b KeyBinding) DeckTarget() int {
+	if b.Target == nil {
+		return -1
+	}
+	return *b.Target
 }
 
 // Defaults returns the built-in configuration used when no file is present.

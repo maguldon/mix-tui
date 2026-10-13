@@ -13,6 +13,12 @@ import (
 // review focus #2 describes.
 const minWidthD = 90
 
+// maxDeckW is the widest a deck panel gets before the layout stops growing and
+// centres itself instead. Past this a deck is mostly empty waveform, and a
+// three-column block centred on a wide monitor reads better than one stretched
+// across all of it.
+const maxDeckW = 80
+
 // clampInt bounds v to [lo, hi].
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -36,26 +42,56 @@ func renderD(w, h int, s engine.Snapshot, st ViewState) string {
 
 	gap := 1
 	mixerW := clampInt(w/5, 14, 24)
-	deckW := clampInt((w-mixerW-2*gap)/2, 24, 52)
+	avail := w - mixerW - 2*gap
 
-	// If the computed columns do not fill the width exactly, absorb the
-	// remainder into the left deck so the frame stays rectangular.
-	used := 2*deckW + mixerW + 2*gap
-	if used < w {
-		deckW += w - used
+	// Each deck gets half the space, and the odd column goes to the right deck.
+	//
+	// These two must be computed independently and must sum to exactly avail.
+	// They used to share one deckW and then absorb the remainder into it:
+	//
+	//	used := 2*deckW + mixerW + 2*gap
+	//	if used < w { deckW += w - used }
+	//
+	// which adds the remainder to BOTH decks, so the frame came out w+remainder
+	// wide and joinLines truncated the overflow. The overflow is always the
+	// right deck: at 175 columns deckW clamped to 52, used was 130, the
+	// remainder 45 went to both decks, and deck B lost its right border and the
+	// outer half of its waveform. The mixer was left at columns 99-122 of 175,
+	// which is the opposite of the centring this layout documents.
+	//
+	// Equal deck widths keep the mixer centred. When avail is odd the two cannot
+	// both be equal, so the mixer sits half a column off true centre -- which is
+	// the best available and not worth a special case.
+	leftW := clampInt(avail/2, 24, maxDeckW)
+	rightW := clampInt(avail-leftW, 24, maxDeckW)
+
+	// Anything the caps could not absorb is left over on a wide terminal. Centre
+	// the block in it rather than stretching a deck past maxDeckW.
+	margin := 0
+	if spare := w - (leftW + mixerW + rightW + 2*gap); spare > 0 {
+		margin = spare / 2
 	}
 
 	panelH := h
-	left := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 0), st, st.Focus == 0, panelH-2), panelH)
+	left := RenderPanel(renderDeckPanel(leftW, deckAt(&s, 0), st, st.Focus == 0, panelH-2), panelH)
 	mid := RenderPanel(renderMixerPanel(mixerW, s, st), panelH)
-	right := RenderPanel(renderDeckPanel(deckW, deckAt(&s, 1), st, st.Focus == 1, panelH-2), panelH)
+	right := RenderPanel(renderDeckPanel(rightW, deckAt(&s, 1), st, st.Focus == 1, panelH-2), panelH)
 
-	cols := RenderColumns([][]string{left, mid, right}, gap, w)
-	// Guarantee exactly h rows for a clean full-screen frame.
-	for len(cols) < h {
-		cols = append(cols, spaces(w))
+	block := RenderColumns([][]string{left, mid, right}, gap, leftW+mixerW+rightW+2*gap)
+	// Guarantee exactly h rows, with the margin on both sides, so the frame is
+	// an exact rectangle and a full-screen app does not repaint noise.
+	for len(block) < h {
+		block = append(block, spaces(leftW+mixerW+rightW+2*gap))
 	}
-	return joinLines(cols[:h], w)
+	block = block[:h]
+	if margin == 0 {
+		return joinLines(block, w)
+	}
+	out := make([]string, h)
+	for i, l := range block {
+		out[i] = spaces(margin) + l + spaces(w-margin-len([]rune(l)))
+	}
+	return joinLines(out, w)
 }
 
 // tooSmall renders the "make the window bigger" placeholder.

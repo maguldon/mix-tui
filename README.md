@@ -279,6 +279,23 @@ The full browser needs 120 columns and says so when it does not have them. The
 quick-load overlay and the settings screen render at any width, so a narrow
 terminal is not a dead end.
 
+### Deck targeting
+
+A key that does not name a deck acts on the **focused** deck, so `tab` and then
+`space` plays deck B. To pin a key to one deck regardless of focus, name it:
+
+```yaml
+keys:
+  c: {action: DeckCue, target: 0, value: toggle}   # always deck A
+```
+
+### Layout widths
+
+Layout D is `deck A | mixer | deck B` with the mixer centred. Deck panels grow to
+80 columns each and no further; past that the block centres itself rather than
+stretching a deck into a mostly-empty panel. Below 90 columns it says so instead
+of drawing overlapping panels.
+
 ## Architecture at a glance
 
 ```

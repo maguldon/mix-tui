@@ -163,6 +163,32 @@ var actionKinds = func() map[string]ActionKind {
 	return m
 }()
 
+// TakesDeck reports whether an action applies to a deck rather than to the
+// mixer, the view or the application.
+//
+// It exists because an Action's Target has two meanings that must not be
+// confused: a deck index, and "no deck named". A keyboard binding that names no
+// deck sends Target -1, meaning "whatever deck is focused"; a MIDI mapping
+// always names one. Anything that would otherwise read Target as a deck index
+// has to ask this first, or an untargeted binding silently addresses deck 0 --
+// which is what made space play deck A while the interface said B was focused.
+func (k ActionKind) TakesDeck() bool {
+	switch {
+	case k >= DeckPlay && k <= DeckCueAssign:
+		return true
+	case k >= DeckHotcueSet && k <= DeckHotcueDelete:
+		return true
+	case k >= LoopBeat && k <= LoopRoll:
+		return true
+	case k == Sync || k == SyncToggle || k == Quantize || k == NudgeBeats:
+		return true
+	}
+	return false
+}
+
+// TakesDeck reports whether the action applies to a deck.
+func (a Action) TakesDeck() bool { return a.Kind.TakesDeck() }
+
 // ParseActionKind resolves a configuration-file spelling to an ActionKind.
 //
 // An unknown name is an error rather than a silent no-op: a typo in a mapping

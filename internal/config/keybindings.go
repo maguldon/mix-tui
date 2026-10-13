@@ -23,8 +23,11 @@ type KeyResolver struct {
 type compiled struct {
 	action engine.ActionKind
 	target int
-	slot   int
-	repeat bool
+	// hasTarget records whether the binding named a deck. A pinned deck always
+	// wins; otherwise the action follows whatever deck is focused.
+	hasTarget bool
+	slot      int
+	repeat    bool
 	// strategy is how Value is produced: a literal, or a toggle that alternates.
 	toggle  bool
 	inc     bool
@@ -37,13 +40,18 @@ type compiled struct {
 func DefaultKeys() map[string]KeyBinding {
 	play := KeyBinding{Action: "DeckPlay"}
 	cue := KeyBinding{Action: "DeckCue", Value: "toggle"}
+	// Pitch and the hotcue and loop keys name no deck, so they follow the
+	// focused one. "[" and "]" used to pin Target: 0, which as a plain int was
+	// indistinguishable from naming no deck at all -- so every untargeted key in
+	// this map resolved to deck A and the right-hand deck could not be played,
+	// pitched, cued or looped from the keyboard.
 	return map[string]KeyBinding{
 		"space":  play,
 		"c":      cue,
 		"s":      {Action: "SyncToggle"},
 		"q":      {Action: "Quantize"},
-		"[":      {Action: "DeckPitch", Target: 0, Value: "dec"},
-		"]":      {Action: "DeckPitch", Target: 0, Value: "inc"},
+		"[":      {Action: "DeckPitch", Value: "dec"},
+		"]":      {Action: "DeckPitch", Value: "inc"},
 		"ctrl+c": {Action: "Quit"},
 		"z":      {Action: "ZoomToggle"},
 		"v":      {Action: "ViewNext"},
@@ -123,8 +131,9 @@ func compileBinding(name string, kb KeyBinding) (compiled, error) {
 		return compiled{}, fmt.Errorf("key %q: %w", name, err)
 	}
 	c := compiled{
-		action: kind,
-		target: kb.Target,
+		action:    kind,
+		target:    kb.DeckTarget(),
+		hasTarget: kb.Target != nil,
 		// Slot was declared on compiled and never assigned, so a keybinding
 		// could not name a hotcue or loop slot. Every slot-taking action was
 		// therefore MIDI-only, and the README's claim that every action is

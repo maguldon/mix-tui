@@ -440,6 +440,18 @@ func dropLastRune(s string) string {
 // applyAction applies a resolved Action, updating view state for the controls
 // it mirrors.
 func (m *Model) applyAction(a engine.Action) {
+	// Resolve "no deck named" to the focused deck.
+	//
+	// A keyboard binding that names no deck carries Target -1; a MIDI mapping
+	// always names one. Nothing filled that in, so the engine read -1 as an
+	// out-of-range index and dropped the action, or -- worse, before Target
+	// became signed, as deck 0. Either way space played deck A while the deck
+	// panel said B was focused: the right-hand deck could not be played at all.
+	// Only deck-scoped actions consult the target, so assigning it to a mixer
+	// or view action would be meaningless rather than harmful.
+	if a.Target < 0 && a.TakesDeck() {
+		a.Target = m.st.Focus
+	}
 	// Hotcue jumps are the one action the engine can refuse: jumpToHotcue
 	// returns quietly when the slot is empty, and the reply is lost through the
 	// command queue. The snapshot already lists which slots are set, so check
