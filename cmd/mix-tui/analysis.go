@@ -79,7 +79,12 @@ type Analyzer struct {
 	decks   map[string]int // path -> deck index awaiting a result
 	log     *slog.Logger
 	mu      sync.Mutex
-	pending map[string]context.CancelFunc
+	pending map[string]*analysisRun
+	// afterAnalyze is a test hook, parked between a finished analysis and the
+	// hand-off of its result. The bug this fixes lived exactly in that gap, and
+	// a timing test could only catch it when the scheduler happened to line up;
+	// parking there makes the window observable. Never set in production.
+	afterAnalyze func()
 	// onResult is called once per completed analysis, on the analysis goroutine.
 	// It exists so a finished result can reach the library index: without it the
 	// analyzer produced BPM and key for the cache and the engine and nothing
@@ -108,7 +113,7 @@ func NewAnalyzer(cache *library.Cache, eng libraryAnalysisTarget, log *slog.Logg
 		cache:   cache,
 		eng:     eng,
 		decks:   map[string]int{},
-		pending: map[string]context.CancelFunc{},
+		pending: map[string]*analysisRun{},
 		log:     log,
 	}
 }
@@ -136,27 +141,41 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 	}
 
 	a.mu.Lock()
-	if cancel, ok := a.pending[path]; ok {
-		cancel()
+	if run, ok := a.pending[path]; ok {
+		run.cancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.pending[path] = cancel
+	run := &analysisRun{cancel: cancel, path: path}
+	a.pending[path] = run
 	a.mu.Unlock()
 
 	go func() {
 		res, err := analyze.Analyze(ctx, pcm)
 
-		a.mu.Lock()
-		delete(a.pending, path)
-		a.mu.Unlock()
-		cancel()
-
+		// A superseded or cancelled run is done immediately: there is no result
+		// to hand anywhere. It must still clear its own entry.
 		if err != nil {
+			a.finishRun(run)
 			if err == context.Canceled {
 				return // superseded; the newer load owns the deck now
 			}
 			a.log.Debug("analysis failed", "path", path, "err", err)
 			return
+		}
+
+		// The run stays registered until the result has actually landed. It used
+		// to de-register here, immediately after the analysis, which left the
+		// cache write, the library callback and the engine apply outside the
+		// window Wait watches -- so Wait could report "nothing in flight" while
+		// the result was still being written to disk and pushed to the deck. The
+		// cache write is unbounded I/O, so on a cold cache the gap is widest
+		// exactly when there is most to write.
+		//
+		// -screenshot depends on this: it calls Wait for a settled frame, and
+		// taking the shot early yields "--" for BPM and key on a track that has
+		// both, which is the one thing a screenshot exists to demonstrate.
+		if a.afterAnalyze != nil {
+			a.afterAnalyze()
 		}
 
 		// Store it, so the next load of this track is instant. A cache write
@@ -175,7 +194,45 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 		}
 
 		a.apply(deck, res)
+
+		a.finishRun(run)
 	}()
+}
+
+// analysisRun is one in-flight analysis.
+//
+// It exists so a run clears only its OWN entry. The map is keyed by path and a
+// newer load of the same track replaces the entry, so a run that finished late
+// and deleted by path would remove the newer run's registration and let Wait
+// return early -- the same bug, one level down.
+type analysisRun struct {
+	cancel context.CancelFunc
+	path   string
+}
+
+// finishRun de-registers a run, releasing its resources.
+func (a *Analyzer) finishRun(run *analysisRun) {
+	if a == nil || run == nil {
+		return
+	}
+	run.cancel()
+	a.mu.Lock()
+	// Only if this run is still the registered one. A newer load of the same path
+	// has its own entry, and removing that would under-report the work in flight.
+	if a.pending[run.path] == run {
+		delete(a.pending, run.path)
+	}
+	a.mu.Unlock()
+}
+
+// InFlight reports how many analyses are running. Tests use it; Wait uses it too.
+func (a *Analyzer) InFlight() int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.pending)
 }
 
 // apply hands a finished result to the engine.
@@ -214,6 +271,13 @@ func (a *Analyzer) apply(deck int, res *analyze.Result) {
 //
 // There is no correctness reason for a screenshot to wait; there is only the
 // question of whether it is the picture anyone wants to look at.
+//
+// The contract is "no result is still being handed over". A run stays
+// registered from the moment it is scheduled until its result has been cached,
+// published to the library and applied to the deck, so returning from here means
+// every started analysis has fully landed. It used to mean only that every
+// analysis had finished computing, which left the writes outside the window --
+// see the run's de-registration.
 func (a *Analyzer) Wait(ctx context.Context) {
 	if a == nil {
 		return
@@ -241,11 +305,12 @@ func (a *Analyzer) Cancel(path string) {
 		return
 	}
 	a.mu.Lock()
-	if cancel, ok := a.pending[path]; ok {
-		cancel()
-		delete(a.pending, path)
-	}
+	run := a.pending[path]
+	delete(a.pending, path)
 	a.mu.Unlock()
+	if run != nil {
+		run.cancel()
+	}
 }
 
 // CancelAll stops every in-flight analysis. Used on shutdown so a pending pass
@@ -255,9 +320,13 @@ func (a *Analyzer) CancelAll() {
 		return
 	}
 	a.mu.Lock()
-	for path, cancel := range a.pending {
-		cancel()
+	runs := make([]*analysisRun, 0, len(a.pending))
+	for path, run := range a.pending {
+		runs = append(runs, run)
 		delete(a.pending, path)
 	}
 	a.mu.Unlock()
+	for _, run := range runs {
+		run.cancel()
+	}
 }
