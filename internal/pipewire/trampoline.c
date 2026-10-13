@@ -106,9 +106,14 @@ struct pw_properties *make_stream_props(const char *node_name,
 		"media.class", "Stream/Output/Audio",
 		"media.category", "Output",
 		"media.role", "Music",
-		/* Interleaved F32P matches dsp.Stereo, so the realtime drain is a
-		 * straight copy with no deinterleave on the audio thread. */
-		"audio.format", "F32P",
+		/* F32 is interleaved; F32P is PLANAR. The drain treats a buffer as one
+		 * contiguous run of interleaved frames, which is only true of F32.
+		 *
+		 * Asking for F32P gave the drain two planes per buffer and it wrote a
+		 * single interleaved block of maxsize bytes into datas[0] alone: the
+		 * left plane overran by ~32KB on every callback and the right plane
+		 * was never written at all. */
+		"audio.format", "F32",
 		NULL);
 
 	if (props == NULL)
@@ -148,6 +153,10 @@ void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
  * fails on the half-built object. Setting "audio.format" as a property is not
  * enough: spa wants an EnumFormat pod listing the formats the stream accepts.
  *
+ * The rate and channels MUST appear in the pod. An EnumFormat that describes
+ * a format with no rate and no channel count gives the session manager nothing
+ * to match against the sink's caps.
+ *
  * Everything here is C-owned and C-lifetime: the pod lives in a static buffer
  * and the pointer array is static too. Handing connect a Go-allocated array
  * meant C wrote a pointer into Go memory that C then read back across the
@@ -158,17 +167,23 @@ struct spa_pod **make_connect_params(int rate, int channels)
 	static uint8_t buf[1024];
 	static struct spa_pod *storage[1];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
-	struct spa_pod_frame f[1];
 
-	spa_pod_builder_add_object(&b,
+
+	/* spa_pod_builder_add_object is a macro that does its own
+	 * push_object/add/pop, and its value IS the finished pod. Calling
+	 * spa_pod_builder_pop again on an uninitialised struct spa_pod_frame
+	 * reads a garbage frame header, writes it over the pod just built, and
+	 * yields a pod with id 0 that spa_format_audio_raw_parse rejects with
+	 * EINVAL. WirePlumber then finds no usable format in the node's
+	 * EnumFormat list and never configures the node, so the stream sits in
+	 * PAUSED forever and the process callback never fires. */
+	storage[0] = (struct spa_pod *) spa_pod_builder_add_object(&b,
 		SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
 		SPA_FORMAT_mediaType,    SPA_POD_Id(SPA_MEDIA_TYPE_audio),
 		SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-		SPA_FORMAT_AUDIO_format, SPA_POD_Id(SPA_AUDIO_FORMAT_F32P));
-
-	/* This spa's pop takes a frame to pop INTO, unlike older versions where
-	 * the signature is pop(builder). */
-	storage[0] = (struct spa_pod *)spa_pod_builder_pop(&b, f);
+		SPA_FORMAT_AUDIO_format, SPA_POD_Id(SPA_AUDIO_FORMAT_F32),
+		SPA_FORMAT_AUDIO_rate,    SPA_POD_Int(rate),
+		SPA_FORMAT_AUDIO_channels, SPA_POD_Int(channels));
 	return storage;
 }
 
@@ -224,4 +239,33 @@ int format_rate(const struct spa_pod *param)
 	if (spa_format_audio_raw_parse(param, &info) < 0)
 		return 0;
 	return (int)info.rate;
+}
+
+/* --- connect parameter self-check --------------------------------------- */
+
+/* Build the connect params and parse them straight back.
+ *
+ * Returns the rate read out of the finished pod, or 0 if the pod does not
+ * parse. A malformed EnumFormat is invisible from the Go side: pw_stream_connect
+ * accepts it, reports success, and hands the daemon a node whose format list
+ * is empty. WirePlumber then logs "no usable format found", never configures
+ * the node, and the stream sits in PAUSED with the process callback never
+ * firing — silence, with no error anywhere in the application.
+ *
+ * This exists so a test can assert the pod is well-formed without needing a
+ * running daemon to observe the consequence. */
+int connect_params_selfcheck(int rate, int channels)
+{
+	struct spa_pod **p = make_connect_params(rate, channels);
+	struct spa_audio_info_raw info;
+
+	if (p == NULL || p[0] == NULL)
+		return 0;
+	if (spa_format_audio_raw_parse(p[0], &info) < 0)
+		return 0;
+	if ((int) info.rate != rate || (int) info.channels != channels)
+		return 0;
+	if (info.format != SPA_AUDIO_FORMAT_F32)
+		return 0;
+	return (int) info.rate;
 }
