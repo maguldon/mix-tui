@@ -177,6 +177,23 @@ func run(args appArgs) error {
 	model := tui.New(eng, cfg, keys)
 	model.SetLibrary(lib)
 
+	// Crates. They live beside the config, and the file is optional: a fresh
+	// install has none and that is not a failure. They used to have no
+	// production caller at all, so the crate pane showed placeholders and a DJ
+	// could not build a set (spec 6.5).
+	cratePath := library.DefaultCratesPath(configDir())
+	crates, err := library.LoadCrates(cratePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mix-tui: crates: %v (starting with none)\n", err)
+	}
+	lib.SetCrates(crates)
+	if n := len(crates); n > 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: %d crate(s) from %s\n", n, cratePath)
+	}
+	model.SetCratePersister(func(c []library.Crate) error {
+		return library.SaveCrates(cratePath, c)
+	})
+
 	// Loading decodes audio, which belongs to the audio package rather than the
 	// view layer, so the binary supplies it. Without this the library and the
 	// overlay could browse but never load, and the empty-deck art told the user

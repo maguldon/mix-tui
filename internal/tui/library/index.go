@@ -7,6 +7,7 @@
 package library
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -57,6 +58,10 @@ type Index struct {
 	// rather than silently yielding an empty library: a user whose music folder
 	// is on an unmounted drive sees "no tracks" and no explanation.
 	unreachable []string
+
+	// crates are the curated running orders the browser's first pane lists.
+	// They are library data, so they live here rather than on the view.
+	crates []Crate
 
 	mu     sync.RWMutex
 	tracks []Track
@@ -169,6 +174,7 @@ func (ix *Index) reset() {
 	defer ix.mu.Unlock()
 	ix.tracks = nil
 	ix.seen = make(map[string]bool)
+	ix.markInLibraryLocked()
 }
 
 // Sort orders a COPY of the tracks and returns it. It never mutates its input:
@@ -311,4 +317,152 @@ func Search(tracks []Track, q string) []Track {
 		}
 	}
 	return out
+}
+
+// SetCrates installs the crate list and marks which tracks belong to one.
+//
+// The crates live on the index because they are library data and the browser
+// view already receives it; nothing else carries them. Nothing ever set them:
+// LoadCrates and SaveCrate had no production caller, so the crate pane rendered
+// two placeholder rows and a DJ could not build a set (spec §6.5).
+func (ix *Index) SetCrates(crates []Crate) {
+	norm := make([]Crate, 0, len(crates))
+	for _, c := range crates {
+		if strings.TrimSpace(c.Name) == "" {
+			continue
+		}
+		norm = append(norm, c.Normalize())
+	}
+	ix.mu.Lock()
+	ix.crates = norm
+	ix.markInLibraryLocked()
+	ix.mu.Unlock()
+}
+
+// Crates returns the crate list.
+func (ix *Index) Crates() []Crate {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return append([]Crate(nil), ix.crates...)
+}
+
+// markInLibraryLocked flags the tracks some crate refers to.
+//
+// InLibrary was declared for exactly this and set by nothing: the crate view
+// was supposed to highlight what is already in a set, and could not.
+func (ix *Index) markInLibraryLocked() {
+	in := map[string]bool{}
+	for _, c := range ix.crates {
+		for _, p := range c.Tracks {
+			in[p] = true
+		}
+	}
+	for i := range ix.tracks {
+		ix.tracks[i].InLibrary = in[ix.tracks[i].Path]
+	}
+}
+
+// CrateTracks resolves a crate to the tracks it names, in the crate's order.
+//
+// Paths that no longer resolve are dropped rather than left as holes: a crate
+// naming a file the user has since deleted should show the rest of the set, not
+// blank rows the user cannot account for.
+//
+// The second return is how many entries were dropped, so the browser can say so
+// instead of quietly showing a shorter crate.
+func (ix *Index) CrateTracks(name string) ([]Track, int) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	for _, c := range ix.crates {
+		if c.Name != name {
+			continue
+		}
+		byPath := make(map[string]Track, len(ix.tracks))
+		for _, t := range ix.tracks {
+			byPath[t.Path] = t
+		}
+		out := make([]Track, 0, len(c.Tracks))
+		missing := 0
+		for _, p := range c.Tracks {
+			t, ok := byPath[p]
+			if !ok {
+				missing++
+				continue
+			}
+			out = append(out, t)
+		}
+		return out, missing
+	}
+	return nil, 0
+}
+
+// NextCrateName returns a name that does not collide, for "Crate 3" style
+// defaults.
+//
+// It prefers the lowest free number rather than the count, so deleting one
+// does not push every later name up by one.
+func (ix *Index) NextCrateName() string {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	taken := make(map[string]bool, len(ix.crates))
+	for _, c := range ix.crates {
+		taken[c.Name] = true
+	}
+	for i := 1; i < len(taken)+2; i++ {
+		name := fmt.Sprintf("Crate %d", i)
+		if !taken[name] {
+			return name
+		}
+	}
+	return fmt.Sprintf("Crate %d", len(taken)+1)
+}
+
+// AddToCrate appends a track to a named crate, creating the crate if it is new.
+//
+// It reports whether anything changed, so a caller can tell "added" from
+// "already there" without re-reading the file.
+func (ix *Index) AddToCrate(name, path string) bool {
+	if name == "" || path == "" {
+		return false
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	for i := range ix.crates {
+		if ix.crates[i].Name != name {
+			continue
+		}
+		if ix.crates[i].Contains(path) {
+			return false
+		}
+		ix.crates[i].Tracks = append(ix.crates[i].Tracks, path)
+		ix.markInLibraryLocked()
+		return true
+	}
+	ix.crates = append(ix.crates, Crate{Name: name, Tracks: []string{path}})
+	ix.markInLibraryLocked()
+	return true
+}
+
+// RemoveFromCrate drops a track from a named crate.
+func (ix *Index) RemoveFromCrate(name, path string) bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	for i := range ix.crates {
+		if ix.crates[i].Name != name {
+			continue
+		}
+		kept := make([]string, 0, len(ix.crates[i].Tracks))
+		for _, p := range ix.crates[i].Tracks {
+			if p != path {
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) == len(ix.crates[i].Tracks) {
+			return false
+		}
+		ix.crates[i].Tracks = kept
+		ix.markInLibraryLocked()
+		return true
+	}
+	return false
 }

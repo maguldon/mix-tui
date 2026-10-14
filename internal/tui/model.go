@@ -54,6 +54,10 @@ type Model struct {
 	// It returns a new index rather than mutating the attached one so that a
 	// failed scan cannot leave the browser half-populated.
 	scanFunc func(root string) (*library.Index, error)
+	// crateSave persists the crate list. The TUI must not write to a user's
+	// config directory itself, so the binary supplies it, as it does for the
+	// settings saver.
+	crateSave func(crates []library.Crate) error
 	// saveFunc persists a library root to the config file. It is the write
 	// counterpart of config.Load and is likewise the binary's, since the TUI
 	// has no config path of its own and no business writing to one.
@@ -545,6 +549,7 @@ func (m *Model) libState() views.LibraryState {
 		// the menu could show but could not change anything.
 		SortBy:   m.st.SortBy,
 		SortDesc: m.st.SortDesc,
+		Sorted:   m.st.Sorted,
 		Pane:     views.Pane(m.st.LibPane),
 		CrateSel: m.st.CrateSel,
 	}
@@ -651,4 +656,19 @@ func compositeOverlay(base, box []string, offset int) []string {
 		out[row] = line
 	}
 	return out
+}
+
+// SetCratePersister supplies the function that writes the crate file.
+//
+// It is the binary's for the same reason the settings saver is: the TUI has no
+// config directory of its own and no business writing to one. The crates live
+// beside the config, at ~/.config/mix-tui/crates.yaml.
+func (m *Model) SetCratePersister(f func(crates []library.Crate) error) { m.crateSave = f }
+
+// persistCrates writes the crate list, or reports that nothing can.
+func (m *Model) persistCrates(crates []library.Crate) error {
+	if m.crateSave == nil {
+		return fmt.Errorf("crates cannot be saved in this build")
+	}
+	return m.crateSave(crates)
 }

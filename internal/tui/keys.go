@@ -305,6 +305,8 @@ func (m *Model) handleBrowserKey(name string) bool {
 			return true
 		case "enter":
 			m.st.SortBy = views.SortKeys[m.st.SortSel]
+			// Choosing a sort is what makes the list leave a crate's own order.
+			m.st.Sorted = true
 			m.st.ShowSort = false
 			return true
 		case "s", "escape":
@@ -463,6 +465,108 @@ func (m *Model) loadSelectedInto(deck int) {
 	m.setQuery("")
 }
 
+// selectedCrateName is the crate the list is currently narrowed to.
+func (m *Model) selectedCrateName() string {
+	if m.lib == nil {
+		return ""
+	}
+	return views.SelectedCrate(m.lib, m.libState())
+}
+
+// newCrate creates an empty crate and selects it.
+//
+// It does not ask for a name: the crate pane's default naming is predictable
+// and the file is the user's to edit, which is the same stance the mappings
+// take. Renaming by hand in crates.yaml works immediately.
+func (m *Model) newCrate() {
+	if m.lib == nil {
+		return
+	}
+	name := m.lib.NextCrateName()
+	if !m.saveCrates() {
+		return
+	}
+	if err := m.persistCrates(m.lib.Crates()); err != nil {
+		m.setError("crate: " + err.Error())
+		return
+	}
+	m.st.CrateSel = m.crateCount() - 1
+	m.st.TrackSel = 0
+	m.st.SettingNote = "created " + name
+}
+
+// addSelectedToCrate appends the highlighted track to the selected crate,
+// creating it if none is selected.
+func (m *Model) addSelectedToCrate() {
+	tr, ok := m.selectedTrack()
+	if !ok {
+		m.setError("nothing selected to add to a crate")
+		return
+	}
+	if m.lib == nil {
+		return
+	}
+	name := m.selectedCrateName()
+	if name == "" {
+		// Adding to nothing is the common case, so make the target rather than
+		// refusing: the alternative is a crate the user must create first, and
+		// a key that only works once you know that.
+		name = m.lib.NextCrateName()
+	}
+	if !m.lib.AddToCrate(name, tr.Path) {
+		m.setError(tr.Title + " is already in " + name)
+		return
+	}
+	if err := m.persistCrates(m.lib.Crates()); err != nil {
+		m.setError("crate: " + err.Error())
+		return
+	}
+	m.setError("")
+	m.st.CrateSel = m.crateIndexOf(name)
+	m.st.SettingNote = "added " + tr.Title + " to " + name
+}
+
+// removeSelectedFromCrate drops the highlighted track from the selected crate.
+func (m *Model) removeSelectedFromCrate() {
+	name := m.selectedCrateName()
+	if name == "" {
+		m.setError("select a crate first: tab to the crate pane and choose one")
+		return
+	}
+	tr, ok := m.selectedTrack()
+	if !ok {
+		m.setError("nothing selected to remove")
+		return
+	}
+	if !m.lib.RemoveFromCrate(name, tr.Path) {
+		m.setError(tr.Title + " is not in " + name)
+		return
+	}
+	if err := m.persistCrates(m.lib.Crates()); err != nil {
+		m.setError("crate: " + err.Error())
+		return
+	}
+	m.setError("")
+	m.st.SettingNote = "removed " + tr.Title + " from " + name
+}
+
+// crateIndexOf is the crate-pane row for a crate name: "All tracks" is 0, so a
+// crate at index i sits at i+1.
+func (m *Model) crateIndexOf(name string) int {
+	if m.lib == nil {
+		return 0
+	}
+	for i, c := range m.lib.Crates() {
+		if c.Name == name {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// saveCrates is a small guard so a nil index cannot be written through.
+func (m *Model) saveCrates() bool { return m.lib != nil }
+
 // selectedTrack resolves the cursor against the filtered library.
 func (m *Model) selectedTrack() (library.Track, bool) {
 	if m.lib == nil {
@@ -488,10 +592,15 @@ func (m *Model) nothingToLoadReason() string {
 
 // trackCount is how many tracks the filtered library holds.
 // crateCount reports how many rows the crates pane offers: "All tracks" plus
-// the scan summary. There is no crate store on the Model, so the pane cannot
-// offer a real crate picker yet; it at least navigates what it renders rather
-// than running off the end.
-func (m *Model) crateCount() int { return 2 }
+// one per crate. It used to be a constant 2, matching a pane that rendered
+// placeholders -- with real crates the arrow keys have to be able to reach past
+// "All tracks" or the crate list cannot be opened.
+func (m *Model) crateCount() int {
+	if m.lib == nil {
+		return 1
+	}
+	return views.CrateRowCount(m.lib)
+}
 
 func (m *Model) trackCount() int {
 	if m.lib == nil {

@@ -99,6 +99,13 @@ type LibraryState struct {
 	QueryCursor int
 	SortBy      library.SortKey
 	SortDesc    bool
+	// Sorted records that the user picked a sort, as opposed to the default.
+	//
+	// Without it a selected crate could never show its own order: the default
+	// sort is title-ascending, so the list was re-sorted alphabetically the
+	// moment a crate was chosen, and a curated running order -- the whole point
+	// of a crate -- was never once visible.
+	Sorted bool
 	// ShowSort swaps the detail pane for the sort menu.
 	ShowSort bool
 	Width    int
@@ -113,11 +120,26 @@ func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
 		return tooNarrow(w, minLibraryWidth, "library browser")
 	}
 
+	// A selected crate narrows the list to its tracks, in the crate's own order.
+	// The crate's order is the data -- a curated running order -- and sorting is
+	// a view-only change (spec 6.5), so the sort is applied on top and the file
+	// is never rewritten.
 	tracks := ix.Tracks()
+	inCrate := false
+	if crate := SelectedCrate(ix, st); crate != "" {
+		if c, _ := ix.CrateTracks(crate); c != nil {
+			tracks, inCrate = c, true
+		}
+	}
 	if st.Query != "" {
 		tracks = library.Search(tracks, st.Query)
 	}
-	tracks = library.Sort(tracks, st.SortBy, st.SortDesc)
+	// A crate's order is the data, so it survives unless the user asked for a
+	// sort. Sorting is a view-only change either way and never rewrites the
+	// file (spec 6.5).
+	if !inCrate || st.Sorted {
+		tracks = library.Sort(tracks, st.SortBy, st.SortDesc)
+	}
 
 	// Fixed panes take their width; the track pane absorbs the remainder so the
 	// frame is exactly w columns wide. Leftover width goes to the track list
@@ -285,12 +307,34 @@ func trackLine(t library.Track, w int) string {
 }
 
 // crateRows renders the left pane: crate names plus the scan summary.
+// SelectedCrate is the crate the list is narrowed to, or "" for all tracks.
+//
+// Crate 0 in the pane is always "All tracks"; every index above it maps to
+// ix.Crates()[i-1].
+func SelectedCrate(ix *library.Index, st LibraryState) string {
+	if st.CrateSel <= 0 {
+		return ""
+	}
+	crates := ix.Crates()
+	if st.CrateSel-1 >= len(crates) {
+		return ""
+	}
+	return crates[st.CrateSel-1].Name
+}
+
+// CrateRowCount is how many rows the crate pane offers: "All tracks" plus one
+// per crate.
+func CrateRowCount(ix *library.Index) int { return 1 + len(ix.Crates()) }
+
 // crateRows renders the crates pane.
 //
 // sel is the crate-pane cursor and focused says whether this pane has pane
 // focus. Both were carried in LibraryState and read by nothing: TAB cycled a
 // cursor the user could not see, and the arrow keys moved it through rows that
 // were never marked. A focus indicator nobody can see is not focus.
+//
+// Row 0 is always "All tracks" and the rest are the user's crates, so the
+// cursor is an index into a list whose length depends on how many crates exist.
 func crateRows(ix *library.Index, st LibraryState, w, rows int) []string {
 	sel := st.CrateSel
 	focused := st.Pane == PaneCrates
@@ -314,11 +358,24 @@ func crateRows(ix *library.Index, st LibraryState, w, rows int) []string {
 		}
 	}
 	out = append(out, pad(dimStyle.Render(strings.Repeat("-", minInt(w, 6))), w))
-	entries := []string{"All tracks", fmt.Sprintf("  (%d tracks)", ix.Len())}
-	// Crate storage is not implemented. Listing numbered placeholders filled
-	// the pane with "(crate 7: none saved)", which reads as lost data rather
-	// than as an absent feature -- an honest empty pane is better than a
-	// misleading full one. Once crates exist this becomes a real list.
+
+	// Crate 0 is always "All tracks": the whole scanned library. Every crate
+	// after it is a curated running order, listed with how many of its tracks
+	// still resolve.
+	entries := []string{"All tracks"}
+	if n := ix.Len(); n != 1 {
+		entries = append(entries, fmt.Sprintf("  (%d tracks)", n))
+	}
+	for _, c := range ix.Crates() {
+		tracks, missing := ix.CrateTracks(c.Name)
+		label := fmt.Sprintf("%s  (%d)", c.Name, len(c.Tracks))
+		if missing > 0 {
+			// Saying so beats a crate that quietly shows fewer tracks than it
+			// lists, which reads as data loss the user cannot account for.
+			label = fmt.Sprintf("%s  (%d, %d missing)", c.Name, len(tracks), missing)
+		}
+		entries = append(entries, label)
+	}
 	for i, e := range entries {
 		if len(out) >= rows {
 			return out

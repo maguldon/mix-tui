@@ -90,6 +90,10 @@ type ViewState struct {
 	// from a keypress, so the sort was permanently title-ascending.
 	SortBy   library.SortKey
 	SortDesc bool
+	// Sorted records that the user chose a sort. Without it, a selected crate
+	// could not show its own running order, because the title-ascending
+	// default overwrote it the moment the crate was picked.
+	Sorted bool
 	// SortSel is the highlighted entry of the sort menu.
 	SortSel int
 	// LibPane is the focused pane in the library: 0 crates, 1 tracks.

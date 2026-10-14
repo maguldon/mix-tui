@@ -41,8 +41,14 @@ Known gaps, so nothing here is a surprise:
   `LibrarySearch`, `LibrarySort`, `LibraryFocusNext`. They parse from mapping
   files and are emitted by the engine, but neither the engine nor the TUI acts
   on them. The features they name are reachable by key instead.
-- **The library crates pane is a stub.** It renders "All tracks" plus a scan
-  summary and nothing else; there is no crate store yet.
+- **Crates are static lists, and the crate file is yours to edit.** They load
+  from `$XDG_CONFIG_HOME/mix-tui/crates.yaml` and a selected crate narrows the
+  list to its tracks in the crate's own running order. `ctrl+n` creates one,
+  `ctrl+a` adds the highlighted track to the selected crate, `ctrl+d` removes
+  it. They are control-key bindings rather than letters because every printable
+  key types into the filter, so a letter-bound action could never fire from the
+  browser. Rule-based crates (smart playlists by folder, BPM range or date) are
+  deferred; the schema leaves room for them.
 - **Sample rate is negotiated once, at startup.** `mix-tui` asks for the rate
   your config asks for (44100 by default) and then builds the engine at whatever
   the device actually granted, warning when the two disagree. It is not

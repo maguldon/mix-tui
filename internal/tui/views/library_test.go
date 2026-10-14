@@ -389,3 +389,95 @@ func TestKeyMarkersRenderInTheList(t *testing.T) {
 		}
 	}
 }
+
+// TestCratePaneListsRealCrates covers the pane that shipped as two placeholder
+// rows. Crate storage existed as LoadCrates and SaveCrate with no production
+// caller, so the pane rendered "All tracks" plus a count and a DJ could not see
+// or open a set.
+func TestCratePaneListsRealCrates(t *testing.T) {
+	ix := library.NewIndex()
+	for _, p := range []string{"/m/a.mp3", "/m/b.mp3", "/m/c.mp3"} {
+		ix.Add(library.Track{Path: p, Title: p, Duration: 180e9})
+	}
+	ix.SetCrates([]library.Crate{
+		{Name: "Warm Up", Tracks: []string{"/m/a.mp3", "/m/b.mp3"}},
+		{Name: "Peak Time", Tracks: []string{"/m/c.mp3"}},
+	})
+
+	ix.SetCrates(ix.Crates())
+	out := stripANSI(RenderLibrary(140, 30, ix, LibraryState{Pane: PaneCrates}))
+
+	for _, want := range []string{"All tracks", "Warm Up", "Peak Time", "(2)", "(1)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("crate pane is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestCratePaneSaysWhenTracksAreMissing keeps a crate naming a deleted file from
+// quietly showing a shorter set, which reads as data loss.
+func TestCratePaneSaysWhenTracksAreMissing(t *testing.T) {
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/m/a.mp3", Title: "a"})
+	ix.SetCrates([]library.Crate{{Name: "Set", Tracks: []string{"/m/a.mp3", "/m/gone.mp3"}}})
+
+	out := stripANSI(RenderLibrary(140, 30, ix, LibraryState{Pane: PaneCrates}))
+	if !strings.Contains(out, "missing") {
+		t.Errorf("a crate with a missing track does not say so:\n%s", out)
+	}
+}
+
+// TestSelectingACrateNarrowsTheList is the point of the pane: choosing a crate
+// shows that set, in the crate's own order rather than the scan order.
+func TestSelectingACrateNarrowsTheList(t *testing.T) {
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/m/a.mp3", Title: "AAA"})
+	ix.Add(library.Track{Path: "/m/b.mp3", Title: "BBB"})
+	ix.Add(library.Track{Path: "/m/c.mp3", Title: "CCC"})
+	ix.SetCrates([]library.Crate{{Name: "Set", Tracks: []string{"/m/c.mp3", "/m/a.mp3"}}})
+
+	out := stripANSI(RenderLibrary(140, 30, ix, LibraryState{Pane: PaneTracks, CrateSel: 1}))
+	if strings.Contains(out, "BBB") {
+		t.Errorf("a crate was selected but the list still shows every track:\n%s", out)
+	}
+	if !strings.Contains(out, "CCC") || !strings.Contains(out, "AAA") {
+		t.Errorf("the crate's own tracks are missing:\n%s", out)
+	}
+	// Crate order is the data. The crate pane lists crate names and the detail
+	// pane shows the SELECTED track, which is the first row of the list, so the
+	// first CCC in the frame is the list itself.
+	if strings.Index(out, "CCC") > strings.Index(out, "AAA") {
+		t.Errorf("the list is in title order, not the crate's running order:\n%s", out)
+	}
+}
+
+// TestExplicitSortOverridesTheCrateOrder guards the other half: choosing a sort
+// is the user overriding the crate, and it must take effect.
+func TestExplicitSortOverridesTheCrateOrder(t *testing.T) {
+	ix := library.NewIndex()
+	ix.Add(library.Track{Path: "/m/a.mp3", Title: "AAA"})
+	ix.Add(library.Track{Path: "/m/b.mp3", Title: "BBB"})
+	ix.Add(library.Track{Path: "/m/c.mp3", Title: "CCC"})
+	ix.SetCrates([]library.Crate{{Name: "Set", Tracks: []string{"/m/c.mp3", "/m/a.mp3"}}})
+
+	out := stripANSI(RenderLibrary(140, 30, ix,
+		LibraryState{Pane: PaneTracks, CrateSel: 1, Sorted: true}))
+
+	if strings.Index(out, "AAA") > strings.Index(out, "CCC") {
+		t.Errorf("an explicit title sort did not override the crate order:\n%s", out)
+	}
+}
+
+// TestCrateRowCountTracksTheCrates keeps the cursor bounded by what is there.
+// It was a constant 2, matching a pane that rendered placeholders, so the arrows
+// could not have reached a real crate.
+func TestCrateRowCountTracksTheCrates(t *testing.T) {
+	ix := library.NewIndex()
+	if got := CrateRowCount(ix); got != 1 {
+		t.Errorf("with no crates the pane offers %d rows, want 1 (All tracks)", got)
+	}
+	ix.SetCrates([]library.Crate{{Name: "A"}, {Name: "B"}})
+	if got := CrateRowCount(ix); got != 3 {
+		t.Errorf("with two crates the pane offers %d rows, want 3", got)
+	}
+}

@@ -67,3 +67,67 @@ func SaveCrate(path string, c Crate) error {
 	}
 	return os.WriteFile(path, data, 0o644)
 }
+
+// DefaultCratesPath is where crates live: beside the config, in the same
+// per-user directory as the mappings.
+func DefaultCratesPath(configDir string) string {
+	return filepath.Join(configDir, "crates.yaml")
+}
+
+// Normalize drops empty and duplicate track paths while preserving order.
+//
+// A crate is a curated running order, so order is the data. Two entries pointing
+// at the same file would show the track twice and load it twice from one
+// keystroke, and an empty entry is a track that does not exist.
+func (c Crate) Normalize() Crate {
+	out := Crate{Name: c.Name}
+	seen := make(map[string]bool, len(c.Tracks))
+	for _, p := range c.Tracks {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out.Tracks = append(out.Tracks, p)
+	}
+	return out
+}
+
+// Contains reports whether the crate already lists a track path.
+func (c Crate) Contains(path string) bool {
+	for _, p := range c.Tracks {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// SaveCrates writes the whole crate list.
+//
+// It is the counterpart to LoadCrates and exists because SaveCrate re-reads and
+// re-marshals the file on every call. For a UI that rewrites the list after each
+// add or remove, that is a read-modify-write per keystroke, and it races with
+// nothing only by accident: two edits in quick succession would each rewrite
+// from their own copy.
+func SaveCrates(path string, crates []Crate) error {
+	norm := make([]Crate, 0, len(crates))
+	seen := make(map[string]bool, len(crates))
+	for _, c := range crates {
+		c = c.Normalize()
+		if c.Name == "" || seen[c.Name] {
+			continue
+		}
+		seen[c.Name] = true
+		norm = append(norm, c)
+	}
+	data, err := yaml.Marshal(&norm)
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o644)
+}

@@ -95,6 +95,13 @@ func sweepModel(t *testing.T) (*Model, *sweepEngine) {
 	ix.Add(library.Track{Path: "/m/1.wav", Title: "Inner Speaker", BPM: 128, Duration: 3 * time.Minute})
 	ix.Add(library.Track{Path: "/m/2.wav", Title: "Warehouse Dub", BPM: 140, Duration: 3 * time.Minute})
 	ix.Add(library.Track{Path: "/m/3.wav", Title: "Back Room", BPM: 90, Duration: 3 * time.Minute})
+	// One crate, so the crate pane has a row past "All tracks" and the tests
+	// that assert cursor movement there are asserting something. With no crates
+	// the pane is a single row and "down" correctly cannot move.
+	ix.SetCrates([]library.Crate{
+		{Name: "Warm Up", Tracks: []string{"/m/1.wav", "/m/2.wav"}},
+		{Name: "Peak Time", Tracks: []string{"/m/3.wav"}},
+	})
 	m.SetLibrary(ix)
 	// The browsers open on the track list, which is what "/" and "l" both do.
 	// A test that sets Mode directly would otherwise start on the crates pane,
