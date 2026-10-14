@@ -88,6 +88,11 @@ type Deck struct {
 	// hotcue jump lands with the same precision as any other seek.
 	hotcues   [numHotcues]float64
 	hotcueSet [numHotcues]bool
+	// cues persists hotcues and saved loops for the loaded track. It is set
+	// from the UI goroutine before playback and only read on the render
+	// goroutine, which is the same one-way handoff every other engine option
+	// uses.
+	cues *CueStore
 
 	// pending carries control changes from Apply to the render goroutine. See
 	// the type comment: a Deck has exactly one writer (Render) and one reader
@@ -198,6 +203,40 @@ func (d *Deck) loadNow(t *audio.Track) {
 	d.applyResamplerRatio()
 	d.eq.Reset()
 	d.filter.Reset()
+
+	// Everything positional belongs to the track that just left.
+	//
+	// None of this was reset, so loading a new track into a deck that was
+	// looping the previous one left the loop armed and active -- the deck jumped
+	// straight back into a loop over audio the user had just replaced, at a
+	// position measured in the old track's frames. Hotcues, saved loop slots and
+	// any pending roll survived the same way.
+	//
+	// The armed loop *length* is deliberately kept: that is an encoder setting
+	// (spec 6.2.2) and the readout depends on it surviving a release. The loop's
+	// *bounds*, its slots and its hotcues are per-track and go.
+	d.loop.active = false
+	d.loop.rolled = false
+	d.loop.start = 0
+	d.loop.end = 0
+	d.savedLoop = nil
+	d.hotcues = [numHotcues]float64{}
+	d.hotcueSet = [numHotcues]bool{}
+	// A roll in progress belongs to the track that started it.
+	d.rollStack = nil
+
+	// Restore what is remembered about THIS track. Done after the reset above,
+	// on the same goroutine, so the previous track's positions cannot survive.
+	if d.cues != nil && t != nil {
+		d.applyCues(d.cues.Load(t.Path))
+	}
+
+	// Restore what is remembered about THIS track. Done after the reset above,
+	// on the same goroutine, so the previous track's positions cannot survive.
+	if d.cues != nil && t != nil {
+		d.applyCues(d.cues.Load(t.Path))
+	}
+
 	d.warmPeaks()
 }
 
@@ -482,6 +521,7 @@ func (d *Deck) setHotcue(slot int) {
 	}
 	d.hotcues[slot] = d.pos
 	d.hotcueSet[slot] = true
+	d.persistCues()
 }
 
 // JumpToHotcue seeks to a hotcue. An unassigned slot is a no-op: hitting a
@@ -511,6 +551,8 @@ func (d *Deck) deleteHotcue(slot int) {
 	}
 	d.hotcues[slot] = 0
 	d.hotcueSet[slot] = false
+	// Removing a cue is remembered too, or it would come back next launch.
+	d.persistCues()
 }
 
 // Hotcue reports whether a slot holds a cue and where it points.

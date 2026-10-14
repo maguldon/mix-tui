@@ -42,6 +42,14 @@ Known gaps, so nothing here is a surprise:
   which is worse than not offering it because the mapping file is the evidence
   that it was wired. `TestEveryTActionOwnedActionIsLive` now fails if any
   TUI-owned action goes inert again.
+- **Hotcues and saved loops are remembered per track, and live in your config
+  directory.** They are written to `$XDG_CONFIG_HOME/mix-tui/hotcues/` and
+  `loops/`, keyed by a hash of the track's path, and restored on the next load of
+  that track. They are deliberately *not* in the cache directory alongside the
+  analysis: they are not derived data, and a cache is expected to be evictable.
+  Positions are stored as fractions of the track's duration, so a track
+  re-decoded at another rate restores to the same place, and a file replaced by a
+  shorter one clamps rather than leaving cues past the end.
 - **Crates are static lists, and the crate file is yours to edit.** They load
   from `$XDG_CONFIG_HOME/mix-tui/crates.yaml` and a selected crate narrows the
   list to its tracks in the crate's own running order. `ctrl+n` creates one,

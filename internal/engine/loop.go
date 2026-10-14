@@ -280,6 +280,7 @@ func (d *Deck) SaveLoop(slot int) error {
 		d.savedLoop = make(map[int]SavedLoop)
 	}
 	d.savedLoop[slot] = SavedLoop{Start: d.loop.start, End: d.loop.end}
+	d.persistCues()
 	return nil
 }
 

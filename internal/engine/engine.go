@@ -110,6 +110,20 @@ func New(cfg Config) *Engine {
 // Deck returns deck i, or nil when i is out of range. Callers in the audio
 // path rely on the nil check; callers that already validated may assume
 // non-nil.
+// SetCueStore installs the store every deck uses to remember hotcues and saved
+// loops per track (spec §10). Call it before anything is loaded: the restore
+// happens as part of a load, so a store installed afterwards applies to the next
+// track rather than the current one.
+//
+// A nil store disables persistence, which is what the renderer and the tests
+// want -- they load fixtures repeatedly and must not accumulate state between
+// runs.
+func (e *Engine) SetCueStore(s *CueStore) {
+	for _, d := range e.decks {
+		d.SetCueStore(s)
+	}
+}
+
 func (e *Engine) Deck(i int) *Deck {
 	if i < 0 || i >= len(e.decks) {
 		return nil
@@ -463,7 +477,12 @@ func (e *Engine) Snapshot() Snapshot {
 			st.DownbeatTimes = downbeatTimes(g)
 			st.Meter = g.Meter
 		}
-		for slot := 1; slot <= numHotcues; slot++ {
+		// Slots 0..numHotcues-1. This ran from 1 to numHotcues inclusive, which
+		// skipped slot 0 -- the slot the "1" key sets -- and asked Hotcue for
+		// slot 8, which does not exist and always reports false. So a hotcue set
+		// with the first key was invisible in every view that draws cue markers,
+		// while being perfectly recallable by the key that set it.
+		for slot := 0; slot < numHotcues; slot++ {
 			if at, ok := d.Hotcue(slot); ok {
 				st.CueTimes[st.CueCount] = at
 				st.CueCount++

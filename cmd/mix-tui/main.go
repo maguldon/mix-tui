@@ -135,6 +135,16 @@ func run(args appArgs) error {
 	}
 
 	cache := library.OpenCache(filepath.Join(cacheDir(), "analysis"))
+
+	// Hotcues and saved loops go in the CONFIG directory, not the cache
+	// directory, even though analysis has moved to the cache.
+	//
+	// They are not derived data: a DJ sets them deliberately, over a set, and
+	// they are the one thing here that cannot be recomputed from the audio. A
+	// cache is expected to be evictable -- clearing it is routine, and the next
+	// run rebuilds it. Clearing this one would silently destroy a set. Spec
+	// §10 puts them under the config directory for the same reason.
+	eng.SetCueStore(engine.OpenCueStore(configDir()))
 	analyzer := NewAnalyzer(cache, eng, slogLog)
 	// Push analysis results back into the library index as they land, so the
 	// browser's BPM and KEY columns fill in for tracks the user has actually
