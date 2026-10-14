@@ -135,6 +135,16 @@ func (l LayoutKind) next() LayoutKind {
 	return LayoutKind((int(l) + 1) % 4)
 }
 
+// prev is the other direction around the same four-layout cycle.
+//
+// It exists because ViewPrev is a declared action: it parsed from a mapping
+// file, resolved, and was dropped. A controller can name an action the
+// application silently ignores, which is worse than not offering it -- the
+// binding looks correct in the config and does nothing at the desk.
+func (l LayoutKind) prev() LayoutKind {
+	return LayoutKind(((int(l)+3)%4 + 4) % 4)
+}
+
 // layoutFromName maps the config spelling to a LayoutKind, defaulting to D.
 func layoutFromName(s string) LayoutKind {
 	switch s {

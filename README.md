@@ -36,13 +36,12 @@ full suite passes (`go test ./...`). All four binaries build and run.
 
 Known gaps, so nothing here is a surprise:
 
-- **8 of the 45 declared actions have no consumer yet** — `ViewPrev`,
-  `FocusNext`, `DebugToggle`, `HelpToggle`, `LibraryLoad`, `LibrarySearch`,
-  `LibrarySort`, `LibraryFocusNext`. They parse from mapping files and are
-  emitted by the engine, but neither the engine nor the TUI acts on them. The
-  features they name are reachable by key instead. (`ZoomIn` and `ZoomOut` used
-  to be on this list: they parsed, resolved, and were then dropped by both
-  `applyAction` and `Engine.Apply` — a knob that did nothing, with no error.)
+- **All 45 declared actions now do something.** This list was once 10, then 8.
+  Every action that parsed from a mapping file used to be dropped by both
+  `applyAction` and `Engine.Apply` — a knob bound to nothing, with no error,
+  which is worse than not offering it because the mapping file is the evidence
+  that it was wired. `TestEveryTActionOwnedActionIsLive` now fails if any
+  TUI-owned action goes inert again.
 - **Crates are static lists, and the crate file is yours to edit.** They load
   from `$XDG_CONFIG_HOME/mix-tui/crates.yaml` and a selected crate narrows the
   list to its tracks in the crate's own running order. `ctrl+n` creates one,

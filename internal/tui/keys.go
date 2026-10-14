@@ -382,8 +382,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 		if name == "shift+tab" {
 			delta = -1
 		}
-		n := int(views.PaneCount)
-		m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
+		m.cycleBrowserPane(delta)
 		return true
 	case "left":
 		// Move the caret. LEFT deleted the last character instead, which in a
@@ -489,6 +488,17 @@ func (m *Model) resetBrowser() {
 	m.st.CrateSel = 0
 	m.st.TrackSel = 0
 	m.st.LibPane = views.PaneTracks
+}
+
+// cycleBrowserPane moves the browser's pane cursor by delta, wrapping at both
+// ends.
+//
+// Shared by TAB and by the LibraryFocusNext action so the two cannot drift: an
+// action that cycled somewhere else from the same key would be a mapping file
+// that looks right and does something the keyboard does not.
+func (m *Model) cycleBrowserPane(delta int) {
+	n := int(views.PaneCount)
+	m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
 }
 
 // stepZoomBars moves the zoom level one step, clamped at both ends.
@@ -699,7 +709,52 @@ func (m *Model) applyAction(a engine.Action) {
 		m.st.Mode = ModeLibrary
 		return
 	case engine.LibraryClose:
+		// Leaving the browser, whichever kind it is, and resetting it so the
+		// next visit starts clean -- the same state a fresh open establishes,
+		// which escape already does and a bare Mode assignment did not.
+		if m.st.Mode == ModeLibrary || m.st.Mode == ModeOverlay {
+			m.resetBrowser()
+		}
 		m.st.Mode = ModeMix
+		return
+	case engine.LibraryLoad:
+		// The track under the cursor, into the focused deck. The same thing
+		// ENTER does in both browsers, reached by a name a mapping file can use.
+		if m.st.Mode != ModeLibrary && m.st.Mode != ModeOverlay {
+			return
+		}
+		m.loadSelected()
+		return
+	case engine.LibrarySearch:
+		// "Start a fresh search": enter the browser if not already there, clear
+		// what is typed and put the caret in an empty field.
+		//
+		// Deliberately not the same as LibraryOpen. Opening the browser and
+		// keeping the previous query means a second press narrows from the old
+		// text rather than starting over, which is the opposite of what a
+		// search key means -- and the previous text is invisible in the overlay,
+		// whose only field is the query.
+		if m.st.Mode != ModeLibrary {
+			m.st.Mode = ModeLibrary
+		}
+		m.st.LibPane = views.PaneTracks
+		m.setQuery("")
+		return
+	case engine.LibrarySort:
+		// Open the sort menu, the same as "s" in the browser. The overlay draws
+		// no menu and no sort column, so it is refused there rather than
+		// setting state the user cannot see or undo.
+		if m.st.Mode == ModeLibrary {
+			m.st.ShowSort = !m.st.ShowSort
+		}
+		return
+	case engine.LibraryFocusNext:
+		// Cycle the browser's panes, the same as TAB inside it. The overlay
+		// renders one pane, so TAB there moves DECK focus on purpose; this
+		// action must not pretend otherwise.
+		if m.st.Mode == ModeLibrary {
+			m.cycleBrowserPane(1)
+		}
 		return
 	case engine.LoopRoll:
 		// Toggle rather than engage: there is no key-release to trigger the
@@ -724,6 +779,19 @@ func (m *Model) applyAction(a engine.Action) {
 		m.retargetZoom()
 	case engine.ViewNext:
 		m.st.Layout = m.st.Layout.next()
+	case engine.ViewPrev:
+		m.st.Layout = m.st.Layout.prev()
+	case engine.FocusNext:
+		// Subject to the same rule as TAB: a mode that does not draw the decks
+		// must not have its deck focus moved behind the user's back, or ENTER
+		// would load into a deck they cannot see selected.
+		if deckFocusVisible(m.st.Mode) {
+			m.moveFocus(1)
+		}
+	case engine.HelpToggle:
+		m.st.Mode = toggleMode(m.st.Mode, ModeHelp)
+	case engine.DebugToggle:
+		m.st.Mode = toggleMode(m.st.Mode, ModeDebug)
 	case engine.MixerCrossfader:
 		m.st.Xfade = a.Value
 	}
