@@ -87,7 +87,10 @@ func run(args appArgs) error {
 	}
 	var session *audioSession
 	if !args.noAudio {
-		session = startupAudio(ctx, &audioCfg)
+		session = startupAudioWith(ctx, &audioCfg, pipewire.PumpConfig{
+			TargetLatencyFrames: cfg.Audio.TargetLatencyFrames,
+			BlockFrames:         engine.BlockFrames,
+		})
 		// Compare against what the DEVICE granted, not against what we declared.
 		//
 		// session.rate() is the declared rate -- the same number audioCfg asked
@@ -316,11 +319,19 @@ func run(args appArgs) error {
 			// so "loaded N mapping(s)" could never print -- a user with a
 			// working mapping was told nothing about it.
 			n, errs := w.ReloadOnce()
-			if len(errs) > 0 {
-				fmt.Fprintf(os.Stderr, "mix-tui: %d mapping error(s) at startup\n", len(errs))
-			}
-			if n > 0 {
-				fmt.Fprintf(os.Stderr, "mix-tui: loaded %d mapping(s)\n", n)
+			// The errors themselves, not a count. Spec §8 asks for the file and
+			// the line, and "3 mapping error(s) at startup" is the one form of
+			// this message that cannot make a typo findable -- the user knows
+			// something is wrong and has no idea which file or where.
+			//
+			// The function that already did this, mappingStartupLines, was called
+			// only from its own test: a test asserting behaviour the production
+			// path did not have.
+			// mappingStartupLines reports both the errors and the loaded count,
+			// so printing them separately here would have double-reported the
+			// count.
+			for _, line := range mappingStartupLines(n, errs) {
+				fmt.Fprintln(os.Stderr, line)
 			}
 			go w.Run(ctx)
 		}

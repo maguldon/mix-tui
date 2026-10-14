@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/maguldon/mix-tui/internal/audio"
 )
 
 // audioExts are the formats the decoder accepts, and only those.
@@ -138,7 +140,23 @@ func trackFor(path string) (Track, bool) {
 	if fi, err := os.Stat(path); err == nil {
 		added = fi.ModTime()
 	}
-	return Track{Path: path, Title: title, Artist: artist, Added: added}, true
+	// Probe the header for the duration.
+	//
+	// Without this the library's TIME column is permanently --:-- and the detail
+	// pane's too: Track.Duration existed, was rendered in two places, and was
+	// never assigned by anything in the application. A DJ choosing between two
+	// mixes needs to know which is six minutes and which is seventy-six.
+	//
+	// It is a header read rather than a decode -- Probe reads a few dozen bytes
+	// and closes -- so it costs about what the os.Stat above already did. Doing
+	// it here rather than at analysis time is deliberate: analysis runs on load,
+	// one track at a time, so waiting for it would leave the column empty for
+	// everything the user has not yet played.
+	var dur time.Duration
+	if d, _, err := audio.Probe(path); err == nil {
+		dur = d
+	}
+	return Track{Path: path, Title: title, Artist: artist, Added: added, Duration: dur}, true
 }
 
 // splitArtistTitle guesses "Artist - Title" from a filename. It is a

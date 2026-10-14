@@ -38,6 +38,12 @@ const audioRetryInterval = 3 * time.Second
 type audioSession struct {
 	cfg pipewire.OutputConfig
 	eng *engine.Engine
+	// pumpCfg carries the producer's settings. audio.target_latency_frames was
+	// parsed, validated and documented, and then dropped: NewPumper was called
+	// with an empty PumpConfig, so the value always fell back to rate/5 and the
+	// setting was exactly the "silently ignored typo" the config package's own
+	// doc warns about.
+	pumpCfg pipewire.PumpConfig
 
 	mu     sync.Mutex
 	out    *pipewire.Output
@@ -91,7 +97,7 @@ func (s *audioSession) startPump(ctx context.Context) {
 		return
 	}
 	out, eng := s.out, s.eng
-	pump := pipewire.NewPumper(out, eng, pipewire.PumpConfig{})
+	pump := pipewire.NewPumper(out, eng, s.pumpCfg)
 	done := make(chan struct{})
 	s.pump, s.done = pump, done
 	s.mu.Unlock()
@@ -250,7 +256,17 @@ func (s *audioSession) rate() int {
 
 // startupAudio opens the device once, before the engine exists.
 func startupAudio(ctx context.Context, cfg *pipewire.OutputConfig) *audioSession {
-	s := &audioSession{cfg: *cfg}
+	return startupAudioWith(ctx, cfg, pipewire.PumpConfig{})
+}
+
+// startupAudioWith is startupAudio with the producer's settings supplied.
+//
+// A parameter rather than a field read later, because the pump is built once a
+// device appears -- possibly minutes into the run, on the retry path -- so the
+// setting has to be carried across rather than fetched from the config at that
+// moment.
+func startupAudioWith(ctx context.Context, cfg *pipewire.OutputConfig, pump pipewire.PumpConfig) *audioSession {
+	s := &audioSession{cfg: *cfg, pumpCfg: pump}
 	if err := s.start(ctx); err != nil {
 		// Once, on stderr, before the alt screen takes the terminal. After that
 		// the banner carries it and the log has the detail.
