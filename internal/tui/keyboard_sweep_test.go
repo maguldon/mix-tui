@@ -183,8 +183,8 @@ var defaultBindings = map[string]binding{
 // discarded on every press. A key the config claims but cannot own invites a
 // user to rebind something that will never happen.
 var hardcodedUIKeys = map[string]binding{
-	"tab":       {key: "tab", note: "deck focus in the mix view"},
-	"shift+tab": {key: "shift+tab", note: "deck focus, the other way"},
+	"tab":       {key: "tab", note: "deck focus where the decks are drawn; see TestDeckFocusOnlyMovesWhereTheDecksAre"},
+	"shift+tab": {key: "shift+tab", note: "deck focus the other way, same modes"},
 	"?":         {key: "?"},
 	"`":         {key: "`"},
 	"/":         {key: "/"},
@@ -405,6 +405,70 @@ func TestArrowsOnlyActInTheMixView(t *testing.T) {
 					key, modeName(mode), m.State().Xfade, e.applied[actions:])
 			})
 		}
+	}
+}
+
+// TestDeckFocusOnlyMovesWhereTheDecksAre is the tab half of the arrows test
+// above, and the same bug wearing a different hat.
+//
+// handleKey checks UI keys before any binding lookup, so a mistyped mapping
+// cannot lock the user out of a screen. That rule is right and has not changed.
+// The consequence is that TAB reached help, debug and settings, which replace
+// the deck view entirely -- so on three of six modes it moved a focus ring that
+// is on no part of the screen, drew nothing, and reached no engine action.
+// Nothing in the footers said so.
+//
+// The fix is the same one the arrows got: a focus change nobody can see did not
+// happen. The mix view and the overlay keep it, because the overlay is drawn
+// over the decks and TAB is how a user aims ENTER at the other one.
+func TestDeckFocusOnlyMovesWhereTheDecksAre(t *testing.T) {
+	// The browser is not in this list: TAB there is pane focus, which that
+	// screen really does draw, and TestLibraryTabStillCyclesPanes covers it.
+	for _, mode := range []Mode{ModeHelp, ModeDebug, ModeSettings} {
+		for _, key := range []string{"tab", "shift+tab"} {
+			t.Run(modeName(mode)+" "+key, func(t *testing.T) {
+				m, e := sweepModel(t)
+				m.st.Mode = mode
+				before := m.RenderAt(120, 40)
+				actions := len(e.applied)
+
+				press(t, m, key)
+
+				if m.State().Focus != 0 {
+					t.Errorf("%q in %s moved deck focus to %d; no deck is on screen",
+						key, modeName(mode), m.State().Focus)
+				}
+				if len(e.applied) > actions {
+					t.Errorf("%q in %s applied %v", key, modeName(mode), e.applied[actions:])
+				}
+				if after := m.RenderAt(120, 40); after != before {
+					t.Errorf("%q in %s changed a screen that draws no decks:\n%s",
+						key, modeName(mode), after)
+				}
+			})
+		}
+	}
+
+	// The two modes that draw the decks still move focus, or the suppression has
+	// taken away the documented way to aim ENTER at the other deck.
+	for _, c := range []struct {
+		mode Mode
+		key  string
+		want int
+	}{
+		{mode: ModeMix, key: "tab", want: 1},
+		{mode: ModeOverlay, key: "tab", want: 1},
+		{mode: ModeMix, key: "shift+tab", want: 1}, // focus starts at 0, so this wraps
+		{mode: ModeOverlay, key: "shift+tab", want: 1},
+	} {
+		t.Run(modeName(c.mode)+" "+c.key+" still moves focus", func(t *testing.T) {
+			m, _ := sweepModel(t)
+			m.st.Mode = c.mode
+			press(t, m, c.key)
+			if m.State().Focus != c.want {
+				t.Errorf("focus = %d, want %d", m.State().Focus, c.want)
+			}
+		})
 	}
 }
 
@@ -786,6 +850,89 @@ func perModeCases() []modeCase {
 					t.Errorf("path = %q, want %q", m.st.SettingInput, "/srv/d")
 				}
 			}},
+		// DELETE is the other half of backspace, and it was unbound in both
+		// fields. The caret landed at the start of the filter every time a
+		// browser or the overlay was opened, and there was no key that could
+		// remove the character under it: every correction began by stepping
+		// right and backspacing.
+		{name: "delete at the start of the filter removes the first character", mode: ModeLibrary, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				for i := 0; i < 6; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "eat" {
+					t.Errorf("query = %q, want %q; with the caret at the start there "+
+						"was no way to remove a character at all", m.st.Query, "eat")
+				}
+				if m.st.QueryCursor != 0 {
+					t.Errorf("caret = %d, want 0; the caret stays where the field is", m.st.QueryCursor)
+				}
+			}},
+		{name: "delete removes the character under the caret", mode: ModeLibrary, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "bea" {
+					t.Errorf("query = %q, want %q (the rune under the caret)", m.st.Query, "bea")
+				}
+				if m.st.QueryCursor != 3 {
+					t.Errorf("caret = %d, want 3", m.st.QueryCursor)
+				}
+			}},
+		// At the end of a field there is nothing under the caret, and delete
+		// must be a no-op rather than "delete the last character instead" --
+		// the same rule backspace follows at the start, for the same reason:
+		// the settings field is seeded with the configured library root.
+		{name: "delete at the end of the filter deletes nothing", mode: ModeLibrary, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "beat") },
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "beat" || m.st.QueryCursor != 4 {
+					t.Errorf("query = %q caret = %d, want them untouched", m.st.Query, m.st.QueryCursor)
+				}
+			}},
+		{name: "delete in the overlay edits the query", mode: ModeOverlay, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "inner")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "inne" {
+					t.Errorf("query = %q, want %q", m.st.Query, "inne")
+				}
+			}},
+		{name: "delete in the settings field edits the path", mode: ModeSettings, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "/srv/dj")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "/srv/j" {
+					t.Errorf("path = %q, want %q", m.st.SettingInput, "/srv/j")
+				}
+				if m.st.SettingCursor != 5 {
+					t.Errorf("caret = %d, want 5", m.st.SettingCursor)
+				}
+			}},
+		{name: "delete at the end of the path field deletes nothing", mode: ModeSettings, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv") },
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "/srv" {
+					t.Errorf("path = %q, want it intact", m.st.SettingInput)
+				}
+			}},
+		{name: "delete never reaches the engine", mode: ModeLibrary, key: "delete",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "ab") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if len(e.applied) != 0 {
+					t.Errorf("delete applied %v; it edits text", e.applied)
+				}
+			}},
 		{name: "left in the settings field moves the caret", mode: ModeSettings, key: "left",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
@@ -966,6 +1113,46 @@ func TestFilterIsDrawnWhereItFilters(t *testing.T) {
 	if want := "inne" + views.CaretGlyph() + "r"; !strings.Contains(out, want) {
 		t.Errorf("the browser does not draw its filter with the caret where it is; "+
 			"want %q in the frame:\n%s", want, out)
+	}
+}
+
+// TestEveryModeDrawsItsKeyLine is the closure check for modeFooter.
+//
+// A key line nobody renders is dead text: it documents keys for a screen that
+// never shows them, which is the failure the footer was built to remove. It is
+// also how a mode ends up with a complete and correct line in modeFooter and no
+// way to see it -- which is what the overlay had, on the screen with the most to
+// explain.
+//
+// The debug screen is the one mode still without its line, and naming it here
+// makes that a decision rather than an oversight: it is a wall of counters with
+// no row to spare, and the two keys it answers to are both on the way in.
+func TestEveryModeDrawsItsKeyLine(t *testing.T) {
+	for _, mode := range []Mode{ModeMix, ModeLibrary, ModeSettings, ModeHelp} {
+		t.Run(modeName(mode), func(t *testing.T) {
+			m, _ := sweepModel(t)
+			m.st.Mode = mode
+
+			lines := splitLines(m.RenderAt(160, 30))
+			last := strings.TrimRight(lines[len(lines)-1], " ")
+			if want := modeFooter(mode); !strings.Contains(last, want) {
+				t.Errorf("the footer row does not carry %q:\n%s", want, last)
+			}
+		})
+	}
+
+	// The overlay cannot use the footer row, so it draws the same line inside
+	// its box. TestOverlayDrawsItsKeyHints checks where it lands; this checks
+	// that the text is still the one modeFooter produces, rather than a second
+	// copy in the view that can drift from it.
+	m, _ := sweepModel(t)
+	press(t, m, "l")
+	if m.st.Mode != ModeOverlay {
+		t.Fatalf("l did not open the overlay (mode %v)", m.st.Mode)
+	}
+	frame := m.RenderAt(160, 30)
+	if want := modeFooter(ModeOverlay); !strings.Contains(frame, want) {
+		t.Errorf("the overlay does not draw %q:\n%s", want, frame)
 	}
 }
 

@@ -31,6 +31,13 @@ import (
 // here can produce. A list nobody checks against the code is a list that goes
 // stale, which is how "shift+enter" shipped in the first place.
 //
+// It also carries keys the application does not bind yet -- home and end, the
+// natural companions to the left and right the caret already has. A test cannot
+// drive a binding nobody has written, so the fixture has to be able to carry
+// the key before the handler exists; otherwise the first thing a binding meets
+// is "no tea.KeyMsg reports X, so no test can prove this binding reachable",
+// which reads like a transport problem and is a missing line.
+//
 // Only keys a real terminal sends belong here. A name this table cannot produce
 // is a name the application cannot receive, and asserting on it proves nothing
 // about the running program.
@@ -44,6 +51,9 @@ var transportKey = map[string]tea.KeyMsg{
 	"shift+tab": {Type: tea.KeyShiftTab},                  // \x1b[Z
 	"enter":     {Type: tea.KeyEnter},                     // \r
 	"backspace": {Type: tea.KeyBackspace},                 // \x7f
+	"delete":    {Type: tea.KeyDelete},                    // \x1b[3~
+	"home":      {Type: tea.KeyHome},                      // \x1b[H, or \x1b[1~
+	"end":       {Type: tea.KeyEnd},                       // \x1b[F, or \x1b[4~
 	"esc":       {Type: tea.KeyEscape},                    // \x1b
 	"up":        {Type: tea.KeyUp},                        // \x1b[A
 	"down":      {Type: tea.KeyDown},                      // \x1b[B

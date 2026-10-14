@@ -81,9 +81,9 @@ func TestOverlayDrawsTheCaretWhereItIs(t *testing.T) {
 	ix := library.NewIndex()
 	ix.Add(library.Track{Path: "/1.wav", Title: "Inner Speaker"})
 
-	at := strings.Index(RenderOverlay(120, 40, ix, "inner", 2, 0), "in"+caretGlyph+"ner")
+	at := strings.Index(RenderOverlay(120, 40, ix, "inner", 2, 0, "esc cancel"), "in"+caretGlyph+"ner")
 	if at < 0 {
-		t.Errorf("the overlay did not draw the caret at 2:\n%s", RenderOverlay(120, 40, ix, "inner", 2, 0))
+		t.Errorf("the overlay did not draw the caret at 2:\n%s", RenderOverlay(120, 40, ix, "inner", 2, 0, "esc cancel"))
 	}
 }
 
@@ -104,8 +104,8 @@ func TestFieldsStillFitTheirWidth(t *testing.T) {
 	long := strings.Repeat("verylongdirectoryname", 12)
 	for _, w := range []int{200, 120, 90, 80, 40, 20} {
 		for _, out := range []string{
-			RenderOverlay(w, 30, ix, long, 0, 0),
-			RenderOverlay(w, 30, ix, "", 0, 0),
+			RenderOverlay(w, 30, ix, long, 0, 0, ""),
+			RenderOverlay(w, 30, ix, "", 0, 0, ""),
 			RenderSettings(w, 30, SettingsState{Input: long, Cursor: 3}),
 			RenderSettings(w, 30, SettingsState{Input: "", Cursor: 0}),
 		} {

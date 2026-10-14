@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -126,13 +127,20 @@ func TestOverlayIsStillExactlyTheFrameSize(t *testing.T) {
 
 // TestOverlayRowsFitsInsideTheFrame. The box must never claim more rows than
 // the terminal has, or the compositor would push the deck view off screen.
+//
+// The fixture adds distinct paths on purpose. Fifty tracks all filed under one
+// path are one track: Index.Add deduplicates by path, so the box had two results
+// to lay out and never came near the height that overflows.
 func TestOverlayRowsFitsInsideTheFrame(t *testing.T) {
 	ix := library.NewIndex()
 	for i := 0; i < 50; i++ {
-		ix.Add(library.Track{Path: "/x.wav", Title: "T"})
+		ix.Add(library.Track{Path: fmt.Sprintf("/x%d.wav", i), Title: "T"})
 	}
-	for _, h := range []int{10, 20, 24, 40} {
-		rows, offset := views.OverlayRows(80, h, ix, "", 0, 0)
+	if ix.Len() != 50 {
+		t.Fatalf("the fixture holds %d tracks, so the box is never asked to grow", ix.Len())
+	}
+	for _, h := range []int{4, 8, 10, 12, 20, 24, 40} {
+		rows, offset := views.OverlayRows(80, h, ix, "", 0, 0, modeFooter(ModeOverlay))
 		if offset+len(rows) > h {
 			t.Errorf("h=%d: box occupies rows %d..%d, past the frame", h, offset, offset+len(rows)-1)
 		}

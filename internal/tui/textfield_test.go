@@ -57,6 +57,50 @@ func TestDeleteBeforeAtTheStartIsANoOp(t *testing.T) {
 	}
 }
 
+// TestDeleteAfterRemovesTheRuneUnderTheCaret is the other half of backspace.
+//
+// It was missing, and its absence was not cosmetic: the caret lands at the
+// start of a filter or a path every time the screen is opened, and with no
+// forward delete there was no key that could remove the character under it.
+func TestDeleteAfterRemovesTheRuneUnderTheCaret(t *testing.T) {
+	s, at := deleteAfter("beat", 4)
+	if s != "beat" || at != 4 {
+		t.Errorf("deleteAfter(%q, 4) = (%q, %d); want it unchanged", "beat", s, at)
+	}
+	s, at = deleteAfter("beat", 2)
+	if s != "bet" || at != 2 {
+		t.Errorf("deleteAfter(%q, 2) = (%q, %d); want (%q, 2)", "beat", s, at, "bet")
+	}
+	// At the start of the field this is the one that deletes a character at all.
+	s, at = deleteAfter("beat", 0)
+	if s != "eat" || at != 0 {
+		t.Errorf("deleteAfter(%q, 0) = (%q, %d); want (%q, 0)", "beat", s, at, "eat")
+	}
+	// And a caret left past the end by some path that missed the setter.
+	s, at = deleteAfter("beat", 400)
+	if s != "beat" || at != 4 {
+		t.Errorf("deleteAfter(%q, 400) = (%q, %d); want the caret clamped first", "beat", s, at)
+	}
+}
+
+// TestDeleteAfterAtTheEndIsANoOp. The mirror of TestDeleteBeforeAtTheStartIsANoOp,
+// and for the same reason: the settings field is seeded with the configured
+// library root, and a forward delete that ran off the end would have to eat the
+// last character of a path the user never typed.
+func TestDeleteAfterAtTheEndIsANoOp(t *testing.T) {
+	for _, text := range []string{"", "beat", "日"} {
+		s, at := deleteAfter(text, len([]rune(text)))
+		if s != text || at != len([]rune(text)) {
+			t.Errorf("deleteAfter(%q, end) = %q, %d; want it unchanged", text, s, at)
+		}
+	}
+	// An empty field must survive the round trip rather than panicking on the
+	// slice bounds.
+	if s, at := deleteAfter("", 0); s != "" || at != 0 {
+		t.Errorf("deleteAfter(\"\", 0) = %q, %d", s, at)
+	}
+}
+
 func TestInsertRuneInsertsAtTheCaret(t *testing.T) {
 	s, at := insertRune("beat", 2, 'z')
 	if s != "bezat" {
@@ -102,5 +146,15 @@ func TestEditingIsRuneIndexed(t *testing.T) {
 	s, _ := insertRune("日本", 1, 'x')
 	if s != "日x本" {
 		t.Errorf("insertRune(%q, 1, 'x') = %q, want %q", "日本", s, "日x本")
+	}
+	// Forward delete is measured the same way, and it is the one that eats the
+	// character under the caret -- which, at the start of the field where every
+	// freshly opened filter puts its caret, is a whole character.
+	s, at := deleteAfter("日本語", 0)
+	if s != "本語" || at != 0 {
+		t.Errorf("deleteAfter(%q, 0) = (%q, %d), want (%q, 0)", "日本語", s, at, "本語")
+	}
+	if len([]rune(s)) != 2 || len(s) == 2 {
+		t.Errorf("deleteAfter left %q with %d runes and %d bytes", s, len([]rune(s)), len(s))
 	}
 }

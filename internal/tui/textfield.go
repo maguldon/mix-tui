@@ -59,3 +59,25 @@ func deleteBefore(s string, at int) (string, int) {
 	// so the copy cannot scribble over the rune it is about to read.
 	return string(append(rs[:at-1:at-1], rs[at:]...)), at - 1
 }
+
+// deleteAfter removes the rune under the caret, leaving the caret where it is.
+//
+// It is the other half of backspace. Without it a caret at the start of a field
+// could not remove anything at all -- the only way to delete the first character
+// of a query was to step right and backspace -- and a field could only ever be
+// trimmed from the end.
+//
+// At the end of the field there is nothing under the caret and the field is left
+// alone, which is the mirror of deleteBefore's rule at the start: a forward
+// delete that ran off the end would have to destroy the last character instead,
+// and in the settings screen that means eating a path the user never typed.
+func deleteAfter(s string, at int) (string, int) {
+	rs := []rune(s)
+	at = clampCaret(s, at)
+	if at >= len(rs) {
+		return s, at
+	}
+	// The three-index slice gives append a destination that cannot overlap rs,
+	// so the copy cannot scribble over the rune it is about to read.
+	return string(append(rs[:at:at], rs[at+1:]...)), at
+}

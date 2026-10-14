@@ -421,7 +421,8 @@ func (m *Model) RenderAt(w, h int) string {
 		// one. It used to replace the body outright, so the decks vanished
 		// behind a box -- exactly what an overlay must not do.
 		base := splitLines(Render(w, h, m.snapshot(), m.st))
-		box, offset := views.OverlayRows(w, h, m.libOrEmpty(), m.st.Query, m.st.QueryCursor, m.st.TrackSel)
+		box, offset := views.OverlayRows(w, h, m.libOrEmpty(), m.st.Query,
+			m.st.QueryCursor, m.st.TrackSel, modeFooter(ModeOverlay))
 		base = compositeOverlay(base, box, offset)
 		body = strings.Join(base, "\n")
 	case ModeHelp:
@@ -483,16 +484,19 @@ func (m *Model) RenderAt(w, h int) string {
 		// It is drawn for every full-screen mode, not just the mix view.
 		// Gating it on ModeMix left the library, overlay, help and debug
 		// branches of modeFooter unreachable: dead text, documenting keys the
-		// screen never showed. The overlay and debug dump are the exceptions --
-		// the overlay is composited over the deck view and would overwrite a
-		// rendered row, and the debug screen is already as dense as it
-		// usefully gets.
+		// screen never showed.
 		out[h-1] = padRight(dimStyle.Render(truncate(modeFooter(m.st.Mode), w)), w)
 	}
 	return strings.Join(out, "\n")
 }
 
 // footerVisible reports whether a mode draws the key footer.
+//
+// Two do not. The overlay is composited over the deck view, so a footer row
+// would overwrite rendered rows rather than sit below them; it draws the same
+// modeFooter line inside its box instead, which is the only place on that
+// screen with room for it. The debug screen draws none: it is already as dense
+// as it usefully gets, and every key it answers to is a way back out.
 func footerVisible(m Mode) bool {
 	switch m {
 	case ModeOverlay, ModeDebug:

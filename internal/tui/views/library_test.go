@@ -81,8 +81,8 @@ func TestBelowThresholdKeyShowsUndetected(t *testing.T) {
 
 func TestOverlayFiltersAsYouType(t *testing.T) {
 	ix := testIndex()
-	all := RenderOverlay(120, 40, ix, "", 0, 0)
-	few := RenderOverlay(120, 40, ix, "ware", 5, 0)
+	all := RenderOverlay(120, 40, ix, "", 0, 0, "")
+	few := RenderOverlay(120, 40, ix, "ware", 5, 0, "")
 	if strings.Count(few, "Inner") != 0 {
 		t.Error("filter did not exclude")
 	}
@@ -104,7 +104,7 @@ func TestOverlayFiltersAsYouType(t *testing.T) {
 // The real assertion lives in TestOverlayKeepsTheDecksVisible, which renders a
 // model. This test covers the box on its own.
 func TestOverlayShowsDeckBehind(t *testing.T) {
-	out := RenderOverlay(120, 40, testIndex(), "", 0, 0)
+	out := RenderOverlay(120, 40, testIndex(), "", 0, 0, "")
 	if !strings.Contains(out, "LOAD TRACK") {
 		t.Error("overlay frame missing")
 	}
@@ -115,12 +115,74 @@ func TestOverlayShowsDeckBehind(t *testing.T) {
 	}
 }
 
+// TestOverlayDrawsItsKeyHintInsideTheBox is the overlay's key line.
+//
+// The overlay has the most to explain of any screen here -- five keys, four of
+// them meaning something else two screens away -- and it is the one screen that
+// cannot use the frame's footer row: the box is composited over the deck view,
+// so a footer would overwrite rendered rows rather than sit below them. Its own
+// bottom row is the only place the keys fit, so that is where they are drawn.
+func TestOverlayDrawsItsKeyHintInsideTheBox(t *testing.T) {
+	const hint = "type to filter   ⏎ load   esc cancel"
+	rows, offset := OverlayRows(80, 24, testIndex(), "", 0, 0, hint)
+	if len(rows) < 2 {
+		t.Fatalf("the box is %d rows", len(rows))
+	}
+	// The last row is the closing rule, so the hint is the row above it.
+	if got := rows[len(rows)-2]; !strings.Contains(got, hint) {
+		t.Errorf("the box's last content row does not carry the hint %q:\n%s", hint, rows[len(rows)-2])
+	}
+	if rows[len(rows)-1] == "" {
+		t.Error("the box has no closing rule")
+	}
+	// And it is inside the box, not above it: the hint row comes after the
+	// title, and the whole box starts at the offset the compositor was given.
+	if title := indexOfRow(rows, "LOAD TRACK"); title < 0 || title >= len(rows)-2 {
+		t.Errorf("the box is not where the compositor was told to put it (offset %d):\n%s",
+			offset, strings.Join(rows, "\n"))
+	}
+}
+
+// TestOverlayKeepsItsHintOnAShortTerminal. When the frame cannot hold everything,
+// the results go first: the hint is the part of this screen the user cannot
+// infer from it, and a box that showed four matches instead of eight, with no
+// keys at all, would be worse on both counts.
+//
+// Six rows is the floor asserted here, and it is not a technicality: the box is
+// two rules, a title, a query line, a rule, a status row and the hint. Below
+// that there is no box left to hold anything.
+func TestOverlayKeepsItsHintOnAShortTerminal(t *testing.T) {
+	ix := library.NewIndex()
+	for i := 0; i < 40; i++ {
+		ix.Add(library.Track{Path: "/m/" + itoa(i) + ".wav", Title: "Track " + itoa(i)})
+	}
+	for h := 6; h <= 40; h++ {
+		out := RenderOverlay(80, h, ix, "", 0, 0, "esc cancel")
+		if !strings.Contains(out, "esc cancel") {
+			t.Errorf("h=%d: the overlay dropped its key hint to make room:\n%s", h, out)
+		}
+		if n := len(strings.Split(strings.TrimRight(out, "\n"), "\n")); n > h {
+			t.Errorf("h=%d: the box is %d rows, past the frame", h, n)
+		}
+	}
+}
+
+// indexOfRow is the row a piece of text lands on, or -1.
+func indexOfRow(rows []string, want string) int {
+	for i, r := range rows {
+		if strings.Contains(r, want) {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestLibrarySurvivesEmptyIndex(t *testing.T) {
 	out := RenderLibrary(120, 40, library.NewIndex(), LibraryState{})
 	if out == "" {
 		t.Error("empty library rendered nothing")
 	}
-	_ = RenderOverlay(120, 40, library.NewIndex(), "zzz", 3, 0)
+	_ = RenderOverlay(120, 40, library.NewIndex(), "zzz", 3, 0, "")
 }
 
 func TestMatchTrackClampsSelection(t *testing.T) {
@@ -178,7 +240,7 @@ func TestLibraryNeverPanicsAcrossSizes(t *testing.T) {
 	for w := 1; w <= 170; w += 7 {
 		for h := 1; h <= 30; h += 7 {
 			_ = RenderLibrary(w, h, ix, LibraryState{})
-			_ = RenderOverlay(w, h, ix, "q", 1, 0)
+			_ = RenderOverlay(w, h, ix, "q", 1, 0, "")
 		}
 	}
 }
@@ -188,7 +250,7 @@ func TestLibraryNeverPanicsAcrossSizes(t *testing.T) {
 func TestOverlayClampsSelectionPastResults(t *testing.T) {
 	ix := testIndex()
 	// Only one result matches, but select index 5.
-	if out := RenderOverlay(120, 40, ix, "ware", 4, 5); out == "" {
+	if out := RenderOverlay(120, 40, ix, "ware", 4, 5, ""); out == "" {
 		t.Error("overlay rendered nothing for an out-of-range selection")
 	}
 }
