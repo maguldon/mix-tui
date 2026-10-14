@@ -69,3 +69,74 @@ func TestLoopBeatKeysDriveTheRealEngine(t *testing.T) {
 		}
 	}
 }
+
+// TestReleaseLoopKeepsTheArmedLength is the regression test for spec 6.2.2.
+//
+// ReleaseLoop zeroed the beat count, so after releasing a loop the deck had no
+// length at all: the panel showed nothing, and turning the encoder changed
+// nothing on screen until it happened to arm a loop the user was already using.
+// That is the "encoder with no readout feels broken" failure the section
+// forbids, and the README documents w/e/y/u as 2/4/8/16-beat loop keys, so
+// "nothing visible" meant "I cannot tell which key I pressed".
+func TestReleaseLoopKeepsTheArmedLength(t *testing.T) {
+	e := New(Config{SampleRate: dsp.SampleRate, DeckCount: 2})
+	e.Deck(0).LoadNow(NewTrackFromPCM(dsp.Sine(220, 4)), testGrid(128, 64), nil)
+	e.Deck(0).Play()
+	drain(e)
+
+	if err := e.Deck(0).SetLoopBeat(4); err != nil {
+		t.Fatalf("SetLoopBeat: %v", err)
+	}
+	drain(e)
+	if got := e.Snapshot().Decks[0].LoopBeatCount; got != 4 {
+		t.Fatalf("armed %g beats, want 4", got)
+	}
+
+	e.Deck(0).ReleaseLoop()
+	drain(e)
+
+	d := e.Snapshot().Decks[0]
+	if d.LoopActive {
+		t.Error("the loop is still active after a release")
+	}
+	if d.LoopBeatCount != 4 {
+		t.Errorf("releasing discarded the armed length: %g", d.LoopBeatCount)
+	}
+}
+
+// TestAFreshDeckHasNoArmedLength keeps the readout from claiming a length the
+// user never chose. Zero means "nothing selected", which is also what a free
+// loop set by hand is.
+func TestAFreshDeckHasNoArmedLength(t *testing.T) {
+	e := New(Config{SampleRate: dsp.SampleRate, DeckCount: 2})
+	e.Deck(0).LoadNow(NewTrackFromPCM(dsp.Sine(220, 4)), testGrid(128, 64), nil)
+	drain(e)
+	if got := e.Snapshot().Decks[0].LoopBeatCount; got != 0 {
+		t.Errorf("a freshly loaded deck reports %g beats", got)
+	}
+}
+
+// TestTheEncoderIsVisibleBetweenLoops covers the whole point: turning it must
+// change something on screen whether or not a loop is engaged.
+func TestTheEncoderIsVisibleBetweenLoops(t *testing.T) {
+	e := New(Config{SampleRate: dsp.SampleRate, DeckCount: 2})
+	e.Deck(0).LoadNow(NewTrackFromPCM(dsp.Sine(220, 4)), testGrid(128, 64), nil)
+	e.Deck(0).Play()
+	drain(e)
+	e.Deck(0).ReleaseLoop()
+	drain(e)
+
+	seen := map[float64]bool{}
+	for _, want := range []float64{2, 4, 8, 16} {
+		// SetLoopBeat arms a loop, so release between turns: this is the
+		// between-loops state a DJ is actually in most of the time.
+		e.Deck(0).SetLoopBeat(want)
+		drain(e)
+		e.Deck(0).ReleaseLoop()
+		drain(e)
+		seen[e.Snapshot().Decks[0].LoopBeatCount] = true
+	}
+	if len(seen) != 4 {
+		t.Errorf("the armed length took %d distinct values across w/e/y/u, want 4", len(seen))
+	}
+}

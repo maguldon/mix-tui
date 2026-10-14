@@ -145,3 +145,36 @@ func lastLines(s string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// TestTheLoopSizeStaysOnScreenBetweenLoops is spec 6.2.2: the beat-loop encoder's
+// position must always be visible.
+//
+// The readout was inside `if d.LoopActive`, and ReleaseLoop zeroed the armed
+// length, so in between loops the deck showed no number at all. The user could
+// turn the encoder and watch nothing happen -- the failure the section names.
+func TestTheLoopSizeStaysOnScreenBetweenLoops(t *testing.T) {
+	d := engine.DeckState{
+		Index: 0, Loaded: true, Duration: 6 * time.Minute,
+		HasBeatGrid: true, BPM: 128, Playing: true, LoopBeatCount: 8,
+	}
+
+	if got := strings.Join(rowTexts(renderDeckPanel(60, d, ViewState{Layout: LayoutD, Zoom: []bool{false}}, true, 20)), "\n"); !strings.Contains(got, "8") {
+		t.Errorf("with 8 beats armed and no loop engaged, the panel shows no loop size:\n%s", got)
+	}
+
+	d.LoopActive = true
+	active := strings.Join(rowTexts(renderDeckPanel(60, d, ViewState{Layout: LayoutD, Zoom: []bool{false}}, true, 20)), "\n")
+	if !strings.Contains(active, "LOOP 8") {
+		t.Errorf("an engaged loop does not read as engaged:\n%s", active)
+	}
+}
+
+// TestADeckWithNoArmedLengthClaimsNone keeps the readout from inventing a size
+// the user never chose.
+func TestADeckWithNoArmedLengthClaimsNone(t *testing.T) {
+	d := engine.DeckState{Index: 0, Loaded: true, Duration: 6 * time.Minute, Playing: true}
+	got := strings.Join(rowTexts(renderDeckPanel(60, d, ViewState{Layout: LayoutD, Zoom: []bool{false}}, true, 20)), "\n")
+	if strings.Contains(got, "BEATS") {
+		t.Errorf("a deck with no armed length shows one:\n%s", got)
+	}
+}

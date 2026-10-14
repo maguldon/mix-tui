@@ -295,10 +295,18 @@ func (d *Deck) RecallLoop(slot int) error {
 
 // ReleaseLoop stops looping, leaving the playhead where it is so playback
 // continues from the loop's end.
+//
+// The armed length survives. It used to be zeroed here, so after releasing a
+// loop the deck had no loop size at all and the panel showed nothing until the
+// encoder happened to arm another loop -- which is precisely the "encoder with
+// no readout feels broken" failure spec 6.2.2 forbids. Turning it would change
+// nothing on screen until it landed on a length the user was already using.
+//
+// A beatCount of zero still means "no length chosen", which is what a free
+// loop set by hand is, so the readout can tell the two apart.
 func (d *Deck) ReleaseLoop() {
 	d.loop.active = false
 	d.loop.rolled = false
-	d.loop.beatCount = 0
 }
 
 // PushRoll starts a loop-roll of n beats.

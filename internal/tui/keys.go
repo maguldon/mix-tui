@@ -59,11 +59,7 @@ func (m *Model) handleKey(k string) tea.Cmd {
 		// re-entering the library opened with the sort menu still covering the
 		// detail pane and the previous sort silently applied.
 		if m.st.Mode == ModeLibrary {
-			m.st.ShowSort = false
-			m.st.SortBy = library.SortTitle
-			m.st.SortDesc = false
-			m.st.SortSel = 0
-			m.st.LibPane = views.PaneTracks
+			m.resetBrowser()
 		}
 		m.st.Mode = ModeMix
 		return nil
@@ -463,6 +459,45 @@ func (m *Model) loadSelectedInto(deck int) {
 	m.st.Mode = ModeMix
 	m.st.TrackSel = 0
 	m.setQuery("")
+	m.resetBrowser()
+}
+
+// resetBrowser returns the library view to how it is first opened.
+//
+// Spec 6.5: sort state resets when the view is left. Escape did this and a load
+// did not, so a load left the sort applied and the sort menu possibly covering
+// the detail pane, and the next "/" reopened looking as though someone else had
+// left it that way.
+func (m *Model) resetBrowser() {
+	m.st.SortBy = library.SortTitle
+	m.st.SortDesc = false
+	m.st.Sorted = false
+	m.st.SortSel = 0
+	m.st.ShowSort = false
+	m.st.CrateSel = 0
+	m.st.TrackSel = 0
+	m.st.LibPane = views.PaneTracks
+}
+
+// stepZoomBars moves the zoom level one step, clamped at both ends.
+//
+// ZoomIn is coarser -- fewer bars, more time on screen. Both directions clamp
+// rather than wrap, so holding a knob at the end of its travel does not silently
+// snap to the other extreme.
+func (m *Model) stepZoomBars(coarser bool) {
+	i := zoomIndexOf(m.st.ZoomBars)
+	if coarser {
+		i++
+	} else {
+		i--
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(ZoomBarOptions) {
+		i = len(ZoomBarOptions) - 1
+	}
+	m.st.ZoomBars = ZoomBarOptions[i]
 }
 
 // selectedCrateName is the crate the list is currently narrowed to.
@@ -665,6 +700,15 @@ func (m *Model) applyAction(a engine.Action) {
 		return
 	case engine.ZoomToggle:
 		m.st.setDeckZoom(m.st.Focus)
+		m.retargetZoom()
+	case engine.ZoomIn, engine.ZoomOut:
+		// Spec 6.3 calls the zoom level "a live, MIDI-mappable control".
+		// ZoomIn and ZoomOut parsed from a mapping file, resolved, and were
+		// then discarded by both applyAction and Engine.Apply -- a knob that did
+		// nothing, with no error to say so. They are view state rather than
+		// engine state, so the engine cannot apply them; this is where they
+		// belong.
+		m.stepZoomBars(a.Kind == engine.ZoomIn)
 		m.retargetZoom()
 	case engine.ViewNext:
 		m.st.Layout = m.st.Layout.next()

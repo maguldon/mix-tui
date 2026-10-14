@@ -167,13 +167,27 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 	// Transport.
 	rows = append(rows, PanelRow{Kind: RowText, Text: transportRow(d, inner)})
 
+	// The loop size is shown whether or not a loop is armed (spec 6.2.2). The
+	// armed length outlives a release, so this is the encoder's position: a DJ
+	// turning it sees the number move whether or not a loop happens to be
+	// engaged. "LOOP 4" while engaged, "4 BEATS" while merely selected -- the
+	// distinction is whether the number is doing anything right now.
 	if d.LoopActive {
 		rows = append(rows, PanelRow{
 			Kind:  RowText,
 			Text:  TruncateTo(fmt.Sprintf("LOOP %g beats", d.LoopBeatCount), inner),
 			Style: &okStyle,
 		})
-	} else if d.Playing {
+	} else if d.LoopBeatCount > 0 {
+		// Armed but not looping: dimmed, because nothing is looping yet.
+		rows = append(rows, PanelRow{
+			Kind:  RowText,
+			Text:  TruncateTo(fmt.Sprintf("%g BEATS", d.LoopBeatCount), inner),
+			Style: &dimStyle,
+		})
+	}
+
+	if !d.LoopActive && d.Playing {
 		// The accent marks a playing deck. It used to show whenever no loop was
 		// active, which included every stopped deck -- so a row of arrows sat
 		// under an idle deck implying something was happening.

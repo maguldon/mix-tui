@@ -278,3 +278,45 @@ func TestSortMenuKeysDoNotLeakToTheTrackList(t *testing.T) {
 		t.Errorf("the track selection moved to %d while the sort menu was open", m.st.TrackSel)
 	}
 }
+
+// TestSortStateResetsOnLoad is the regression test for the audit finding behind
+// spec 6.5's "sort state resets when the view is left".
+//
+// It reset on escape and not on ENTER, so a load left the sort applied and the
+// sort menu possibly covering the detail pane -- and the next "/" reopened
+// looking as though someone had left it that way.
+func TestSortStateResetsOnLoad(t *testing.T) {
+	m, _ := libraryModel(t)
+	m.st.SortBy = library.SortBPM
+	m.st.SortDesc = true
+	m.st.Sorted = true
+	m.st.SortSel = 2
+	m.st.CrateSel = 3
+
+	// The sort menu is left closed: with it open, ENTER means "apply this
+	// sort" and never reaches the load path at all.
+	m.handleKey("enter")
+
+	if m.st.SortBy != library.SortTitle || m.st.SortDesc || m.st.ShowSort ||
+		m.st.SortSel != 0 || m.st.Sorted || m.st.CrateSel != 0 {
+		t.Errorf("a load left the browser's sort state behind: %+v", m.st)
+	}
+	if m.st.Mode != ModeMix {
+		t.Errorf("mode = %v, want the mix view", m.st.Mode)
+	}
+}
+
+// TestEscapeStillResetsSort keeps the path that already worked working.
+func TestEscapeStillResetsSort(t *testing.T) {
+	m, _ := libraryModel(t)
+	m.st.SortBy = library.SortBPM
+	m.st.SortDesc = true
+	m.st.Sorted = true
+	m.st.ShowSort = true
+
+	m.handleKey("esc")
+
+	if m.st.SortBy != library.SortTitle || m.st.SortDesc || m.st.ShowSort || m.st.Sorted {
+		t.Errorf("escape left the sort state behind: %+v", m.st)
+	}
+}

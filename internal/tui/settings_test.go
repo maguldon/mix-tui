@@ -404,3 +404,63 @@ func TestSettingsRendersHeadless(t *testing.T) {
 		}
 	}
 }
+
+// TestZoomInAndZoomOutAreConsumed covers spec 6.3: the zoom level is "a live,
+// MIDI-mappable control".
+//
+// ZoomIn and ZoomOut parsed from a mapping file, resolved through the keymap,
+// and were then dropped by both applyAction and Engine.Apply -- a knob that did
+// nothing, with no error. They are view state, so the engine cannot apply them.
+func TestZoomInAndZoomOutAreConsumed(t *testing.T) {
+	m, _ := testModel(t)
+	m.st.ZoomBars = 8
+
+	m.applyAction(engine.Action{Kind: engine.ZoomIn})
+	if m.st.ZoomBars != 16 {
+		t.Errorf("ZoomIn gave %d bars, want 16 (coarser)", m.st.ZoomBars)
+	}
+
+	m.applyAction(engine.Action{Kind: engine.ZoomOut})
+	if m.st.ZoomBars != 8 {
+		t.Errorf("ZoomOut gave %d bars, want 8 (finer)", m.st.ZoomBars)
+	}
+}
+
+// TestZoomLevelClampsAtBothEnds keeps a knob held at the end of its travel from
+// silently snapping to the other extreme.
+func TestZoomLevelClampsAtBothEnds(t *testing.T) {
+	m, _ := testModel(t)
+	m.st.ZoomBars = ZoomBarOptions[len(ZoomBarOptions)-1]
+
+	for i := 0; i < 3; i++ {
+		m.applyAction(engine.Action{Kind: engine.ZoomIn})
+	}
+	if got, want := m.st.ZoomBars, ZoomBarOptions[len(ZoomBarOptions)-1]; got != want {
+		t.Errorf("ZoomIn past the end gave %d bars, want %d", got, want)
+	}
+
+	m.st.ZoomBars = ZoomBarOptions[0]
+	for i := 0; i < 3; i++ {
+		m.applyAction(engine.Action{Kind: engine.ZoomOut})
+	}
+	if got := m.st.ZoomBars; got != ZoomBarOptions[0] {
+		t.Errorf("ZoomOut past the start gave %d bars, want %d", got, ZoomBarOptions[0])
+	}
+}
+
+// TestZoomStepsRetargetTheSharedWindow keeps the two decks on one scale. The bar
+// count sets the window length, so stepping it without recomputing would leave
+// both windows showing the old span.
+func TestZoomStepsRetargetTheSharedWindow(t *testing.T) {
+	m, f := testModel(t)
+	f.snap.Decks[0].BPM = 128
+	f.snap.Decks[0].HasBeatGrid = true
+	press(t, m, "z")
+	before := m.st.ZoomLength
+
+	m.applyAction(engine.Action{Kind: engine.ZoomIn})
+
+	if m.st.ZoomLength == before {
+		t.Errorf("stepping the zoom level did not change the shared window length (%v)", before)
+	}
+}
