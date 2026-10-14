@@ -160,3 +160,39 @@ func TestNoRateWarningWithoutAMismatch(t *testing.T) {
 		t.Errorf("a matching rate warns anyway:\n%s", out)
 	}
 }
+
+// TestHeldModifiersAreShown covers spec §5.3: "held on the engine ... and the TUI
+// displays it".
+//
+// midi.Handler.ActiveMods existed, was documented as being "for display", and had
+// zero callers. So a shift-modified hotcue delete was indistinguishable from an
+// unmodified one that did the wrong thing -- the mapping was resolving correctly
+// and the user had no way to see why.
+func TestHeldModifiersAreShown(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		MIDIMods: map[string]bool{"shift": true, "ctrl": false, "alt": true},
+	}))
+	if !strings.Contains(out, "mods held") {
+		t.Errorf("held modifiers are not shown:\n%s", out)
+	}
+	for _, want := range []string{"shift", "alt"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("held modifier %q is not listed:\n%s", want, out)
+		}
+	}
+	// A latch that is NOT held must not appear.
+	if strings.Contains(out, "ctrl") {
+		t.Errorf("an unheld modifier is listed as held:\n%s", out)
+	}
+}
+
+// TestNoModRowWhenNothingIsHeld: the row is shown only when something is held, so
+// a reader does not learn to skip past the place this information lives.
+func TestNoModRowWhenNothingIsHeld(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		MIDIMods: map[string]bool{"shift": false},
+	}))
+	if strings.Contains(out, "mods held") {
+		t.Errorf("nothing is held but the row is shown:\n%s", out)
+	}
+}

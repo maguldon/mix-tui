@@ -27,7 +27,9 @@ type compiled struct {
 	// wins; otherwise the action follows whatever deck is focused.
 	hasTarget bool
 	slot      int
-	repeat    bool
+	// repeat is nil when the binding does not mention it, meaning auto-repeat
+	// is allowed. See KeyBinding.Repeat.
+	repeat *bool
 	// strategy is how Value is produced: a literal, or a toggle that alternates.
 	toggle  bool
 	inc     bool
@@ -211,9 +213,13 @@ func (r *KeyResolver) Resolve(key string) (engine.Action, bool) {
 }
 
 // Repeats reports whether a binding should fire on auto-repeat while held.
+//
+// Unset means yes, so this is true for every binding that does not ask
+// otherwise. See KeyBinding.Repeat for why that default is not the other way
+// round.
 func (r *KeyResolver) Repeats(key string) bool {
 	c, ok := r.bindings[key]
-	return ok && c.repeat
+	return !ok || c.repeat == nil || *c.repeat
 }
 
 // keyDescriptions give the help view something to say about each key. Without

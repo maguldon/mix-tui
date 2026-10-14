@@ -63,7 +63,18 @@ type KeyBinding struct {
 	// Value is "toggle", "inc", "dec", or a literal number.
 	Value string `yaml:"value"`
 	// Repeat allows the binding to fire on auto-repeat while held.
-	Repeat bool `yaml:"repeat"`
+	//
+	// A pointer, so "not written" and "written as false" are different.
+	//
+	// It was a plain bool, whose zero value is false -- so honouring it would
+	// have meant suppressing auto-repeat on every binding in the tree, and
+	// holding a transport key would play once and stop. Unset therefore means
+	// repeat is allowed, which is what the application has always done, and
+	// only an explicit `repeat: false` turns it off.
+	//
+	// Repeats() existed and had no callers, so the option did nothing in either
+	// direction: a binding with `repeat: true` and one without behaved alike.
+	Repeat *bool `yaml:"repeat"`
 }
 
 // DeckTarget returns the pinned deck, or -1 when the binding names none and the

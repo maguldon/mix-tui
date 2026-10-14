@@ -69,6 +69,14 @@ Known gaps, so nothing here is a surprise:
   right speed. Whether PipeWire absorbs the difference or plays everything at the
   wrong pitch depends on its converter, and this process cannot observe which, so
   the warning states the disagreement rather than judging it.
+- **`keys.<key>.repeat: false` is a timing heuristic.** A terminal reports
+  auto-repeat as the identical byte sequence with no flag saying "this one is a
+  repeat", so the only way to honour the setting is to notice the same key
+  arriving again within 40ms. That sits between a terminal's ~30 repeats per
+  second and the ~10 per second of a fast deliberate tap, so it should not eat a
+  real press — but a user whose terminal repeats more slowly than 25/s will find
+  it unreliable. Repeat is **allowed** by default, so holding a transport key
+  keeps firing; only an explicit `repeat: false` turns it off.
 - **No controller has been validated against real hardware.** Nothing is
   installed into your config directory; the only mapping in the tree is
   `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests

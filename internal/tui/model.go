@@ -33,6 +33,10 @@ type Model struct {
 	eng  Engine
 	cfg  *config.Config
 	keys *config.KeyResolver
+	// lastKey and lastKeyAt back the auto-repeat guard. Only meaningful for
+	// bindings with `repeat: false`; see suppressAutoRepeat.
+	lastKey   string
+	lastKeyAt time.Time
 
 	// lib is the scanned library. It may be nil before the first scan, which
 	// every view must tolerate: the browser renders an empty library rather
@@ -290,7 +294,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//
 		// Tests could not catch it because they call Update with keyMsg
 		// directly, bypassing the transport the application actually uses.
-		cmd := m.handleKey(msg.String())
+		name := msg.String()
+		if m.suppressAutoRepeat(name) {
+			return m, nil
+		}
+		cmd := m.handleKey(name)
 		if m.quitting {
 			return m, tea.Quit
 		}
@@ -364,6 +372,10 @@ func (m *Model) refreshMIDICounts() {
 		return
 	}
 	m.stats.MIDIIgnored = m.midi.Counts()
+	// Spec §5.3: held modifiers are input-layer state that the TUI displays.
+	// ActiveMods existed, was documented "for display", and had no callers, so
+	// a shift-modified hotcue delete looked exactly like an unmodified one.
+	m.stats.MIDIMods = m.midi.ActiveMods()
 }
 
 // expireErr clears an error older than errTTL.
@@ -671,4 +683,43 @@ func (m *Model) persistCrates(crates []library.Crate) error {
 		return fmt.Errorf("crates cannot be saved in this build")
 	}
 	return m.crateSave(crates)
+}
+
+// repeatGuardWindow is how close together two identical keypresses must arrive
+// before the second is treated as terminal auto-repeat.
+//
+// A terminal reports auto-repeat as the identical byte sequence, with no flag
+// saying "this one is a repeat" -- bubbletea hands over the same KeyMsg either
+// way. So the only way to honour a binding's `repeat: false` is to notice that
+// the same key just arrived.
+//
+// The window is a trade. Terminal auto-repeat runs at roughly 25-30 presses per
+// second once its delay expires, while the fastest a person can deliberately tap
+// the same key is around 10 per second. 40ms sits between the two, so a
+// deliberate double-tap is never eaten and a held key still stops repeating.
+//
+// It is a heuristic and it is documented as one. A user whose terminal repeats
+// more slowly than 25/s would find `repeat: false` unreliable; there is no way
+// around that from inside a terminal.
+const repeatGuardWindow = 40 * time.Millisecond
+
+// suppressAutoRepeat drops a keypress that is almost certainly the terminal
+// repeating the previous one, for bindings that asked for `repeat: false`.
+//
+// Bindings that do not ask are unaffected, which is why repeat is allowed by
+// default: a DJ holding a transport key expects it to keep firing, and that is
+// the behaviour this application has always had.
+func (m *Model) suppressAutoRepeat(name string) bool {
+	if m.keys == nil || m.keys.Repeats(name) {
+		m.lastKey, m.lastKeyAt = "", time.Time{}
+		return false
+	}
+	// A non-repeatable key still fires once. Only an immediate successor is
+	// swallowed, so a deliberate second press is never lost outright.
+	if name == m.lastKey && time.Since(m.lastKeyAt) < repeatGuardWindow {
+		m.lastKeyAt = time.Now()
+		return true
+	}
+	m.lastKey, m.lastKeyAt = name, time.Now()
+	return false
 }

@@ -21,6 +21,11 @@ type DebugStats struct {
 	Underruns uint64
 	// MIDIIgnored counts ignored messages per category. A nil map is fine.
 	MIDIIgnored map[string]uint64
+	// MIDIMods is the set of modifier latches currently held. Spec §5.3 says
+	// the TUI displays them, and without it a shift-modified action is
+	// indistinguishable from an unmodified one that simply did the wrong thing.
+	// A nil or empty map means nothing is held.
+	MIDIMods map[string]bool
 	// BlocksRendered and RenderWallMax describe the render goroutine's health.
 	// RenderWallMax must stay far below one block period (~11.6ms at 44.1kHz);
 	// if it approaches that, the renderer is at risk of underrunning.
@@ -110,6 +115,7 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	lines = append(lines, "")
 	lines = append(lines, section("MIDI (ignored)", w)...)
 	lines = append(lines, midiCounts(stats.MIDIIgnored, w)...)
+	lines = append(lines, heldMods(stats.MIDIMods, w)...)
 
 	// Decks and analysis.
 	lines = append(lines, "")
@@ -165,4 +171,24 @@ func midiCounts(m map[string]uint64, w int) []string {
 		out = append(out, pad(fmt.Sprintf("  %-16s %d", n, v), w))
 	}
 	return out
+}
+
+// heldMods renders the modifier latches currently held.
+//
+// Shown only when something is held, because an empty row on every screen in
+// normal use teaches a reader to skip past the place where this information
+// lives. When a modifier IS held and the resulting action is not the one the
+// user expected, this is the line that explains it.
+func heldMods(mods map[string]bool, w int) []string {
+	held := make([]string, 0, len(mods))
+	for name, on := range mods {
+		if on {
+			held = append(held, name)
+		}
+	}
+	if len(held) == 0 {
+		return nil
+	}
+	sort.Strings(held)
+	return kv("mods held", strings.Join(held, " "), w)
 }

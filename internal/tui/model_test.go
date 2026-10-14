@@ -683,3 +683,59 @@ func TestRealCtrlCQuits(t *testing.T) {
 // slicesEqual compares the per-deck zoom flags, which ViewState can no longer be
 // compared on directly now that Zoom is a slice.
 func slicesEqual(a, b []bool) bool { return slices.Equal(a, b) }
+
+// TestRepeatFalseSuppressesAutoRepeat is the config option that did nothing in
+// either direction.
+//
+// KeyBinding.Repeat was a plain bool whose zero value is false, and Repeats() --
+// the only reader -- had no callers, so `repeat: true` and no `repeat` at all
+// behaved identically. Honouring the option needs the default to mean "repeat
+// allowed", otherwise holding a transport key would play once and stop, which is
+// the behaviour the application has always had.
+func TestRepeatFalseSuppressesAutoRepeat(t *testing.T) {
+	no := false
+	cfg := &config.Config{}
+	cfg.Keys = map[string]config.KeyBinding{
+		"x": {Action: "DebugToggle", Repeat: &no},
+	}
+	m, _ := testModel(t)
+	m.cfg = cfg
+	keys, err := config.NewKeyResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewKeyResolver: %v", err)
+	}
+	m.keys = keys
+
+	press(t, m, "x")
+	if m.st.Mode != ModeDebug {
+		t.Fatalf("the first press did not fire: mode %v", m.st.Mode)
+	}
+
+	// The terminal's repeat of the same key, immediately after.
+	press(t, m, "x")
+	if m.st.Mode != ModeDebug {
+		t.Errorf("an immediate repeat fired despite repeat: false")
+	}
+
+	// And a deliberate press later is not swallowed: the guard is a window, not
+	// a latch.
+	m.lastKeyAt = time.Time{}
+	press(t, m, "x")
+	if m.st.Mode == ModeDebug {
+		t.Errorf("a deliberate later press was swallowed")
+	}
+}
+
+// TestRepeatDefaultsToAllowed: every existing binding must keep firing while
+// held, or holding a transport key would play once and stop.
+func TestRepeatDefaultsToAllowed(t *testing.T) {
+	r, err := config.NewKeyResolver(&config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"space", "v", "z", "w"} {
+		if !r.Repeats(k) {
+			t.Errorf("binding %q does not repeat by default; holding it would fire once", k)
+		}
+	}
+}
