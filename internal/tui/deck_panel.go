@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,11 +189,17 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 	}
 
 	if !d.LoopActive && d.Playing {
-		// The accent marks a playing deck. It used to show whenever no loop was
-		// active, which included every stopped deck -- so a row of arrows sat
-		// under an idle deck implying something was happening.
-		if accent := firstLine(RenderArt(inner, 1, "accent")); accent != "" {
-			rows = append(rows, PanelRow{Kind: RowText, Text: accent, Style: &okStyle})
+		// A level-driven accent marks a playing deck that is making sound. It
+		// used to show whenever no loop was active, which included every stopped
+		// deck -- so a row of arrows sat under an idle deck implying something
+		// was happening -- and the art itself never changed, so it said nothing
+		// about the level even while playing.
+		if accent := firstLine(RenderArt(inner, 1, accentName(d.Level))); accent != "" {
+			rows = append(rows, PanelRow{
+				Kind:  RowText,
+				Text:  accent,
+				Style: accentStyle(d.Level),
+			})
 		}
 	}
 	// The dBEAT readout is the headline affordance of the zoom view and the way
@@ -216,6 +223,35 @@ func renderDeckPanel(w int, d engine.DeckState, st ViewState, focused bool, cont
 		title += "*"
 	}
 	return Panel{Title: title, Width: w, Rows: rows}
+}
+
+// accentName picks the accent art for a linear RMS level.
+//
+// The steps are deliberately coarse. The spec calls for a "deliberately
+// restrained" accent, and a meter that tracks every block's RMS is a flickering
+// distraction in peripheral vision while mixing -- which is what it is for.
+// Four steps is enough to see a track drop out or a fader open without being
+// something to watch.
+func accentName(level float64) string {
+	switch {
+	case level <= 0.001:
+		return "accentQuiet"
+	case level < 0.05:
+		return "accentLow"
+	case level < 0.2:
+		return "accentMid"
+	default:
+		return "accentHigh"
+	}
+}
+
+// accentStyle dims the accent as the level drops, so a quiet deck's accent
+// recedes rather than competing with a loud one's.
+func accentStyle(level float64) *lipgloss.Style {
+	if level > 0.2 {
+		return &okStyle
+	}
+	return &dimStyle
 }
 
 // firstLine returns the first line, or "" when there are none. RenderArt
@@ -381,6 +417,12 @@ func metaRow(d engine.DeckState, w int) string {
 	bpm := "--"
 	if d.HasBeatGrid && d.BPM > 0 {
 		bpm = fmt.Sprintf("%.2f", d.BPM)
+		// The meter only earns its place when it is not the 4/4 everyone
+		// assumes. Showing "4/4" on every track would be noise; showing "7/8"
+		// tells the user why the bar lines fall where they do.
+		if d.Meter > 0 && d.Meter != 4 {
+			bpm += " " + strconv.Itoa(d.Meter) + "/8"
+		}
 	}
 	key := "--"
 	// A displayed key is believed, so a low-confidence one is not shown at

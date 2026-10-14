@@ -178,3 +178,56 @@ func TestADeckWithNoArmedLengthClaimsNone(t *testing.T) {
 		t.Errorf("a deck with no armed length shows one:\n%s", got)
 	}
 }
+
+// TestThePlayingAccentTracksLevel is spec 6.4: "small VU-style art accents in the
+// deck footer".
+//
+// "VU-style" was a fixed ">>>" drawn whenever no loop was active. It moved only
+// on play and stop, so it reported *that* a deck was playing and nothing about
+// what it was doing -- and a stopped deck got one too, since the condition was
+// the absence of a loop rather than the presence of playback.
+func TestThePlayingAccentTracksLevel(t *testing.T) {
+	d := engine.DeckState{
+		Index: 0, Loaded: true, Duration: 6 * time.Minute, Playing: true,
+	}
+	seen := map[string]bool{}
+	for _, lvl := range []float64{0, 0.02, 0.1, 0.5} {
+		d.Level = lvl
+		rows := rowTexts(renderDeckPanel(60, d, ViewState{Layout: LayoutD, Zoom: []bool{false}}, true, 20))
+		seen[strings.Join(rows, "\n")] = true
+	}
+	if len(seen) != 4 {
+		t.Errorf("four levels produced %d distinct decks, want 4: the accent does not track level", len(seen))
+	}
+}
+
+// TestAStoppedDeckHasNoAccent keeps the accent meaning "this deck is making
+// sound". It used to appear on every deck with no loop engaged, including idle
+// ones, implying something was happening.
+func TestAStoppedDeckHasNoAccent(t *testing.T) {
+	d := engine.DeckState{Index: 0, Loaded: true, Duration: 6 * time.Minute}
+	got := strings.Join(rowTexts(renderDeckPanel(60, d, ViewState{Layout: LayoutD, Zoom: []bool{false}}, true, 20)), "\n")
+	if strings.Contains(got, ">>") {
+		t.Errorf("a stopped deck shows a playing accent:\n%s", got)
+	}
+}
+
+// TestANonFourMeterIsSaidOut loud is the half of meter detection the user sees.
+// Correct bar lines are no use if the grid looks arbitrary; naming the meter
+// explains them.
+func TestANonFourMeterIsSaidOutLoud(t *testing.T) {
+	d := engine.DeckState{
+		Index: 0, Loaded: true, Duration: 6 * time.Minute,
+		HasBeatGrid: true, BPM: 128, Meter: 7,
+	}
+	if got := metaRow(d, 60); !strings.Contains(got, "7/8") {
+		t.Errorf("a 7/8 track does not say so: %q", got)
+	}
+
+	// 4/4 is assumed and shown as plain BPM: naming it on every track would be
+	// noise.
+	d.Meter = 4
+	if got := metaRow(d, 60); strings.Contains(got, "4/4") {
+		t.Errorf("4/4 is spelled out where plain BPM is the norm: %q", got)
+	}
+}

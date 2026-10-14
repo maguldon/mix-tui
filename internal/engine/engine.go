@@ -461,6 +461,7 @@ func (e *Engine) Snapshot() Snapshot {
 		if g := d.BeatGrid(); g != nil {
 			st.BeatTimes = g.Beats
 			st.DownbeatTimes = downbeatTimes(g)
+		st.Meter = g.Meter
 		}
 		for slot := 1; slot <= numHotcues; slot++ {
 			if at, ok := d.Hotcue(slot); ok {

@@ -23,9 +23,26 @@ var art = map[string][]string{
 		"  `--------'  ",
 		"   press L    ",
 	},
-	// A short accent shown under a playing deck.
-	"accent": {
-		">>>",
+	// Accents shown under a playing deck, one per level step. Spec 6.4 calls
+	// these "VU-style" accents, and the original was a fixed ">>>" that moved
+	// only when the deck started and stopped -- so it marked *that* a deck was
+	// playing and nothing about what it was doing.
+	//
+	// Four fixed constants rather than one built to length at runtime, because
+	// art is embedded data (global constraint): a meter assembled by string
+	// operations is scaled art, and scaling ASCII art by string operations
+	// breaks it. The variant is chosen by level; the art is never rebuilt.
+	"accentQuiet": {
+		" . ",
+	},
+	"accentLow": {
+		" >> ",
+	},
+	"accentMid": {
+		" >>>> ",
+	},
+	"accentHigh": {
+		" >>>>> ",
 	},
 	"splash": {
 		"  __  __ _   _ ___   ___ ___ __  __ ",
@@ -39,10 +56,14 @@ var art = map[string][]string{
 // picks the widest that fits rather than scaling, since scaling ASCII art by
 // string operations breaks it (global constraint).
 var artOrder = map[string][]string{
-	"empty":   {"empty"},
-	"accent":  {"accent"},
-	"splash":  {"splash"},
-	"unknown": {"empty"},
+	"empty":       {"empty"},
+	"accent":      {"accent"},
+	"accentQuiet": {"accentQuiet"},
+	"accentLow":   {"accentLow"},
+	"accentMid":   {"accentMid"},
+	"accentHigh":  {"accentHigh"},
+	"splash":      {"splash"},
+	"unknown":     {"empty"},
 }
 
 // RenderArt returns the named art fitted to w columns and h rows, padded with

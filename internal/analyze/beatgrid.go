@@ -26,6 +26,10 @@ type BeatGrid struct {
 	Beats []time.Duration
 	// Downbeats are indices into Beats, marking the start of each bar.
 	Downbeats []int
+	// Meter is the detected beats per bar. It is 4 unless the onset envelope
+	// says otherwise, and it is what Downbeats is spaced by -- so 3/4 and 7/8
+	// material gets its bars marked every 3 or 7 beats rather than every 4.
+	Meter int
 	// Phases carries the beat period in seconds, retained so a later task can
 	// reason about the grid without recomputing it.
 	Phases []float64
@@ -73,7 +77,8 @@ func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 	onset, rawPeak := onsetEnvelope(spec)
 	bpm, tempoConf := estimateTempo(onset, spec)
 	beats := trackBeats(onset, bpm, spec)
-	downbeats := markDownbeats(beats)
+	meter := detectMeter(beats, onset, spec)
+	downbeats := markDownbeats(beats, meter)
 
 	// Coverage: beats actually placed against beats the analysed span and the
 	// tempo imply. Regularity alone is not enough -- a short irregular chain
@@ -90,6 +95,7 @@ func BeatGridFromSpec(spec *Spectrogram) (*BeatGrid, error) {
 		Confidence: confidence,
 		Beats:      beats,
 		Downbeats:  downbeats,
+		Meter:      meter,
 		Phases:     []float64{60.0 / bpm},
 	}, nil
 }
@@ -477,22 +483,149 @@ func onsetCandidates(env []float64) []int {
 	return cands
 }
 
-// markDownbeats marks every fourth beat as a bar start.
-//
-// A four-beat grid is assumed because it holds across essentially all
-// electronic music the app targets. On acoustic material with 3/4 or 7/8
-// time this will be wrong; the fix is bar-length detection from the onset
-// envelope, which is deferred until a track in irregular time actually needs
-// it. Reporting a plausible grid beats reporting none.
-func markDownbeats(beats []time.Duration) []int {
-	if len(beats) < 4 {
+// markDownbeats marks every meter'th beat as a bar start.
+func markDownbeats(beats []time.Duration, meter int) []int {
+	if meter < 1 {
+		meter = 4
+	}
+	if len(beats) < meter {
 		return nil
 	}
 	var down []int
-	for i := 0; i < len(beats); i += 4 {
+	for i := 0; i < len(beats); i += meter {
 		down = append(down, i)
 	}
 	return down
+}
+
+// detectMeter infers beats per bar from how strongly beats fall on a repeating
+// cycle.
+//
+// In any meter, the first beat of each bar is accented -- a kick and snare
+// together, a chord change, a breath -- while the others are not. Sampling the
+// onset envelope at each beat therefore gives a sequence whose strength
+// repeats with period equal to the bar length. Finding that period is the whole
+// job: for each candidate bar length, score the best-aligned phase by how much
+// stronger its accented beats are than the rest, and take the winner.
+//
+// Four is the default and the prior, because it holds across essentially all
+// electronic music the app targets and a wrong bar line is worse than a
+// right-looking one. A competing meter has to beat it by a clear margin to win,
+// and it has to do so on several bars rather than one lucky accent, or the
+// downbeat markers would flicker between metres from track to track.
+func detectMeter(beats []time.Duration, onset []float64, spec *Spectrogram) int {
+	const (
+		minMeter = 2
+		maxMeter = 8
+		// A candidate must have enough beats to show the pattern repeating.
+		// Two bars is the floor: one bar cannot distinguish 7 from 14.
+		minBars = 2
+		// meterMargin is how much better a non-4 candidate must score, as a
+		// fraction of the 4/4 score, before it is preferred over the prior.
+		meterMargin = 0.25
+	)
+
+	if len(beats) < minMeter*minBars || len(onset) == 0 {
+		return 4
+	}
+	strength := make([]float64, len(beats))
+	for i, b := range beats {
+		strength[i] = onsetAt(onset, spec, b)
+	}
+
+	four := scoreMeter(strength, 4)
+	// With no accent pattern there is nothing to compare against, and every
+	// candidate would score near zero. Taking a margin over a zero baseline
+	// would let any rounding noise win and invent a meter, so the prior stands.
+	if four <= 0 {
+		return 4
+	}
+	best, bestScore := 4, four
+	for n := minMeter; n <= maxMeter; n++ {
+		if n == 4 || len(beats) < n*minBars {
+			continue
+		}
+		// Score against the same yardstick as 4/4 so the margin is meaningful.
+		if s := scoreMeter(strength, n); s > bestScore*(1+meterMargin) {
+			best, bestScore = n, s
+		}
+	}
+	return best
+}
+
+// scoreMeter returns how strongly beats separate into accented and unaccented
+// under a bar length of n, normalised by the mean onset strength so that a
+// quiet passage and a loud one are comparable.
+//
+// The score is the mean accent minus the mean non-accent, over the best phase
+// alignment. Positive means the accent pattern is real; near zero means beats
+// are evenly strong and this bar length explains nothing.
+func scoreMeter(strength []float64, n int) float64 {
+	if n < 1 || len(strength) < n {
+		return 0
+	}
+	total := 0.0
+	for _, s := range strength {
+		total += s
+	}
+	if total <= 0 {
+		return 0
+	}
+	mean := total / float64(len(strength))
+
+	// Try every phase; the first beat is not always the downbeat.
+	best := math.Inf(-1)
+	for phase := 0; phase < n; phase++ {
+		var accented, plain, nAcc, nPlain float64
+		for i, s := range strength {
+			if i%n == phase {
+				accented += s
+				nAcc++
+			} else {
+				plain += s
+				nPlain++
+			}
+		}
+		if nAcc == 0 || nPlain == 0 {
+			continue
+		}
+		if d := accented/nAcc - plain/nPlain; d > best {
+			best = d
+		}
+	}
+	return best / mean
+}
+
+// onsetAt samples the onset envelope at a beat position.
+//
+// The envelope is per-frame and beats are times, so this converts and clamps.
+// A window of a few frames either side is averaged rather than a single frame
+// read: the flux peaks roughly half a window before the transient it belongs
+// to, and beat positions carry their own small error, so a point sample lands
+// on a slope and reads lower than the onset actually was.
+func onsetAt(onset []float64, spec *Spectrogram, at time.Duration) float64 {
+	if len(onset) == 0 {
+		return 0
+	}
+	frame := int(float64(at) / float64(time.Second) * float64(spec.SampleRate) / float64(spec.HopSize))
+	const half = 2
+	// Always divide by the full window width, skipping frames outside the
+	// envelope rather than averaging only the ones that happen to fit.
+	//
+	// Averaging just the available frames looks equivalent and is not: at the
+	// start of a track the window is half clipped, so beat 0 divides by 3 where
+	// every later beat divides by 5 and reads ~1.7x louder. That is a louder
+	// beat 0, which is a phantom accent at the start of the track, and the meter
+	// detector reads it as one -- it then picked a bar length whose accent
+	// happened to land on beat 0 over material with no accents at all.
+	sum := 0.0
+	for f := frame - half; f <= frame+half; f++ {
+		if f < 0 || f >= len(onset) {
+			continue
+		}
+		sum += onset[f]
+	}
+	return sum / float64(2*half+1)
 }
 
 // duration is the span of audio the spectrogram covers. Frame f covers

@@ -106,6 +106,11 @@ type DeckState struct {
 	// indistinguishable from ordinary beats even on the zoomed waveform -- and
 	// on the unzoomed one they were not drawn at all.
 	DownbeatTimes []time.Duration
+	// Meter is the detected beats per bar, 0 when unknown. Carried alongside
+	// DownbeatTimes so the view can say what the bar lines are rather than only
+	// drawing them -- "7/8" next to a grid is the difference between a bar
+	// pattern and a rendering quirk.
+	Meter int
 	// BeatTimes and CueTimes position the zoom view's markers. BeatTimes is
 	// empty without a beatgrid.
 	BeatTimes []time.Duration

@@ -63,8 +63,13 @@ Known gaps, so nothing here is a surprise:
   `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests
   whose CC numbers are guesses. Write your own and check it with
   `midimapdump`.
-- **Downbeats assume 4/4.** A 3/4 or 7/8 track gets a correct tempo and beat
-  phase but the wrong bar lines.
+- **Meter detection is acoustic and can be wrong.** 3/4 through 7/8 is detected
+  from how strongly onsets fall on a repeating cycle, with 4/4 as the prior, and
+  a non-4/4 reading has to beat that prior by a clear margin across several bars.
+  So 4/4 is never miscalled, but a piece that accents the half-bar in 4/4 may
+  read as 2/4, and material with no audible accents stays 4/4. The detected
+  meter is shown next to the BPM when it is not 4/4, so a wrong call is visible
+  rather than silent.
 
 ## Requirements
 
