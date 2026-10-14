@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
 	"github.com/maguldon/mix-tui/internal/config"
@@ -75,14 +74,14 @@ func TestEveryDefaultKeyChangesTheScreen(t *testing.T) {
 		m.st.Mode = ModeMix
 		before := m.RenderAt(120, 40)
 
-		switch name {
-		case "space":
-			m.Update(tea.KeyMsg{Type: tea.KeySpace})
-		case "ctrl+c":
-			m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-		default:
-			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)})
-		}
+		// press sends the tea.KeyMsg a terminal produces for the key, which is
+		// not the same as a rune message spelled with the key's name: bubblettea
+		// reports KeyRunes by writing the runes out, so a fake "escape" message
+		// built from runes would report "escape" and pass for the real thing
+		// while proving nothing about it. That is the same illusion that let
+		// "shift+enter" ship.
+		press(t, m, name)
+
 		for i := 0; i < 4; i++ {
 			eng.RenderInto(audio.NewRing(1<<16), audio.NewRing(1<<16))
 		}
