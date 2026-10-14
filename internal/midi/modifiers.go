@@ -286,11 +286,24 @@ func (h *Handler) applyModifier(name string, src ModSource, m Message) {
 				h.mods = h.mods.Without(name)
 			}
 		} else {
-			if m.Value == src.Pressed {
-				h.mods = h.mods.With(name)
-			} else {
+			// Both directions are named. It used to test only against Pressed,
+			// which silently ignored `released:` -- a parsed, validated,
+			// documented field with no reader.
+			//
+			// The failure is worse than the field being useless: a CC whose rest
+			// value is not the same as its pressed value (a toggle, a latching
+			// button, anything sending 1 on press and 127 on release) matched
+			// neither branch correctly and could leave the modifier ENGAGED for
+			// the rest of the session. Every shift-modified action then behaved
+			// as if shift were held, with no way to clear it and no error.
+			if m.Value == src.Released {
 				h.mods = h.mods.Without(name)
+			} else if m.Value == src.Pressed {
+				h.mods = h.mods.With(name)
 			}
+			// A value that is neither is a control moving between the two
+			// thresholds -- a pot, or a button mid-travel. Hold whatever state
+			// the modifier is already in rather than guessing.
 		}
 	}
 }

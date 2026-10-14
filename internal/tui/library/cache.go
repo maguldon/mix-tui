@@ -21,11 +21,27 @@ type Analysis struct {
 	// inside there is no way to enumerate the cache and map it back to tracks.
 	// Entries written before this field existed simply have none and are skipped
 	// by All, which costs one re-analysis rather than a migration.
-	Path       string          `yaml:"path,omitempty"`
-	BPM        float64         `yaml:"bpm"`
-	HasGrid    bool            `yaml:"has_grid"`
-	Beats      []time.Duration `yaml:"beats,omitempty"`
-	KeyCamelot string          `yaml:"key_camelot,omitempty"`
+	Path    string          `yaml:"path,omitempty"`
+	BPM     float64         `yaml:"bpm"`
+	HasGrid bool            `yaml:"has_grid"`
+	Beats   []time.Duration `yaml:"beats,omitempty"`
+	// Downbeats and Meter are the rest of the grid. They were dropped from the
+	// cache, so a track analysed this run had bar lines in its waveform and a
+	// time signature next to its BPM, and every load after -- from cache --
+	// had neither. The waveform visibly changed shape between a track's first
+	// load and its second.
+	Downbeats []int `yaml:"downbeats,omitempty"`
+	Meter     int   `yaml:"meter,omitempty"`
+	// GridConfidence is the analyser's own verdict on the grid. It was never
+	// stored, and beatGridFrom invented 1.0, so a grid the analyser distrusted
+	// came back fully trusted from cache and enabled beat features it had
+	// disabled.
+	//
+	// Older cache entries have none and are treated as 1.0, which is what
+	// happened to everything before this field existed: those entries predate
+	// the distinction and there is no way to recover the real value.
+	GridConfidence float64 `yaml:"grid_confidence,omitempty"`
+	KeyCamelot     string  `yaml:"key_camelot,omitempty"`
 	// KeyName is the musical name ("C minor"). Spec 6.5 wants the Camelot
 	// code in the track list and the musical name in the detail pane, so both
 	// are stored rather than deriving one from the other.

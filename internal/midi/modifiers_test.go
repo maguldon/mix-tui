@@ -205,3 +205,77 @@ controls:
 		t.Errorf("after swap got %v, want DeckPlay", last.Kind)
 	}
 }
+
+// TestReleasedIsHonoured covers a field that parsed, validated, documented and
+// did nothing.
+//
+// applyModifier tested only against Pressed, so `released:` had no reader. A CC
+// whose rest value is not its pressed value -- a toggle, a latching button, or
+// anything sending 1 on press and 127 on release -- could never disengage, and
+// the modifier stayed ENGAGED for the rest of the session: every shift-modified
+// action behaved as if shift were held, with no way to clear it and no error.
+func TestReleasedIsHonoured(t *testing.T) {
+	h := NewHandler(tableFrom(t, `
+device: "T"
+modifiers:
+  shift:
+    kind: cc
+    chan: 1
+    num: 49
+    pressed: 1
+    released: 127
+    mode: momentary
+controls:
+  - midi: {kind: cc, chan: 1, num: 40}
+    mods: [shift]
+    action: {kind: DeckHotcueDelete, target: 0}
+    slot: 1
+`), func(a engine.Action) { last = a })
+
+	h.Handle(Message{Kind: KindCC, Channel: 1, Num: 49, Value: 1})
+	if !h.ActiveMods()["shift"] {
+		t.Fatal("value 1 did not engage the modifier, though 127 is its released value")
+	}
+
+	h.Handle(Message{Kind: KindCC, Channel: 1, Num: 49, Value: 127})
+	if h.ActiveMods()["shift"] {
+		t.Error("the modifier is still engaged after its released value: `released:` " +
+			"was ignored, so it could never disengage")
+	}
+}
+
+// A control travelling between the two thresholds -- a pot, or a button
+// mid-travel -- holds whatever state it is already in rather than guessing.
+func TestAValueBetweenThresholdsHoldsTheState(t *testing.T) {
+	h := NewHandler(tableFrom(t, `
+device: "T"
+modifiers:
+  shift:
+    kind: cc
+    chan: 1
+    num: 49
+    pressed: 64
+    released: 0
+    mode: momentary
+controls:
+  - midi: {kind: cc, chan: 1, num: 40}
+    mods: [shift]
+    action: {kind: DeckHotcueDelete, target: 0}
+    slot: 1
+`), func(a engine.Action) { last = a })
+
+	h.Handle(Message{Kind: KindCC, Channel: 1, Num: 49, Value: 64})
+	if !h.ActiveMods()["shift"] {
+		t.Fatal("the pressed value did not engage the modifier")
+	}
+
+	h.Handle(Message{Kind: KindCC, Channel: 1, Num: 49, Value: 32}) // neither
+	if !h.ActiveMods()["shift"] {
+		t.Error("a value between the two thresholds disengaged the modifier")
+	}
+
+	h.Handle(Message{Kind: KindCC, Channel: 1, Num: 49, Value: 0})
+	if h.ActiveMods()["shift"] {
+		t.Error("the released value did not disengage the modifier")
+	}
+}

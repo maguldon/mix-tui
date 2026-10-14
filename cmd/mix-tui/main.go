@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/maguldon/mix-tui/internal/pipewire"
 	"github.com/maguldon/mix-tui/internal/tui"
 	"github.com/maguldon/mix-tui/internal/tui/library"
+	"github.com/maguldon/mix-tui/internal/tui/views"
 )
 
 // scanTimeout bounds a library scan. It is generous because scanning only
@@ -312,8 +314,19 @@ func run(args appArgs) error {
 	if handler := model.MIDIHandlerIfAny(); handler != nil {
 		dir := filepath.Join(configDir(), "mappings")
 		if _, err := os.ReadDir(dir); err == nil {
+			// Reload failures go to the interface, not only to the log.
+			//
+			// They used to go to stderr, which during a session is the middle of
+			// a rendered alt-screen frame -- the same reason the diagnostic log
+			// exists. So a user who broke their mapping mid-set saw a corrupted
+			// frame for an instant, and nothing else: the log had the detail and
+			// the interface did not. Their controller had simply stopped
+			// responding, with no indication of why.
+			//
+			// Model.ShowError existed for exactly this and had no callers.
 			w := midi.NewWatcher(dir, handler, func(f string, a ...any) {
-				fmt.Fprintf(os.Stderr, "mix-tui: "+f+"\n", a...)
+				model.ShowError(strings.TrimSuffix(f, "\n") + ": " + fmt.Sprint(a...))
+				slogLog.Warn("mapping reload failed", "msg", fmt.Sprintf(f, a...))
 			})
 			// One scan, not two. The second ReloadOnce always saw nothing new,
 			// so "loaded N mapping(s)" could never print -- a user with a
@@ -345,7 +358,17 @@ func run(args appArgs) error {
 		defer session.Close()
 		go session.retry(ctx)
 
-		model.SetStatsFunc(session.Stats)
+		// Fold the analysis pipeline into the stats the debug screen already
+		// reads. The overlay has always had a "scan:" row and the analyzer has
+		// always had a pipeline state; neither was connected to the other, so
+		// both were dead and a slow analysis pass looked identical to a wedged
+		// one.
+		sessionStats := session.Stats
+		model.SetStatsFunc(func() views.DebugStats {
+			st := sessionStats()
+			st.AnalysisState = analyzer.State()
+			return st
+		})
 		model.SetAudioStatus(func() (bool, string) { return session.Active(), session.Reason() })
 	}
 

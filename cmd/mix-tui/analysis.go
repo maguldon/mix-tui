@@ -20,10 +20,28 @@ func beatGridFrom(a library.Analysis, track *audio.Track) *analyze.BeatGrid {
 	if !a.HasGrid || a.BPM <= 0 {
 		return nil
 	}
+	// The whole grid, not just its tempo. Downbeats and the meter were dropped
+	// on the way into the cache, so a track analysed this run drew bar lines and
+	// a time signature and every load after drew neither -- the waveform changed
+	// shape between a track's first load and its second.
+	conf := a.GridConfidence
+	if conf == 0 {
+		// An entry written before confidence was cached. It was trusted
+		// unconditionally then and there is no way to recover what the analyser
+		// actually thought, so keep the old behaviour for it rather than
+		// silently discarding every grid in an existing cache.
+		conf = 1
+	}
+	meter := a.Meter
+	if meter <= 0 {
+		meter = 4
+	}
 	return &analyze.BeatGrid{
 		BPM:        a.BPM,
 		Beats:      a.Beats,
-		Confidence: 1.0,
+		Downbeats:  a.Downbeats,
+		Meter:      meter,
+		Confidence: conf,
 	}
 }
 
@@ -53,6 +71,9 @@ func analysisFrom(r *analyze.Result) library.Analysis {
 		a.BPM = r.Grid.BPM
 		a.HasGrid = true
 		a.Beats = r.Grid.Beats
+		a.Downbeats = r.Grid.Downbeats
+		a.Meter = r.Grid.Meter
+		a.GridConfidence = r.Grid.Confidence
 	}
 	if r.HasKey && r.Key != nil {
 		a.KeyCamelot = r.Key.Camelot
@@ -80,6 +101,15 @@ type Analyzer struct {
 	log     *slog.Logger
 	mu      sync.Mutex
 	pending map[string]*analysisRun
+	// state is the current pipeline position, for the debug overlay.
+	//
+	// analyze.Progress and its three constants existed and were referenced
+	// nowhere: spec §4.1's "analyzing -> ready" pipeline was written down and
+	// never observed. DebugStats.AnalysisState was the other half -- a rendered
+	// row nothing ever set. Together they meant a long analysis pass over a
+	// large file was invisible: the user watched a deck sit on "--" for its BPM
+	// with nothing to say whether it was working or wedged.
+	state analyze.Progress
 	// afterAnalyze is a test hook, parked between a finished analysis and the
 	// hand-off of its result. The bug this fixes lived exactly in that gap, and
 	// a timing test could only catch it when the scheduler happened to line up;
@@ -135,6 +165,23 @@ func (a *Analyzer) OnResult(f func(path string, r *analyze.Result)) {
 // A track already being analysed for the same deck has its old run cancelled:
 // the user loaded something else, and the superseded result would overwrite
 // the newer one.
+// State is the pipeline position, for the debug overlay. Empty means nothing is
+// running.
+func (a *Analyzer) State() string {
+	if a == nil {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return string(a.state)
+}
+
+func (a *Analyzer) setState(p analyze.Progress) {
+	a.mu.Lock()
+	a.state = p
+	a.mu.Unlock()
+}
+
 func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 	if a == nil || len(pcm) == 0 {
 		return
@@ -149,6 +196,8 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 	a.pending[path] = run
 	a.mu.Unlock()
 
+	a.setState(analyze.ProgressAnalyzing)
+
 	go func() {
 		res, err := analyze.Analyze(ctx, pcm)
 
@@ -160,6 +209,7 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 				return // superseded; the newer load owns the deck now
 			}
 			a.log.Debug("analysis failed", "path", path, "err", err)
+			a.setState(analyze.ProgressFailed)
 			return
 		}
 
@@ -196,6 +246,7 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 		a.apply(deck, res)
 
 		a.finishRun(run)
+		a.setState(analyze.ProgressReady)
 	}()
 }
 
@@ -205,6 +256,7 @@ func (a *Analyzer) Analyze(deck int, path string, pcm dsp.Stereo) {
 // newer load of the same track replaces the entry, so a run that finished late
 // and deleted by path would remove the newer run's registration and let Wait
 // return early -- the same bug, one level down.
+// analysisRun is one in-flight or finished analysis pass.
 type analysisRun struct {
 	cancel context.CancelFunc
 	path   string
