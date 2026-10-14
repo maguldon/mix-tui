@@ -355,3 +355,58 @@ func TestHomeAndEndWorkFromTheTransport(t *testing.T) {
 		t.Errorf("home in the filter left the caret at %d, want 0", m2.st.QueryCursor)
 	}
 }
+
+// TestTheCrateKeysAreBound is the regression test for the crate store's second
+// dead layer.
+//
+// The store, the loading and the rendering were all real and tested; the three
+// functions that edit it -- newCrate, addSelectedToCrate,
+// removeSelectedFromCrate -- had no callers, so the running application never
+// wrote crates.yaml and ctrl+n/ctrl+a/ctrl+d, which the README documented, did
+// nothing. A test that drove the functions directly would have passed throughout.
+//
+// newCrate had a second bug underneath: it computed an unused crate name and
+// persisted the list unchanged, so even once bound it reported "created Crate 1"
+// while writing back the file it had just read.
+func TestTheCrateKeysAreBound(t *testing.T) {
+	var saved []library.Crate
+	m, _ := libraryModel(t)
+	m.SetCratePersister(func(cs []library.Crate) error {
+		saved = append([]library.Crate(nil), cs...)
+		return nil
+	})
+	m.st.LibPane = views.PaneTracks
+
+	press(t, m, "ctrl+n")
+	// crateCount includes the "All tracks" row; count the crates themselves.
+	if n := len(m.lib.Crates()); n != 1 {
+		t.Fatalf("ctrl+n left %d crates, want 1", n)
+	}
+	if len(saved) != 1 || saved[0].Name == "" {
+		t.Fatalf("ctrl+n persisted %+v, want one named crate", saved)
+	}
+
+	press(t, m, "ctrl+a")
+	if n := len(m.lib.Crates()[0].Tracks); n != 1 {
+		t.Errorf("ctrl+a left the crate with %d tracks, want 1", n)
+	}
+
+	press(t, m, "ctrl+d")
+	if n := len(m.lib.Crates()[0].Tracks); n != 0 {
+		t.Errorf("ctrl+d left the crate with %d tracks, want 0", n)
+	}
+}
+
+// TestCtrlDTypesNothingIntoTheFilter: the browser types any printable key into
+// the filter, so a crate binding on a letter would be unreachable. These are
+// control keys for exactly that reason.
+func TestCtrlDTypesNothingIntoTheFilter(t *testing.T) {
+	m, _ := libraryModel(t)
+	press(t, m, "ctrl+n")
+	press(t, m, "ctrl+a")
+	press(t, m, "ctrl+d")
+
+	if m.st.Query != "" {
+		t.Errorf("the crate keys typed %q into the filter", m.st.Query)
+	}
+}

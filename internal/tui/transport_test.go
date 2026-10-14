@@ -61,6 +61,9 @@ var transportKey = map[string]tea.KeyMsg{
 	"right":     {Type: tea.KeyRight},                     // \x1b[C
 	"ctrl+c":    {Type: tea.KeyCtrlC},                     // \x03
 	"ctrl+u":    {Type: tea.KeyCtrlU},                     // \x15
+	"ctrl+a":    {Type: tea.KeyCtrlA},                     // \x01
+	"ctrl+n":    {Type: tea.KeyCtrlN},                     // \x0e
+	"ctrl+d":    {Type: tea.KeyCtrlD},                     // \x04
 	" ":         {Type: tea.KeySpace, Runes: []rune{' '}}, // \x20
 }
 

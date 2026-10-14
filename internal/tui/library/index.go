@@ -404,6 +404,10 @@ func (ix *Index) CrateTracks(name string) ([]Track, int) {
 func (ix *Index) NextCrateName() string {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	return ix.nextCrateNameLocked()
+}
+
+func (ix *Index) nextCrateNameLocked() string {
 	taken := make(map[string]bool, len(ix.crates))
 	for _, c := range ix.crates {
 		taken[c.Name] = true
@@ -415,6 +419,22 @@ func (ix *Index) NextCrateName() string {
 		}
 	}
 	return fmt.Sprintf("Crate %d", len(taken)+1)
+}
+
+// NewCrate creates an empty crate under the first unused default name and
+// returns it.
+//
+// It exists because "create a crate" and "add a track to a crate" are different
+// intentions that happen to share a file: a DJ opening a set builds the crate
+// first and fills it afterwards, so there has to be a way to make an empty one.
+// Callers that only ever add tracks should use AddToCrate, which creates the
+// crate implicitly.
+func (ix *Index) NewCrate() string {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	name := ix.nextCrateNameLocked()
+	ix.crates = append(ix.crates, Crate{Name: name})
+	return name
 }
 
 // AddToCrate appends a track to a named crate, creating the crate if it is new.

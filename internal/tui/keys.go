@@ -424,6 +424,21 @@ func (m *Model) handleBrowserKey(name string) bool {
 	case "end":
 		m.st.QueryCursor = caretToEnd(m.st.Query)
 		return true
+	case "ctrl+n":
+		// Crate editing.
+		//
+		// Control keys rather than letters, because every printable key types
+		// into the filter: a letter-bound action could never fire from the
+		// browser, which is the only place it makes sense. Same trap as
+		// shift+enter and backtab.
+		m.newCrate()
+		return true
+	case "ctrl+a":
+		m.addSelectedToCrate()
+		return true
+	case "ctrl+d":
+		m.removeSelectedFromCrate()
+		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
 	// browser previously had no way to narrow a track list at all.
@@ -539,10 +554,10 @@ func (m *Model) newCrate() {
 	if m.lib == nil {
 		return
 	}
-	name := m.lib.NextCrateName()
-	if !m.saveCrates() {
-		return
-	}
+	// The index has to actually gain the crate. This used to compute a name and
+	// then persist the list unchanged, so ctrl+n reported "created Crate 1" and
+	// wrote back the same file it had read.
+	name := m.lib.NewCrate()
 	if err := m.persistCrates(m.lib.Crates()); err != nil {
 		m.setError("crate: " + err.Error())
 		return

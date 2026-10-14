@@ -103,6 +103,11 @@ func sweepModel(t *testing.T) (*Model, *sweepEngine) {
 		{Name: "Peak Time", Tracks: []string{"/m/3.wav"}},
 	})
 	m.SetLibrary(ix)
+	// The running application always has a crate persister -- main.go wires one
+	// unconditionally. Without it persistCrates reports "crates cannot be saved
+	// in this build" and every crate key fails in a way no real run can, which
+	// is how the sweep ends up asserting nothing about them.
+	m.SetCratePersister(func([]library.Crate) error { return nil })
 	// The browsers open on the track list, which is what "/" and "l" both do.
 	// A test that sets Mode directly would otherwise start on the crates pane,
 	// where the track cursor is not the one being moved.
@@ -905,6 +910,35 @@ func perModeCases() []modeCase {
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
 				if m.st.QueryCursor != 0 {
 					t.Errorf("caret = %d, want 0", m.st.QueryCursor)
+				}
+			}},
+		// The crate keys. They were documented in the README and bound to
+		// nothing: newCrate, addSelectedToCrate and removeSelectedFromCrate had
+		// no callers at all, so ctrl+n reported "created Crate 1" and wrote back
+		// the file unchanged.
+		//
+		// The sweep checks only that each key is consumed and types nothing,
+		// which is what a mode-interaction harness is for. What the keys actually
+		// do to the crate file is asserted in TestTheCrateKeysAreBound, which
+		// drives the real persister. A sweep case that asserted the crate count
+		// would have to know how many crates the sweep's own model starts with,
+		// and got that wrong the first time it was written.
+		{name: "ctrl+n creates a crate", mode: ModeLibrary, key: "ctrl+n",
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if !strings.Contains(m.st.SettingNote, "created") {
+					t.Errorf("note = %q, want it to report the crate it made", m.st.SettingNote)
+				}
+			}},
+		{name: "ctrl+a is bound in the browser", mode: ModeLibrary, key: "ctrl+a",
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "" {
+					t.Errorf("ctrl+a typed %q into the filter", m.st.Query)
+				}
+			}},
+		{name: "ctrl+d is bound in the browser", mode: ModeLibrary, key: "ctrl+d",
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "" {
+					t.Errorf("ctrl+d typed %q into the filter", m.st.Query)
 				}
 			}},
 		{name: "delete at the start of the filter removes the first character", mode: ModeLibrary, key: "delete",
