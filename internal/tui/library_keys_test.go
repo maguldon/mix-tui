@@ -320,3 +320,38 @@ func TestEscapeStillResetsSort(t *testing.T) {
 		t.Errorf("escape left the sort state behind: %+v", m.st)
 	}
 }
+
+// TestHomeAndEndWorkFromTheTransport is the check #14 said could not be written
+// before: the transport table had no constructors for home/end, so pressing them
+// in a test reported "no tea.KeyMsg reports home" -- a misleading failure that
+// points at bubbletea rather than at the missing binding. Both are now carried
+// by transportKey, so this drives the real key path.
+func TestHomeAndEndWorkFromTheTransport(t *testing.T) {
+	m, _ := testModel(t)
+	m.st.Mode = ModeSettings
+	m.st.SettingInput = "/srv/music/long/path"
+	m.st.SettingCursor = 3
+
+	press(t, m, "end")
+	if m.st.SettingCursor != len([]rune(m.st.SettingInput)) {
+		t.Errorf("end left the caret at %d, want %d", m.st.SettingCursor, len([]rune(m.st.SettingInput)))
+	}
+
+	press(t, m, "home")
+	if m.st.SettingCursor != 0 {
+		t.Errorf("home left the caret at %d, want 0", m.st.SettingCursor)
+	}
+
+	// And in the browser's filter, which is the other text field.
+	m2, _ := libraryModel(t)
+	m2.st.Query = "abc"
+	m2.st.QueryCursor = 1
+	m2.handleKey("end")
+	if m2.st.QueryCursor != 3 {
+		t.Errorf("end in the filter left the caret at %d, want 3", m2.st.QueryCursor)
+	}
+	m2.handleKey("home")
+	if m2.st.QueryCursor != 0 {
+		t.Errorf("home in the filter left the caret at %d, want 0", m2.st.QueryCursor)
+	}
+}

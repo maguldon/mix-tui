@@ -158,3 +158,33 @@ func TestEditingIsRuneIndexed(t *testing.T) {
 		t.Errorf("deleteAfter left %q with %d runes and %d bytes", s, len([]rune(s)), len(s))
 	}
 }
+
+// TestHomeAndEndJumpTheCaret covers the last piece of #14, which the issue left
+// out as "a bigger call": a caret that can only be walked one step at a time.
+//
+// Every text field in this app holds a path, and the library root is set by
+// typing one, so correcting a typo near the end cost one keypress per character
+// to the left of it.
+func TestHomeAndEndJumpTheCaret(t *testing.T) {
+	for _, tc := range []struct{ start, home, end int }{
+		{0, 0, 3},
+		{1, 0, 3},
+		{2, 0, 3},
+		{3, 0, 3},
+	} {
+		if got := caretToStart(); got != tc.home {
+			t.Errorf("caretToStart() = %d, want %d", got, tc.home)
+		}
+		if got := caretToEnd("abc"); got != tc.end {
+			t.Errorf("caretToEnd(\"abc\") = %d, want %d", got, tc.end)
+		}
+	}
+}
+
+// TestCaretToEndCountsRunes keeps the caret from landing inside a multi-byte
+// character. Every path a user types can contain one.
+func TestCaretToEndCountsRunes(t *testing.T) {
+	if got, want := caretToEnd("/música/track.wav"), len([]rune("/música/track.wav")); got != want {
+		t.Errorf("caretToEnd counted %d, want %d runes", got, want)
+	}
+}

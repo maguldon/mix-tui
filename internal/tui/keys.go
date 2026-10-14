@@ -234,6 +234,12 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 	case "delete":
 		m.st.SettingInput, m.st.SettingCursor = deleteAfter(m.st.SettingInput, m.st.SettingCursor)
 		return nil, true
+	case "home":
+		m.st.SettingCursor = caretToStart()
+		return nil, true
+	case "end":
+		m.st.SettingCursor = caretToEnd(m.st.SettingInput)
+		return nil, true
 	case "left":
 		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, -1)
 		return nil, true
@@ -412,6 +418,12 @@ func (m *Model) handleBrowserKey(name string) bool {
 		// the character under it. Every correction began with stepping right and
 		// backspacing.
 		m.st.Query, m.st.QueryCursor = deleteAfter(m.st.Query, m.st.QueryCursor)
+		return true
+	case "home":
+		m.st.QueryCursor = caretToStart()
+		return true
+	case "end":
+		m.st.QueryCursor = caretToEnd(m.st.Query)
 		return true
 	}
 	// Any other single printable rune filters the list. The full-screen

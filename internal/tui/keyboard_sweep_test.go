@@ -862,6 +862,51 @@ func perModeCases() []modeCase {
 		// browser or the overlay was opened, and there was no key that could
 		// remove the character under it: every correction began by stepping
 		// right and backspacing.
+		// HOME and END were the part of #14 the issue left as "a bigger call":
+		// new bindings rather than a repair. They are bound now, and the sweep
+		// is what will notice if one is dropped again -- it reads the switches
+		// in keys.go and fails on a binding no table drives.
+		{name: "end puts the caret at the end of the path field", mode: ModeSettings, key: "end",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				m.st.SettingInput = "/srv/music"
+				m.st.SettingCursor = 4
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingCursor != len([]rune(m.st.SettingInput)) {
+					t.Errorf("caret = %d, want %d", m.st.SettingCursor, len([]rune(m.st.SettingInput)))
+				}
+			}},
+		{name: "home puts the caret at the start of the path field", mode: ModeSettings, key: "home",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				m.st.SettingInput = "/srv/music"
+				m.st.SettingCursor = 4
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingCursor != 0 {
+					t.Errorf("caret = %d, want 0", m.st.SettingCursor)
+				}
+			}},
+		{name: "end puts the caret at the end of the filter", mode: ModeLibrary, key: "end",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				for i := 0; i < 4; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.QueryCursor != len([]rune(m.st.Query)) {
+					t.Errorf("caret = %d, want %d", m.st.QueryCursor, len([]rune(m.st.Query)))
+				}
+			}},
+		{name: "home puts the caret at the start of the filter", mode: ModeLibrary, key: "home",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.QueryCursor != 0 {
+					t.Errorf("caret = %d, want 0", m.st.QueryCursor)
+				}
+			}},
 		{name: "delete at the start of the filter removes the first character", mode: ModeLibrary, key: "delete",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
 				typeText(t, m, "beat")

@@ -71,6 +71,23 @@ func deleteBefore(s string, at int) (string, int) {
 // alone, which is the mirror of deleteBefore's rule at the start: a forward
 // delete that ran off the end would have to destroy the last character instead,
 // and in the settings screen that means eating a path the user never typed.
+// caretToStart and caretToEnd put the caret at either end of the field.
+//
+// Without them a caret can only be walked one step at a time, so fixing a typo
+// near the end of a long path took as many presses as the field is wide. These
+// are new bindings rather than a repair, which is why #14 left them out, but
+// every text field in this app holds a path and paths are long.
+func caretToStart() int {
+	return 0
+}
+
+// caretToEnd counts runes, matching the caret's unit everywhere else. Bytes
+// would put the caret inside a multi-byte character for any path with an
+// accented or non-Latin character in it.
+func caretToEnd(s string) int {
+	return len([]rune(s))
+}
+
 func deleteAfter(s string, at int) (string, int) {
 	rs := []rune(s)
 	at = clampCaret(s, at)
