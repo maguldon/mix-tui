@@ -28,6 +28,8 @@ type SettingsState struct {
 	Note string
 	// Input is the editable path field.
 	Input string
+	// Cursor is the caret position in Input, in runes.
+	Cursor int
 }
 
 // RenderSettings draws the settings screen: what the library is set to, and a
@@ -58,7 +60,7 @@ func RenderSettings(w, h int, st SettingsState) string {
 
 	lines = append(lines, "")
 	lines = append(lines, labelStyle.Render(pad(truncate("set root", w), w)))
-	lines = append(lines, accentStyle.Render(pad(truncate("  "+st.Input+"_", w), w)))
+	lines = append(lines, accentStyle.Render(pad(truncate(caretField("  ", st.Input, st.Cursor), w), w)))
 	lines = append(lines, dimStyle.Render(strings.Repeat("-", minInt(w, 60))))
 
 	switch {

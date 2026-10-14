@@ -160,11 +160,33 @@ func (m *Model) handleKey(k string) tea.Cmd {
 // to edit an existing value, and an empty field invites them to retype a path
 // they can already see one line above.
 func (m *Model) openSettings() {
+	root := ""
 	if m.cfg != nil {
-		m.st.SettingInput = m.cfg.UI.LibraryRoot
+		root = m.cfg.UI.LibraryRoot
 	}
+	// The caret lands at the end of the seed, so LEFT walks into the part of the
+	// path most likely to be wrong. Opening at the start would make every edit a
+	// walk to the end first.
+	m.setSettingInput(root)
 	m.st.SettingNote = ""
 	m.st.Mode = ModeSettings
+}
+
+// setQuery replaces the filter and puts the caret at the end of it.
+//
+// Every writer goes through here rather than assigning Query directly. That is
+// the whole failure mode a caret adds to a view that was fine without one: some
+// code path clears the query, the caret is left pointing past the end, and the
+// field silently swallows the next few keystrokes.
+func (m *Model) setQuery(s string) {
+	m.st.Query = s
+	m.st.QueryCursor = len([]rune(s))
+}
+
+// setSettingInput replaces the library-root field and puts its caret at the end.
+func (m *Model) setSettingInput(s string) {
+	m.st.SettingInput = s
+	m.st.SettingCursor = len([]rune(s))
 }
 
 // handleSettingsKey handles the settings view's own keys. It reports whether it
@@ -204,11 +226,17 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 		m.st.ScanBusy = true
 		return m.scanCmd(root), true
 
-	case "backspace", "left":
-		m.st.SettingInput = dropLastRune(m.st.SettingInput)
+	case "backspace":
+		m.st.SettingInput, m.st.SettingCursor = deleteBefore(m.st.SettingInput, m.st.SettingCursor)
+		return nil, true
+	case "left":
+		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, -1)
+		return nil, true
+	case "right":
+		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, 1)
 		return nil, true
 	case "ctrl+u":
-		m.st.SettingInput = ""
+		m.setSettingInput("")
 		return nil, true
 	}
 
@@ -216,7 +244,7 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 	// slashes, dots and tildes, and a view that accepted only alphanumerics
 	// would be unusable for the thing it exists to do.
 	if r := []rune(k); len(r) == 1 && r[0] >= ' ' {
-		m.st.SettingInput += k
+		m.st.SettingInput, m.st.SettingCursor = insertRune(m.st.SettingInput, m.st.SettingCursor, r[0])
 		return nil, true
 	}
 	return nil, false
@@ -253,7 +281,12 @@ func (m *Model) handleBrowserKey(name string) bool {
 	// track list. The menu replaced the detail pane, so a user choosing a sort
 	// needs the selection keys to reach it -- otherwise "s" opens a menu with no
 	// way to pick anything, which is what happened before.
-	if m.st.ShowSort {
+	//
+	// The menu is the BROWSER's, and only the browser can open one now (see
+	// "s" below). The guard is not redundant armour: it is the statement that
+	// this branch belongs to a screen that draws a menu, which is exactly the
+	// assumption that was false before.
+	if m.st.ShowSort && m.st.Mode == ModeLibrary {
 		switch name {
 		case "up":
 			m.st.SortSel = maxInt(0, m.st.SortSel-1)
@@ -272,6 +305,25 @@ func (m *Model) handleBrowserKey(name string) bool {
 			m.st.SortDesc = !m.st.SortDesc
 			return true
 		}
+	}
+
+	// "s" opens the sort menu in the browser; without a producer it was
+	// unreachable in the running application even though it rendered.
+	//
+	// In the quick-load overlay it opens nothing. views.OverlayRows draws a
+	// title, a query line and a list of results -- it renders no menu at all --
+	// so the toggle moved nothing on screen, and then armed the branch above:
+	// with ShowSort set, ENTER picked a sort instead of loading the highlighted
+	// track, so "s" then "enter" in the overlay loaded nothing whatsoever.
+	//
+	// The overlay is a filter box, so "s" there is a letter, and belongs to
+	// the filter at the bottom of this function. This is the same class of bug
+	// as the overlay TAB fixed in f3c11a5: the key reached a handler that is
+	// wrong for the mode, and a list of emittable key names cannot see it.
+	if name == "s" && m.st.Mode == ModeLibrary {
+		m.st.ShowSort = !m.st.ShowSort
+		m.st.SortSel = int(m.st.SortBy)
+		return true
 	}
 
 	switch name {
@@ -321,9 +373,13 @@ func (m *Model) handleBrowserKey(name string) bool {
 		m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
 		return true
 	case "left":
-		m.st.Query = dropLastRune(m.st.Query)
+		// Move the caret. LEFT deleted the last character instead, which in a
+		// field the user could not see -- the full browser never drew its filter
+		// -- destroyed something they had not asked to lose and could not check.
+		m.st.QueryCursor = moveCaret(m.st.Query, m.st.QueryCursor, -1)
 		return true
 	case "right":
+		m.st.QueryCursor = moveCaret(m.st.Query, m.st.QueryCursor, 1)
 		return true
 	case "enter":
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
@@ -340,13 +396,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 		m.loadSelected()
 		return true
 	case "backspace":
-		m.st.Query = dropLastRune(m.st.Query)
-		return true
-	case "s":
-		// The sort menu replaces the detail pane; without a producer it was
-		// unreachable in the running application even though it rendered.
-		m.st.ShowSort = !m.st.ShowSort
-		m.st.SortSel = int(m.st.SortBy)
+		m.st.Query, m.st.QueryCursor = deleteBefore(m.st.Query, m.st.QueryCursor)
 		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
@@ -355,7 +405,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 	// r[0] >= ' ' admits the space bar, which is what the user wants when they
 	// type a multi-word query like "beat that". Control runes fall below ' '.
 	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
-		m.st.Query += name
+		m.st.Query, m.st.QueryCursor = insertRune(m.st.Query, m.st.QueryCursor, r[0])
 		return true
 	}
 	return false
@@ -393,7 +443,7 @@ func (m *Model) loadSelectedInto(deck int) {
 	m.st.Focus = deck
 	m.st.Mode = ModeMix
 	m.st.TrackSel = 0
-	m.st.Query = ""
+	m.setQuery("")
 }
 
 // selectedTrack resolves the cursor against the filtered library.
@@ -431,17 +481,6 @@ func (m *Model) trackCount() int {
 		return 0
 	}
 	return len(library.Search(m.lib.Tracks(), m.st.Query))
-}
-
-// dropLastRune removes one rune, not one byte. Deleting a byte from a
-// multi-byte query leaves invalid UTF-8, which renders as U+FFFD at one column
-// per byte.
-func dropLastRune(s string) string {
-	r := []rune(s)
-	if len(r) == 0 {
-		return ""
-	}
-	return string(r[:len(r)-1])
 }
 
 // applyAction applies a resolved Action, updating view state for the controls
@@ -523,8 +562,15 @@ func (m *Model) moveFocus(delta int) {
 // It applies the change to the engine. It previously only moved the mirrored
 // view state, so pressing the key did nothing a DJ could hear and the fader sat
 // visually wherever they last dragged it.
+//
+// The arrows belong to the mix view and nowhere else. handleBrowserKey claims
+// them in the two browsers, where they are the list cursor, but the settings
+// screen and the help and debug screens do not claim them, so an arrow pressed
+// there fell through to here and moved a crossfader that none of those screens
+// draw. The guard was ModeLibrary, which is the one mode that cannot even reach
+// this function; the screen it was written for is the mix view.
 func (m *Model) nudge(delta int) {
-	if m.st.Mode == ModeLibrary {
+	if m.st.Mode != ModeMix {
 		return
 	}
 	step := 0.02
@@ -556,15 +602,15 @@ func zoomIndexOf(bars int) int {
 func modeFooter(m Mode) string {
 	switch m {
 	case ModeLibrary:
-		return "↑↓ select   ⏎ load focused deck   tab pane   s sort   esc back"
+		return "↑↓ select   ⏎ load focused deck   tab pane   ←→ filter   s sort   esc back"
 	case ModeHelp:
 		return "esc back"
 	case ModeDebug:
 		return "` close   esc back"
 	case ModeOverlay:
-		return "type to filter   tab other deck   ⏎ load   esc cancel"
+		return "type to filter   ←→ edit   tab other deck   ⏎ load   esc cancel"
 	case ModeSettings:
-		return "type a path   ⏎ scan and save   esc cancel"
+		return "type a path   ←→ edit   ⏎ scan and save   esc cancel"
 	default:
 		return "tab focus   v layout   z zoom   / library   l load   S settings   ? help"
 	}

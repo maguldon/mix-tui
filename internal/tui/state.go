@@ -75,6 +75,15 @@ type ViewState struct {
 	// which is what a DJ expects when they press escape to check something.
 	TrackSel int
 	Query    string
+	// QueryCursor is the filter field's caret, in runes from the start of
+	// Query.
+	//
+	// It exists because LEFT and RIGHT had nowhere to go: LEFT deleted the last
+	// character, which in the full browser -- where the filter is not drawn --
+	// destroyed something the user could neither see nor have asked to lose. The
+	// caret is always clamped into the field and is never set by arithmetic done
+	// at the call site; see textfield.go.
+	QueryCursor int
 	// ShowSort opens the sort menu over the detail pane.
 	ShowSort bool
 	// SortBy and SortDesc drive the track list order. They were never set
@@ -97,6 +106,10 @@ type ViewState struct {
 	// seeded from config on entry rather than carried across openings, so the
 	// field always shows what is actually in effect.
 	SettingInput string
+	// SettingCursor is the caret in that field, in runes. It opens at the end of
+	// the seeded path, so LEFT reaches the part most likely to be wrong without
+	// backspacing the whole thing away.
+	SettingCursor int
 	// SettingNote is the last settings result: what was saved, or what a scan
 	// found. It is the only feedback a save produces, and a save is otherwise
 	// invisible.

@@ -316,7 +316,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The old cursor is meaningless against a different collection, and
 		// leaving it set would clamp into the new list at an arbitrary offset.
 		m.st.TrackSel = 0
-		m.st.Query = ""
+		m.setQuery("")
 		return m, nil
 
 	default:
@@ -421,7 +421,7 @@ func (m *Model) RenderAt(w, h int) string {
 		// one. It used to replace the body outright, so the decks vanished
 		// behind a box -- exactly what an overlay must not do.
 		base := splitLines(Render(w, h, m.snapshot(), m.st))
-		box, offset := views.OverlayRows(w, h, m.libOrEmpty(), m.st.Query, m.st.TrackSel)
+		box, offset := views.OverlayRows(w, h, m.libOrEmpty(), m.st.Query, m.st.QueryCursor, m.st.TrackSel)
 		base = compositeOverlay(base, box, offset)
 		body = strings.Join(base, "\n")
 	case ModeHelp:
@@ -518,6 +518,7 @@ func (m *Model) settingsState() views.SettingsState {
 		FlagRoot:   m.flagRoot,
 		ConfigPath: m.configPath,
 		Input:      m.st.SettingInput,
+		Cursor:     m.st.SettingCursor,
 		Note:       m.st.SettingNote,
 		Busy:       m.st.ScanBusy,
 	}
@@ -531,7 +532,10 @@ func (m *Model) libState() views.LibraryState {
 	return views.LibraryState{
 		TrackSel: m.st.TrackSel,
 		Query:    m.st.Query,
-		ShowSort: m.st.ShowSort,
+		// The caret is drawn in the track pane header once there is a
+		// filter to show it in.
+		QueryCursor: m.st.QueryCursor,
+		ShowSort:    m.st.ShowSort,
 		// Sort state was never populated here, so the sort was permanently
 		// title-ascending: library.Sort was called correctly with defaults and
 		// the menu could show but could not change anything.

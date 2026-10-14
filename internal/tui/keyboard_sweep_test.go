@@ -31,10 +31,17 @@ import (
 //	TestEveryShippedBindingIsCovered          -- the closure check: a key that is
 //	                                         not in one of the three is an error.
 //
-// plus TestKnownInertBindings, which records the key/mode pairs the sweep found
-// that reach a handler and do nothing. Those are reported, not fixed: changing
-// what a key does is a behaviour change, and folding it into a test-only commit
-// would make the measurement and the repair indistinguishable in review.
+// It found four keys that reached a handler and did nothing, and they are now
+// assertions in their own right rather than a list: "s" and "enter" in the
+// quick-load overlay, the swallowed right arrow, and the crossfader moving
+// behind screens that do not draw it. A key that reaches a handler and does
+// nothing is invisible to a table of emittable names, which is why the mode half
+// exists at all.
+//
+// It also found a key that did something nobody would have asked for: LEFT
+// deleted the last character of the filter, in a browser that never drew the
+// filter. The filter now has a caret, which is why the editing cases below are
+// about where the caret is rather than about what the key did.
 
 // sweepEngine records the actions the interface sends, and mirrors the one
 // piece of engine state the key path reads back: a deck's hotcue slots.
@@ -142,9 +149,6 @@ var defaultBindings = map[string]binding{
 	"z":      {key: "z", note: "caught by the UI switch before the keymap"},
 	"v":      {key: "v", note: "caught by the UI switch before the keymap"},
 	"/":      {key: "/", note: "caught by the UI switch before the keymap"},
-	// LibraryClose is declared, but the universal ESC exit runs first, so the
-	// binding's own action never fires. ESC still closes the browser.
-	"escape": {key: "escape", mode: ModeLibrary, note: "closed by the universal ESC exit"},
 	"r":      {key: "r", action: engine.LoopRoll},
 
 	"1": {key: "1", action: engine.DeckHotcueSet},
@@ -173,6 +177,11 @@ var defaultBindings = map[string]binding{
 
 // hardcodedUIKeys are the keys internal/tui/keys.go handles before any config
 // lookup. They cannot be rebound, so nothing else records them.
+//
+// "escape" is here and not in config.DefaultKeys(): it was bound to LibraryClose
+// there, and the UI switch below runs first, so the binding was resolved and
+// discarded on every press. A key the config claims but cannot own invites a
+// user to rebind something that will never happen.
 var hardcodedUIKeys = map[string]binding{
 	"tab":       {key: "tab", note: "deck focus in the mix view"},
 	"shift+tab": {key: "shift+tab", note: "deck focus, the other way"},
@@ -294,15 +303,14 @@ func TestEveryShippedBindingIsCovered(t *testing.T) {
 
 	// The other direction: every string a switch matches on has to be a key the
 	// sweep drives, in some mode. Layout names and the input side of bindingName
-	// are not keys. The inert findings count as driven, because
-	// TestKnownInertBindings drives them and records that they do nothing.
+	// are not keys.
 	notAKey := map[string]bool{
 		"A": true, // layout names, state.go layoutFromName
 		"B": true,
 		"C": true,
 		// The input side of bindingName: what bubbletea reports for these. The
-		// cases the translation exists for are "space" and "escape", both in
-		// config.DefaultKeys.
+		// cases the translation exists for are "space" (config.DefaultKeys) and
+		// "escape" (hardcodedUIKeys).
 		" ":   true,
 		"esc": true,
 	}
@@ -316,27 +324,12 @@ func TestEveryShippedBindingIsCovered(t *testing.T) {
 	for _, c := range perModeCases() {
 		covered[c.key] = true
 	}
-	for _, in := range inertBindings {
-		covered[in.key] = true
-	}
 	for name, pos := range matched {
 		if notAKey[name] || covered[name] {
 			continue
 		}
 		t.Errorf("%s: a switch matches %q but no table in the sweep drives it", pos, name)
 	}
-}
-
-// textFieldLeaks are the keys that reach the engine from inside a text field,
-// because a mode-relative handler does not claim them.
-//
-// nudge() guards ModeLibrary, where up/down are the list cursor, but not
-// ModeSettings -- so pressing them while typing a path moves the crossfader
-// behind a screen that does not show it. That is a behaviour decision, not a
-// typo, so it is reported rather than fixed here; TestArrowsBehindTheSettings
-// pins what it currently does so the hole is at least a measured one.
-var textFieldLeaks = map[Mode]map[string]bool{
-	ModeSettings: {"up": true, "down": true},
 }
 
 // TestNoShippedKeyReachesTheEngineFromATextField is the mode sweep applied to
@@ -359,9 +352,8 @@ func TestNoShippedKeyReachesTheEngineFromATextField(t *testing.T) {
 		shipped[name] = true
 	}
 	for _, mode := range []Mode{ModeLibrary, ModeOverlay, ModeSettings} {
-		leaks := textFieldLeaks[mode]
 		for name := range shipped {
-			if name == "ctrl+c" || leaks[name] {
+			if name == "ctrl+c" {
 				continue
 			}
 			t.Run(modeName(mode)+" "+name, func(t *testing.T) {
@@ -377,32 +369,42 @@ func TestNoShippedKeyReachesTheEngineFromATextField(t *testing.T) {
 	}
 }
 
-// TestArrowsBehindTheSettingsScreen pins the one exemption above, so it is a
-// measurement rather than a hole.
+// TestArrowsOnlyActInTheMixView pins where the arrow keys belong.
 //
-// nudge() returns early in ModeLibrary, where the arrows are the list cursor,
-// and does not in ModeSettings. Pressing up or down while typing a library path
-// therefore moves the crossfader, and nothing on the settings screen shows it.
-// Whether that should be inert is a behaviour decision; this issue measures.
-func TestArrowsBehindTheSettingsScreen(t *testing.T) {
-	for _, key := range []string{"up", "down"} {
-		t.Run(key, func(t *testing.T) {
-			m, e := sweepModel(t)
-			m.st.Mode = ModeSettings
-			typeText(t, m, "/srv/dj")
-			press(t, m, key)
+// handleBrowserKey claims them in the two browsers, where they are the list
+// cursor. The settings, help and debug screens claim nothing, so an arrow there
+// fell through to nudge() -- which guarded ModeLibrary, the one mode that cannot
+// even reach it -- and moved a crossfader none of those screens draw. The guard
+// said "the mix view" and tested for everything else.
+func TestArrowsOnlyActInTheMixView(t *testing.T) {
+	for _, mode := range []Mode{ModeSettings, ModeHelp, ModeDebug, ModeLibrary, ModeOverlay} {
+		for _, key := range []string{"up", "down"} {
+			t.Run(modeName(mode)+" "+key, func(t *testing.T) {
+				m, e := sweepModel(t)
+				m.st.Mode = mode
+				if mode == ModeSettings {
+					// A path with something to lose, so the assertion also covers
+					// the arrows not eating the field.
+					typeText(t, m, "/srv")
+				}
+				before := m.State()
+				actions := len(e.applied)
 
-			if len(e.applied) != 1 || e.applied[0].Kind != engine.MixerCrossfader {
-				t.Fatalf("%q applied %v; this test exists to pin the current "+
-					"behaviour, which is one crossfader nudge", key, e.applied)
-			}
-			if m.st.SettingInput != "/srv/dj" {
-				t.Errorf("the path field changed to %q; the arrows must not eat it",
-					m.st.SettingInput)
-			}
-			t.Logf("%q in settings moves the crossfader to %v behind a screen "+
-				"that does not draw it (keys.go:527 nudge)", key, m.st.Xfade)
-		})
+				press(t, m, key)
+
+				if !observable(before, m, e, actions) {
+					// In the browsers the arrows are the list cursor, so they do
+					// something; this is only a failure for the screens that
+					// should ignore them entirely.
+					return
+				}
+				if mode == ModeLibrary || mode == ModeOverlay {
+					return
+				}
+				t.Errorf("%q in %s moved something: crossfader %v, engine %v",
+					key, modeName(mode), m.State().Xfade, e.applied[actions:])
+			})
+		}
 	}
 }
 
@@ -620,6 +622,53 @@ func perModeCases() []modeCase {
 					t.Errorf("focus = %d; it should follow the load", m.State().Focus)
 				}
 			}},
+		// "s" in the overlay used to toggle a sort menu that views.OverlayRows
+		// never draws, and having armed that state, "enter" then picked a sort
+		// instead of loading. "s" then "enter" loaded nothing at all.
+		{name: "s then enter in the overlay still loads", mode: ModeOverlay, key: "enter",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { press(t, m, "s") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().ShowSort {
+					t.Error("s opened a sort menu in an overlay that renders none")
+				}
+				if len(e.loaded) != 1 {
+					t.Errorf("loaded %v, want one track; s then enter loads nothing", e.loaded)
+				}
+			}},
+		{name: "s in the overlay is a letter", mode: ModeOverlay, key: "s",
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.State().Query != "s" {
+					t.Errorf("query = %q, want %q; the overlay is a filter box", m.State().Query, "s")
+				}
+				if m.State().ShowSort {
+					t.Error("s opened a sort menu that the overlay does not draw")
+				}
+			}},
+		// "right" was consumed and discarded in both browsers: no behaviour, no
+		// binding, no effect. It is now simply not claimed, so it behaves like
+		// any other unhandled key -- and, like any other, a user binding it gets
+		// what they asked for.
+		{name: "right in the browser does not reach the engine", mode: ModeLibrary, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "ab") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().Query != "ab" {
+					t.Errorf("query = %q, want it unchanged; the filter has no cursor to move",
+						m.State().Query)
+				}
+				if len(e.applied) != 0 {
+					t.Errorf("right applied %v", e.applied)
+				}
+			}},
+		{name: "right in the overlay does not reach the engine", mode: ModeOverlay, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "ab") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().Query != "ab" {
+					t.Errorf("query = %q, want it unchanged", m.State().Query)
+				}
+				if len(e.applied) != 0 {
+					t.Errorf("right applied %v", e.applied)
+				}
+			}},
 		// "The other deck" is what SHIFT+ENTER used to mean. It is unreachable
 		// -- bubbletea has no Shift field, and an ordinary terminal sends
 		// ENTER's bytes for Shift+Enter -- so the reachable route is to move
@@ -655,33 +704,133 @@ func perModeCases() []modeCase {
 				}
 			}},
 
-		// ---- editing: backspace, left and ctrl+u ----
-		{name: "backspace in the browser deletes a query character", mode: ModeLibrary, key: "backspace",
-			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "beat") },
+		// ---- editing: the caret moves, and only backspace deletes ----
+		{name: "left and right move the caret and delete nothing", mode: ModeLibrary, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().Query != "bea" {
-					t.Errorf("query = %q, want %q", m.State().Query, "bea")
+				if m.st.Query != "beat" {
+					t.Errorf("query = %q, want it unchanged; LEFT used to delete the "+
+						"last character of a filter the browser never drew", m.st.Query)
+				}
+				if m.st.QueryCursor != 3 {
+					t.Errorf("caret = %d, want 3 after two LEFTs and a RIGHT", m.st.QueryCursor)
+				}
+			}},
+		{name: "typing inserts at the caret", mode: ModeLibrary, key: "z",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "beazt" {
+					t.Errorf("query = %q, want %q (typed at the caret, not the end)",
+						m.st.Query, "beazt")
+				}
+				if m.st.QueryCursor != 4 {
+					t.Errorf("caret = %d, want 4, just after what was typed", m.st.QueryCursor)
+				}
+			}},
+		{name: "backspace deletes before the caret", mode: ModeLibrary, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "bet" {
+					t.Errorf("query = %q, want %q (the rune before the caret)", m.st.Query, "bet")
+				}
+				if m.st.QueryCursor != 2 {
+					t.Errorf("caret = %d, want 2", m.st.QueryCursor)
+				}
+			}},
+		// Backspacing off the front must be a no-op, not "delete the last one
+		// instead". In the settings screen the field is seeded with the
+		// configured library root, and backspacing through a path the user never
+		// typed would destroy it a character at a time.
+		{name: "backspace at the start of the filter deletes nothing", mode: ModeLibrary, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				for i := 0; i < 6; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "beat" {
+					t.Errorf("query = %q, want it intact", m.st.Query)
+				}
+				if m.st.QueryCursor != 0 {
+					t.Errorf("caret = %d, want 0", m.st.QueryCursor)
+				}
+			}},
+		{name: "backspace at the start of the path field deletes nothing", mode: ModeSettings, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				for i := 0; i < 10; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "" {
+					t.Errorf("path = %q; backspacing off the front of the seeded "+
+						"library root destroys something the user never typed",
+						m.st.SettingInput)
 				}
 			}},
 		{name: "backspace in the settings field deletes a character", mode: ModeSettings, key: "backspace",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv/dj") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "/srv/d" {
-					t.Errorf("path = %q, want %q", m.State().SettingInput, "/srv/d")
+				if m.st.SettingInput != "/srv/d" {
+					t.Errorf("path = %q, want %q", m.st.SettingInput, "/srv/d")
 				}
 			}},
-		{name: "left in the settings field deletes a character", mode: ModeSettings, key: "left",
+		{name: "left in the settings field moves the caret", mode: ModeSettings, key: "left",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "/sr" {
-					t.Errorf("path = %q, want %q", m.State().SettingInput, "/sr")
+				if m.st.SettingInput != "/srv" {
+					t.Errorf("path = %q, want it unchanged; LEFT must not delete",
+						m.st.SettingInput)
+				}
+				if m.st.SettingCursor != 3 {
+					t.Errorf("caret = %d, want 3", m.st.SettingCursor)
+				}
+			}},
+		{name: "typing into the middle of the path field edits in place", mode: ModeSettings, key: "z",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "/srv")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "/szrv" {
+					t.Errorf("path = %q, want %q", m.st.SettingInput, "/szrv")
 				}
 			}},
 		{name: "ctrl+u in the settings field clears it", mode: ModeSettings, key: "ctrl+u",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv/dj") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "" {
-					t.Errorf("path = %q, want it cleared", m.State().SettingInput)
+				if m.st.SettingInput != "" {
+					t.Errorf("path = %q, want it cleared", m.st.SettingInput)
+				}
+				if m.st.SettingCursor != 0 {
+					t.Errorf("caret = %d, want 0; a cleared field with a caret at 4 "+
+						"swallows the next four keystrokes", m.st.SettingCursor)
+				}
+			}},
+		// The caret has to survive every writer, or the field starts eating
+		// characters. Loading clears the query and puts the caret at the end.
+		{name: "loading a track resets the caret", mode: ModeLibrary, key: "enter",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "inner")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "" || m.st.QueryCursor != 0 {
+					t.Errorf("query = %q caret = %d after a load, want both cleared",
+						m.st.Query, m.st.QueryCursor)
 				}
 			}},
 
@@ -783,101 +932,139 @@ func TestErrorScreenExitsThroughTheTransport(t *testing.T) {
 	}
 }
 
-// inertBinding is a key/mode pair where pressing the key reaches a handler and
-// nothing the user can see happens.
+// TestFilterIsDrawnWhereItFilters guards the browser's filter field.
 //
-// Each entry is a finding, not an endorsement. They are recorded here so the
-// sweep can report them honestly instead of quietly passing over them, and so
-// that fixing one is a deliberate act: this issue measures, and changing what a
-// key does is a behaviour change that belongs in its own commit with its own
-// justification.
-type inertBinding struct {
-	key  string
-	mode Mode
-	// setup arranges the scene for the press. It presses no keys.
-	setup func(t *testing.T, m *Model, e *sweepEngine)
-	// why says what the key reaches and what the user sees instead.
-	why string
-	// where is the handler responsible, for the report.
-	where string
+// The full browser used to filter on a query it never rendered: the user typed
+// a query, the list narrowed, and there was nowhere on screen showing what they
+// had typed -- so backspacing a typo was guesswork, and so was the caret that
+// now moves through it. The track pane's header row carries the field, which is
+// the same trade the quick-load overlay makes.
+func TestFilterIsDrawnWhereItFilters(t *testing.T) {
+	m, _ := sweepModel(t)
+	m.st.Mode = ModeLibrary
+
+	// Nothing typed and no search pane: the column titles, exactly as before.
+	if out := m.RenderAt(160, 30); !strings.Contains(out, "TITLE") {
+		t.Errorf("an unfiltered browser lost its column titles:\n%s", out)
+	}
+
+	// Tab to the filter pane -- PaneSearch exists so tabbing to it is how a user
+	// finds out they can type -- and the field appears even with nothing typed.
+	press(t, m, "tab")
+	if m.st.LibPane != views.PaneSearch {
+		t.Fatalf("one tab left the pane at %v, want PaneSearch", m.st.LibPane)
+	}
+	out := m.RenderAt(160, 30)
+	if !strings.Contains(out, views.CaretGlyph()) {
+		t.Errorf("the focused filter pane is not drawn:\n%s", out)
+	}
+
+	// And it carries the query and the caret once there is one.
+	typeText(t, m, "inner")
+	press(t, m, "left")
+	out = m.RenderAt(160, 30)
+	if want := "inne" + views.CaretGlyph() + "r"; !strings.Contains(out, want) {
+		t.Errorf("the browser does not draw its filter with the caret where it is; "+
+			"want %q in the frame:\n%s", want, out)
+	}
 }
 
-// inertBindings is the sweep's negative result: every key/mode pair it drove
-// that turned out to do nothing.
-var inertBindings = []inertBinding{
-	{
-		key: "s", mode: ModeOverlay,
-		where: "internal/tui/keys.go:345 (handleBrowserKey, case \"s\")",
-		why: "toggles ShowSort, but views.OverlayRows draws no sort menu -- only " +
-			"RenderLibrary does -- so nothing on screen moves. It also arms the " +
-			"sort branch above it, so a second key is swallowed: see the enter " +
-			"entry below. This is the same class as the quick-load tab bug fixed " +
-			"in f3c11a5. The key reached a handler that is wrong for the mode.",
-	},
-	{
-		key: "enter", mode: ModeOverlay,
-		setup: func(_ *testing.T, m *Model, _ *sweepEngine) {
-			m.st.ShowSort = true // what pressing "s" above leaves behind
+// TestCaretStaysInsideItsField is the invariant every writer depends on.
+//
+// A caret left pointing past the end of a field does not error: it silently
+// swallows the next few keystrokes, one per press, which looks exactly like a
+// keyboard that has stopped working. Every path that replaces a field goes
+// through a setter that re-clamps it, and this is the check that they do.
+func TestCaretStaysInsideItsField(t *testing.T) {
+	m, _ := sweepModel(t)
+	m.st.Mode = ModeLibrary
+
+	// Shorter and shorter, to try to leave the caret behind the text.
+	for _, key := range []string{"backspace", "backspace", "backspace", "backspace",
+		"backspace", "backspace", "backspace", "backspace"} {
+		press(t, m, key)
+		if m.st.QueryCursor != len([]rune(m.st.Query)) {
+			t.Fatalf("after %d backspaces: query = %q, caret = %d, want %d",
+				len(m.st.Query), m.st.Query, m.st.QueryCursor, len(m.st.Query))
+		}
+	}
+
+	// A load clears the filter; the caret must go with it.
+	typeText(t, m, "inner")
+	press(t, m, "left")
+	press(t, m, "enter")
+	if m.st.QueryCursor != len([]rune(m.st.Query)) {
+		t.Fatalf("after a load: query = %q, caret = %d", m.st.Query, m.st.QueryCursor)
+	}
+
+	// And so must the settings field.
+	m.st.Mode = ModeSettings
+	typeText(t, m, "/srv/dj")
+	for i := 0; i < 12; i++ {
+		press(t, m, "left")
+	}
+	press(t, m, "ctrl+u")
+	typeText(t, m, "/music")
+	if m.st.SettingCursor != len([]rune(m.st.SettingInput)) {
+		t.Fatalf("after ctrl+u and retyping: path = %q, caret = %d",
+			m.st.SettingInput, m.st.SettingCursor)
+	}
+}
+
+// TestEveryFieldIsDrawnWithItsCaretWhereItIs checks all three fields at once:
+// the browser's filter, the quick-load overlay's filter, and the settings path.
+//
+// A caret the user cannot see is the same failure as no caret, from the other
+// direction: the field exists, the keys work, and the person holding the
+// keyboard is editing text they cannot read.
+func TestEveryFieldIsDrawnWithItsCaretWhereItIs(t *testing.T) {
+	glyph := views.CaretGlyph()
+	for _, c := range []struct {
+		mode  Mode
+		setup func(t *testing.T, m *Model)
+		// lefts is how many times LEFT is pressed after the setup. It is how the
+		// caret gets to the positions a "if at > 0" implementation forgets: the
+		// start of the field, and a field walked past its own end.
+		lefts int
+		want  string
+	}{
+		{
+			mode:  ModeLibrary,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 1, want: "inne" + glyph + "r",
 		},
-		where: "internal/tui/keys.go:264 (handleBrowserKey, sort branch, case \"enter\")",
-		why: "with ShowSort set, ENTER picks a sort instead of loading a track, " +
-			"and views.OverlayRows sorts nothing, so the chosen sort does not " +
-			"change the overlay either. Pressing " + "\"s\" then \"enter\" in the " +
-			"quick-load overlay loads nothing at all.",
-	},
-	{
-		key: "right", mode: ModeLibrary,
-		where: "internal/tui/keys.go:326 (handleBrowserKey, case \"right\")",
-		why: "consumed and discarded. There is no right-arrow behaviour in the " +
-			"browser and no right-arrow binding in DefaultKeys, so falling through " +
-			"would reach Resolve(\"right\") and find nothing. Swallowing it is " +
-			"harmless, and inert.",
-	},
-	{
-		key: "right", mode: ModeOverlay,
-		where: "internal/tui/keys.go:326 (handleBrowserKey, case \"right\")",
-		why:   "the same dead case as the browser: consumed and discarded.",
-	},
-}
-
-// TestKnownInertBindings pins the findings above.
-//
-// It asserts that each press really does leave the rendered frame alone and
-// sends nothing to the engine, so the sweep can report them without pretending
-// they work. A state field changing is not enough: ShowSort flips and the user
-// sees nothing, which is the whole point.
-//
-// When one of these is fixed this test fails, and that is what it is for: the
-// fix should delete the entry and add an assertion to perModeCases.
-func TestKnownInertBindings(t *testing.T) {
-	for _, in := range inertBindings {
-		t.Run(in.key+" in "+modeName(in.mode), func(t *testing.T) {
-			m, e := sweepModel(t)
-			m.st.Mode = in.mode
-			if in.setup != nil {
-				in.setup(t, m, e)
-			}
-			frame := m.RenderAt(160, 30)
-			actions := len(e.applied)
-			loaded := len(e.loaded)
-
-			press(t, m, in.key)
-
-			if got := m.RenderAt(160, 30); got != frame {
-				t.Errorf("%q in %s changed the frame, so it is no longer inert; "+
-					"delete the entry and assert what it now does", in.key, modeName(in.mode))
-			}
-			if len(e.applied) != actions {
-				t.Errorf("%q in %s reached the engine (%v), so it is no longer inert",
-					in.key, modeName(in.mode), e.applied[actions:])
-			}
-			if len(e.loaded) != loaded {
-				t.Errorf("%q in %s loaded %v, so it is no longer inert",
-					in.key, modeName(in.mode), e.loaded[loaded:])
-			}
-			t.Logf("INERT: %q in %s does nothing visible (%s): %s",
-				in.key, modeName(in.mode), in.where, in.why)
-		})
+		{
+			mode:  ModeOverlay,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 1, want: "inne" + glyph + "r",
+		},
+		{
+			mode:  ModeSettings,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "/srv/dj") },
+			lefts: 2, want: "/srv/" + glyph + "dj",
+		},
+		{
+			mode:  ModeLibrary,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 9, want: glyph + "inner",
+		},
+		{
+			mode:  ModeOverlay,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 0, want: "inner" + glyph,
+		},
+	} {
+		m, _ := sweepModel(t)
+		m.st.Mode = c.mode
+		c.setup(t, m)
+		for i := 0; i < c.lefts; i++ {
+			press(t, m, "left")
+		}
+		out := m.RenderAt(160, 30)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: the field is not drawn with its caret where it is; want %q:\n%s",
+				modeName(c.mode), c.want, out)
+		}
 	}
 }
 
