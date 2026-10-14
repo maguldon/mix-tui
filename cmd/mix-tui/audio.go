@@ -60,7 +60,7 @@ type audioSession struct {
 // leaves the session inactive, so the caller can retry later.
 func (s *audioSession) start(ctx context.Context) error {
 	s.mu.Lock()
-	if s.closed || s.Active() {
+	if s.closed || s.activeLocked() {
 		s.mu.Unlock()
 		return nil
 	}
@@ -161,6 +161,21 @@ func (s *audioSession) retry(ctx context.Context) {
 func (s *audioSession) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.activeLocked()
+}
+
+// activeLocked is Active's predicate, for callers that already hold s.mu.
+//
+// It exists because start() needs this test while holding the lock, and calling
+// Active() there deadlocked: sync.Mutex is not reentrant, so the second Lock
+// blocks forever and the application hangs at startup before the interface is
+// ever drawn -- with no output, no banner, and no error. Every run with audio
+// enabled and no device yet present did this, which is exactly the case the
+// background retry exists to handle.
+//
+// The fix is a helper rather than an inlined comparison so "active" cannot mean
+// one thing to a locking caller and another to a non-locking one.
+func (s *audioSession) activeLocked() bool {
 	return s.out != nil && s.pump != nil
 }
 
