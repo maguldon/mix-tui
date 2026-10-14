@@ -68,6 +68,9 @@ func (m *Model) handleKey(k string) tea.Cmd {
 		m.st.Mode = ModeMix
 		return nil
 	case "tab":
+		if !deckFocusVisible(m.st.Mode) {
+			return nil
+		}
 		m.moveFocus(1)
 		return nil
 	case "shift+tab":
@@ -76,6 +79,9 @@ func (m *Model) handleKey(k string) tea.Cmd {
 		// focus was unreachable -- the same class of bug as SHIFT+ENTER, missed
 		// for the same reason: the test called handleKey with a string the
 		// transport cannot produce.
+		if !deckFocusVisible(m.st.Mode) {
+			return nil
+		}
 		m.moveFocus(-1)
 		return nil
 	case "?":
@@ -228,6 +234,9 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 
 	case "backspace":
 		m.st.SettingInput, m.st.SettingCursor = deleteBefore(m.st.SettingInput, m.st.SettingCursor)
+		return nil, true
+	case "delete":
+		m.st.SettingInput, m.st.SettingCursor = deleteAfter(m.st.SettingInput, m.st.SettingCursor)
 		return nil, true
 	case "left":
 		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, -1)
@@ -398,6 +407,14 @@ func (m *Model) handleBrowserKey(name string) bool {
 	case "backspace":
 		m.st.Query, m.st.QueryCursor = deleteBefore(m.st.Query, m.st.QueryCursor)
 		return true
+	case "delete":
+		// Forward delete. Its absence was not a missing convenience: with the
+		// caret at the start of the filter -- where it lands every time the
+		// browser or the overlay is opened -- there was no key that could remove
+		// the character under it. Every correction began with stepping right and
+		// backspacing.
+		m.st.Query, m.st.QueryCursor = deleteAfter(m.st.Query, m.st.QueryCursor)
+		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
 	// browser previously had no way to narrow a track list at all.
@@ -555,6 +572,30 @@ func (m *Model) moveFocus(delta int) {
 		return
 	}
 	m.st.Focus = ((m.st.Focus+delta)%n + n) % n
+}
+
+// deckFocusVisible reports whether a mode draws the decks, so that moving deck
+// focus is something the user can see.
+//
+// TAB is handled before every config binding, so that a mistyped mapping cannot
+// lock the user out of a screen. That rule is right and stays. But it also means
+// TAB reached help, debug and settings, which replace the deck view entirely:
+// there it moved a focus ring that is on no part of the screen, on three of six
+// modes, with nothing in any footer saying so. A focus change the user cannot
+// see is a focus change that did not happen, so the key is inert there.
+//
+// This is the same call nudge() makes for the arrows, for the same reason, and
+// the browser is covered by the default because handleBrowserKey consumes TAB
+// there first -- the full browser has panes to focus, and the overlay does not.
+func deckFocusVisible(m Mode) bool {
+	switch m {
+	case ModeMix, ModeOverlay:
+		// The mix view is the decks. The overlay is drawn over them, which is
+		// why TAB is the documented way to aim ENTER at the other deck.
+		return true
+	default:
+		return false
+	}
 }
 
 // nudge moves the crossfader by one step in the mix view.

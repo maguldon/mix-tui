@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +134,86 @@ func TestOverlayTabThenEnterLoadsToTheOtherDeck(t *testing.T) {
 	}
 	if m.st.Focus != 1 {
 		t.Errorf("focus = %d, want 1; the load should have gone to the other deck", m.st.Focus)
+	}
+}
+
+// TestOverlayDrawsItsKeyHints is the overlay's whole reason for existing as a
+// separate mode.
+//
+// footerVisible returns false for it -- correctly, because the box is composited
+// over the deck view and a footer row would overwrite rendered rows rather than
+// sit below them -- and modeFooter carried a correct and complete line for it
+// anyway. Nothing rendered that line, so the one screen where five keys are in
+// play, four of them meaning something else two screens away, was the only one
+// where every key had to be known from memory.
+func TestOverlayDrawsItsKeyHints(t *testing.T) {
+	m, _, _ := overlayRig(t)
+	press(t, m, "l")
+	typeText(t, m, "a")
+	if m.st.Mode != ModeOverlay {
+		t.Fatalf("the overlay is not open (mode %v)", m.st.Mode)
+	}
+
+	frame := m.RenderAt(120, 40)
+	lines := splitLines(frame)
+	want := modeFooter(ModeOverlay)
+	hint := -1
+	title := -1
+	for i, l := range lines {
+		if hint < 0 && strings.Contains(l, want) {
+			hint = i
+		}
+		if title < 0 && strings.Contains(l, "LOAD TRACK") {
+			title = i
+		}
+	}
+	if hint < 0 {
+		t.Fatalf("the overlay draws no key hints; want %q in:\n%s", want, frame)
+	}
+	if title < 0 {
+		t.Fatalf("the box did not render:\n%s", frame)
+	}
+	// Inside the box, not in a row the compositor happens to leave alone: the
+	// hint lands below the title and above the box's closing rule.
+	if hint <= title {
+		t.Errorf("the hints are drawn outside the box, at row %d for a title at %d:\n%s",
+			hint, title, frame)
+	}
+	if strings.Contains(lines[hint-1], "│") {
+		t.Errorf("the hint row is a deck row rather than one of the box's:\n%s", frame)
+	}
+
+	// And the decks are still there, which is the whole reason the hint goes
+	// inside the box: the overlay is over the deck view, not instead of it, and
+	// a footer row would have overwritten exactly these.
+	below := 0
+	for _, l := range lines[hint+2:] { // past the hint and the closing rule
+		if strings.Contains(l, "│") {
+			below++
+		}
+	}
+	if below == 0 {
+		t.Errorf("the box left no deck rows below it; it was replaced, not overlaid:\n%s", frame)
+	}
+}
+
+// TestOverlayHintsSurviveANarrowTerminal. At the width the issue was filed at --
+// 70 columns -- the box is 70 wide and the key line is 63. A hint that is
+// truncated away on a narrow screen would leave the least experienced user with
+// the least information, which is backwards.
+func TestOverlayHintsSurviveANarrowTerminal(t *testing.T) {
+	m, _, _ := overlayRig(t)
+	press(t, m, "l")
+	typeText(t, m, "a")
+
+	for _, w := range []int{70, 80, 100, 120} {
+		frame := m.RenderAt(w, 24)
+		if want := modeFooter(ModeOverlay); !strings.Contains(frame, want) {
+			t.Errorf("w=%d: the overlay lost its key hints:\n%s", w, frame)
+		}
+		if n := len(splitLines(frame)); n != 24 {
+			t.Errorf("w=%d: %d rows, want 24", w, n)
+		}
 	}
 }
 

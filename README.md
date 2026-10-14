@@ -231,7 +231,7 @@ of the screen you are on with no way back and no error.
 
 | Key | Action |
 |---|---|
-| `tab` / `shift+tab` | Move deck focus (pane focus inside the library, deck focus in the overlay) |
+| `tab` / `shift+tab` | Move deck focus, where the decks are on screen (deck focus in the overlay, pane focus inside the library) |
 | `v` | Cycle layout: A → B → C → D |
 | `z` / `Z` | Toggle the focused deck's zoomed waveform / cycle zoom bar count |
 | `↑` `↓` | Nudge the crossfader |
@@ -255,9 +255,9 @@ Remappable deck controls:
 | `r` | Roll, 1 beat (toggles) |
 | `m` | Cue/program mix · `-` `=` master gain |
 
-In the library: `↑↓` select, `⏎` load to the focused deck, `s` sort, `d` reverse, and
-any other printable key filters the list. Press `?` in the application for the
-live list.
+In the library: `↑↓` select, `←→` move the caret in the filter, `⌫` / `⌦` delete
+around it, `⏎` load to the focused deck, `s` sort, `d` reverse, and any other
+printable key filters the list. Press `?` in the application for the live list.
 
 To load to the **other** deck, move deck focus first and then press `⏎`:
 `tab` in the mix view, or `tab` inside the quick-load overlay, which also moves
@@ -277,7 +277,9 @@ cost a binding that looked implemented:
 - **`tab` means different things in different modes.** In the mix view and the
   quick-load overlay it moves *deck* focus. In the full library browser it
   cycles *pane* focus, because that view really does render crates, tracks and
-  a filter field.
+  a filter field. In help, debug and settings — which draw no decks — it does
+  nothing at all: a focus change you cannot see is a focus change that did not
+  happen.
 - Keys that mean navigation are checked before your config bindings and cannot
   be rebound. That is deliberate — a mistyped mapping must not be able to
   shadow `esc` — and it is why `tab`, `l`, `S` and `?` are not remappable.
