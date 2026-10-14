@@ -277,7 +277,7 @@ Remappable deck controls:
 | Key | Action |
 |---|---|
 | `space` | Play / pause the focused deck |
-| `c` | Cue (stop and return) |
+| `c` | Cue: stops the deck, leaving the playhead where it is |
 | `[` `]` | Pitch down / up |
 | `s` | Sync toggle · `q` quantize to nearest beat |
 | `1`–`8` | Set / jump hotcue slots 1–4 |
@@ -288,8 +288,10 @@ Remappable deck controls:
 | `m` | Cue/program mix · `-` `=` master gain |
 
 In the library: `↑↓` select, `←→` move the caret in the filter, `⌫` / `⌦` delete
-around it, `⏎` load to the focused deck, `s` sort, `d` reverse, and any other
-printable key filters the list. Press `?` in the application for the live list.
+around it, `⏎` load to the focused deck, `s` sort — and inside that menu `d` reverses it — and any other
+printable key filters the list, `d` included: inside the filter it is a letter,
+which is why reversing the sort lives inside the sort menu rather than on a bare
+`d`. Press `?` in the application for the live list.
 
 To load to the **other** deck, move deck focus first and then press `⏎`:
 `tab` in the mix view, or `tab` inside the quick-load overlay, which also moves

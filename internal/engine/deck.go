@@ -469,13 +469,22 @@ func (d *Deck) SetEQBand(band int, gain float64) {
 }
 
 // SetFilter sets the DJ filter. cutoffHz is clamped to a usable range.
+//
+// Everything goes through the command queue. It used to post the filter KIND and
+// then call d.filter.SetParams directly -- so half the call arrived on the
+// render goroutine and half arrived right now, on whichever goroutine the caller
+// happened to be on. SetFilterCutoff and SetFilterResonance both post for
+// exactly this reason. Nothing in production called it, which is the only reason
+// it had never shown up as a race; the moment anything wired a MIDI CC to it,
+// the detector would have found it.
 func (d *Deck) SetFilter(highpass bool, cutoffHz, resonance float64) {
 	if highpass {
-		d.SetFilterKind(true)
+		d.post(command{kind: cmdFilterKind, value: 1})
 	} else {
-		d.SetFilterKind(false)
+		d.post(command{kind: cmdFilterKind, value: -1})
 	}
-	d.filter.SetParams(cutoffHz, resonance)
+	d.post(command{kind: cmdFilterCutoffHz, value: cutoffHz})
+	d.post(command{kind: cmdFilterReso, value: resonance})
 }
 
 // FilterHighpass reports whether the filter is sweeping highs (true) or lows.

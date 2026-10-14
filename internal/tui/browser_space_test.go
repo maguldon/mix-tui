@@ -126,3 +126,43 @@ func TestMixViewStillBindsSpace(t *testing.T) {
 }
 
 var _ = config.Defaults
+
+// TestDIsALetterInTheBrowserFilter pins a decision that looks like a bug.
+//
+// "d" reverses the sort, but only while the sort menu is open. Everywhere else it
+// is a letter and goes into the filter. Binding it on its own would mean the
+// documented way to reverse a list silently became a filter for tracks with a
+// "d" in the title: the user would get a shorter list and no reversal. Almost
+// every search contains a d.
+func TestDIsALetterInTheBrowserFilter(t *testing.T) {
+	for _, mode := range []Mode{ModeLibrary, ModeOverlay} {
+		m, f := testModel(t)
+		m.st.Mode = mode
+
+		for _, r := range "acid dub" {
+			m.handleKey(string(r))
+		}
+
+		if got, want := m.st.Query, "acid dub"; got != want {
+			t.Errorf("mode %v: query = %q, want %q; a bare d must be a letter here", mode, got, want)
+		}
+		if m.st.SortDesc {
+			t.Errorf("mode %v: typing reversed the sort", mode)
+		}
+		if len(f.applied) != 0 {
+			t.Errorf("mode %v: typing applied %d action(s)", mode, len(f.applied))
+		}
+	}
+
+	// With the menu open, d reverses and does not type.
+	m, _ := libraryModel(t)
+	m.st.Mode = ModeLibrary
+	m.st.ShowSort = true
+	m.handleKey("d")
+	if !m.st.SortDesc {
+		t.Error("d did not reverse the sort inside the sort menu")
+	}
+	if m.st.Query != "" {
+		t.Errorf("d typed %q into the filter while the sort menu was open", m.st.Query)
+	}
+}

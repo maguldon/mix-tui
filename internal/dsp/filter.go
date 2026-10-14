@@ -137,3 +137,21 @@ func (f *Filter) Process(in, out Stereo) {
 // discontinuity, so resuming playback there is as smooth as uninterrupted
 // playback. See biquad.prime.
 func (f *Filter) Prime(history Stereo) { f.b.prime(history) }
+
+// NormalizedCutoff converts a cutoff in Hz to the knob position that produces
+// it, the inverse of the logarithmic sweep SetCutoffNormalized applies.
+//
+// Needed because the knob is logarithmic and SetFilter's public API is in Hz.
+// Feeding Hz into the normalized setter sounds almost right and is not: 1000Hz
+// arrives as knob position 0.5, which is a filter several hundred Hz away, and
+// the error is largest in the middle of the range where the knob spends most of
+// its travel.
+func NormalizedCutoff(hz float64) float64 {
+	if math.IsNaN(hz) || hz <= minCutoffHz {
+		return 0
+	}
+	if hz >= maxCutoffHz {
+		return 1
+	}
+	return math.Log(hz/minCutoffHz) / math.Log(maxCutoffHz/minCutoffHz)
+}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/maguldon/mix-tui/internal/analyze"
 	"github.com/maguldon/mix-tui/internal/audio"
+	"github.com/maguldon/mix-tui/internal/dsp"
 )
 
 // The render goroutine is the ONLY writer of a Deck's audio state. Apply runs
@@ -58,6 +59,7 @@ const (
 	cmdFilterCutoff
 	cmdFilterReso
 	cmdFilterKind
+	cmdFilterCutoffHz
 	// cmdLoad replaces the deck's audio. It travels through the queue like every
 	// other deck mutation because Load touches render-owned state (the
 	// resampler, the filter, the playhead). Calling it from the TUI goroutine
@@ -177,6 +179,14 @@ func (d *Deck) apply(c command) {
 	case cmdFilterCutoff:
 		d.filterNorm = c.value
 		d.filter.SetCutoffNormalized(c.value)
+	case cmdFilterCutoffHz:
+		// The Hz-spelled path, for SetFilter's public API. The normalized knob
+		// path above is what the UI and MIDI send, because that is what a knob
+		// has; SetFilter takes Hz, which is not the same thing -- the knob is
+		// logarithmic, so passing Hz straight to SetCutoffNormalized would
+		// retune every filter by a curve.
+		d.filterNorm = dsp.NormalizedCutoff(c.value)
+		d.filter.SetParams(c.value, d.filter.Resonance())
 	case cmdFilterReso:
 		d.filter.SetResonance(c.value)
 	case cmdFilterKind:

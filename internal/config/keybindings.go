@@ -283,6 +283,26 @@ var uiKeys = []struct{ key, desc string }{
 	{"`", "debug overlay"},
 	{"escape", "close the browser, overlay or settings"},
 	{"Z", "zoom level"},
+
+	// Navigation and text editing.
+	//
+	// These are handled by the hardcoded switches in the TUI and live in neither
+	// DefaultKeys nor uiKeys, so the help screen -- which the README points at as
+	// "the live list" -- listed none of them. A user reading the help could not
+	// discover that arrows moved a selection, or that enter loaded a track.
+	{"up", "nudge back / move selection up"},
+	{"down", "nudge forward / move selection down"},
+	{"left", "move the caret left"},
+	{"right", "move the caret right"},
+	{"enter", "load the highlighted track to the focused deck"},
+	{"backspace", "delete before the caret"},
+	{"delete", "delete under the caret"},
+	{"home", "caret to the start"},
+	{"end", "caret to the end"},
+	{"ctrl+u", "clear the field"},
+	{"ctrl+n", "new crate"},
+	{"ctrl+a", "add the highlighted track to the selected crate"},
+	{"ctrl+d", "remove the highlighted track from the selected crate"},
 }
 
 // DescribeLines returns the help lines as "key  description", sorted.
