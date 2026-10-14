@@ -51,13 +51,17 @@ Known gaps, so nothing here is a surprise:
   key types into the filter, so a letter-bound action could never fire from the
   browser. Rule-based crates (smart playlists by folder, BPM range or date) are
   deferred; the schema leaves room for them.
-- **Sample rate is negotiated once, at startup.** `mix-tui` asks for the rate
-  your config asks for (44100 by default) and then builds the engine at whatever
-  the device actually granted, warning when the two disagree. It is not
-  renegotiated afterwards: a device that appears later — which it now can, since
-  audio retries in the background — is rendered at the engine's rate rather than
-  rebuilding the engine. `mixplay`, which has no interface to rebuild, reports
-  `RATE MISMATCH` under `-stats` and carries on.
+- **The engine's rate is never rebuilt, by design.** `mix-tui` declares one rate
+  to PipeWire, builds the engine at that same rate, and lets PipeWire do the one
+  conversion to whatever the device grants. Rebuilding the engine to match would
+  mean a second resampler and throwing away every loaded track, loop and cue — so
+  it is not done, and a device that appears later is handled by the same path as
+  one present at startup. What was genuinely missing is *knowing*: the app now
+  shows the declared and granted rates in the debug screen and warns when they
+  differ, which is the only thing that can say whether the mix is running at the
+  right speed. Whether PipeWire absorbs the difference or plays everything at the
+  wrong pitch depends on its converter, and this process cannot observe which, so
+  the warning states the disagreement rather than judging it.
 - **No controller has been validated against real hardware.** Nothing is
   installed into your config directory; the only mapping in the tree is
   `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests

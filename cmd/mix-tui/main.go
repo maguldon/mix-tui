@@ -88,9 +88,20 @@ func run(args appArgs) error {
 	var session *audioSession
 	if !args.noAudio {
 		session = startupAudio(ctx, &audioCfg)
-		if session.rate() > 0 && rate != 0 && session.rate() != rate {
+		// Compare against what the DEVICE granted, not against what we declared.
+		//
+		// session.rate() is the declared rate -- the same number audioCfg asked
+		// for -- so this condition could not fire for the disagreement it names,
+		// and the only inputs that reached it were a negative or zero config
+		// value. It would have printed "device runs at 44100 Hz, config asked
+		// for 0", which is a true statement about nothing.
+		//
+		// The granted rate arrives asynchronously, so at startup there may not be
+		// one yet. That is not an error: PipeWire resamples, and the debug
+		// overlay reports the granted rate once the daemon states it.
+		if r := session.negotiatedRate(); r > 0 && rate != 0 && r != rate {
 			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
-				session.rate(), rate)
+				r, rate)
 		}
 		if r := session.rate(); r > 0 {
 			rate = r

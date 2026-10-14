@@ -128,3 +128,35 @@ func TestHelpShowsWorstRender(t *testing.T) {
 		t.Errorf("worst render time not shown:\n%s", out)
 	}
 }
+
+// TestTheDebugOverlayReportsTheGrantedSampleRate covers the one thing that can
+// say whether a track is playing at the right speed.
+//
+// mix-tui had no way to see the granted rate at all. It printed a startup
+// warning comparing its configured rate against the rate it declared -- the same
+// number by construction -- so the warning could not fire for the disagreement it
+// was written to report. The stream tracked both figures all along; only mixplay
+// read them.
+func TestTheDebugOverlayReportsTheGrantedSampleRate(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		AudioExpected: true, DeclaredRate: 48000, NegotiatedRate: 44100,
+		RateMismatch: true, MainCallbacks: 10, CueCallbacks: 10,
+	}))
+	if !strings.Contains(out, "48000") || !strings.Contains(out, "44100") {
+		t.Errorf("the overlay does not show declared vs granted:\n%s", out)
+	}
+	if !strings.Contains(out, "right speed") {
+		t.Errorf("a rate mismatch raises no warning:\n%s", out)
+	}
+}
+
+// TestNoRateWarningWithoutAMismatch keeps a matching rate quiet.
+func TestNoRateWarningWithoutAMismatch(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		AudioExpected: true, DeclaredRate: 44100, NegotiatedRate: 44100,
+		MainCallbacks: 10, CueCallbacks: 10,
+	}))
+	if strings.Contains(out, "right speed") {
+		t.Errorf("a matching rate warns anyway:\n%s", out)
+	}
+}

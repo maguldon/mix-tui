@@ -35,6 +35,21 @@ type DebugStats struct {
 	// AudioExpected reports that an audio device was actually opened. The
 	// "no callbacks" warning is only meaningful when it was.
 	AudioExpected bool
+	// DeclaredRate is the rate the stream asked for and NegotiatedRate the one
+	// the daemon granted, or 0 when it has not said.
+	//
+	// These are the only two numbers that can say whether a track is playing at
+	// the right speed. mix-tui had neither: it compared its configured rate
+	// against the rate it declared, which is the same number by construction, so
+	// the startup warning it prints could not fire for the disagreement it was
+	// written to report.
+	DeclaredRate   int
+	NegotiatedRate int
+	// RateMismatch is true when the daemon granted something other than the
+	// declared rate. Whether that resamples or plays everything at the wrong
+	// speed depends on PipeWire's converter, which is not something the app can
+	// assume -- so it is surfaced rather than judged.
+	RateMismatch bool
 }
 
 // knownMIDICategories are always listed, even at zero.
@@ -72,6 +87,23 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	}
 	if stats.Underruns > 0 {
 		lines = append(lines, pad(warnStyle.Render(fmt.Sprintf("! %d underrun(s)", stats.Underruns)), w))
+	}
+
+	// What the device is actually running at, next to what was asked for.
+	if stats.DeclaredRate > 0 {
+		got := "--"
+		if stats.NegotiatedRate > 0 {
+			got = fmt.Sprintf("%d", stats.NegotiatedRate)
+		}
+		lines = append(lines, kv("sample rate", fmt.Sprintf("%d (device %s)",
+			stats.DeclaredRate, got), w)...)
+	}
+	if stats.RateMismatch {
+		// Not phrased as a verdict. Whether PipeWire's converter absorbs the
+		// difference or every track plays at the wrong speed is not something
+		// this process can observe -- it only knows the two numbers differ.
+		lines = append(lines, pad(warnStyle.Render(
+			"! device granted a different rate than declared; check the mix is at the right speed"), w))
 	}
 
 	// MIDI health.

@@ -158,6 +158,20 @@ func (s *audioSession) Active() bool {
 	return s.out != nil && s.pump != nil
 }
 
+// negotiatedRate is the rate the daemon actually granted, or 0 when it has not
+// said yet or there is no device. This is the only number that can disagree with
+// what was asked for; the declared rate cannot, because it is what was asked for.
+func (s *audioSession) negotiatedRate() int {
+	s.mu.Lock()
+	out := s.out
+	s.mu.Unlock()
+	if out == nil {
+		return 0
+	}
+	main, _ := out.Stats()
+	return main.NegotiatedRate
+}
+
 // Reason is the last failure, empty when audio is running.
 func (s *audioSession) Reason() string {
 	s.mu.Lock()
@@ -178,6 +192,9 @@ func (s *audioSession) Stats() views.DebugStats {
 	ps := pump.Stats()
 	return views.DebugStats{
 		AudioExpected:  true,
+		DeclaredRate:   out.SampleRate(),
+		NegotiatedRate: mainStats.NegotiatedRate,
+		RateMismatch:   mainStats.RateMismatch || cueStats.RateMismatch,
 		Underruns:      mainStats.Starves + cueStats.Starves,
 		MainCallbacks:  mainStats.Callbacks,
 		CueCallbacks:   cueStats.Callbacks,
