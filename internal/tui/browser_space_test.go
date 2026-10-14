@@ -57,23 +57,37 @@ func TestBrowserTypingNeverAppliesAnAction(t *testing.T) {
 // TestBrowserNavigationStillWorks guards the other direction: passing the raw
 // key must not break the named navigation keys, which are matched by name and
 // are not single runes.
+//
+// The arrows move the filter's caret and delete nothing, which is the whole
+// point: LEFT used to delete the last character of a query the full browser
+// never drew, so the user lost something they could not see and had not asked
+// to lose.
 func TestBrowserNavigationStillWorks(t *testing.T) {
 	m, _ := testModel(t)
 	m.st.Mode = ModeLibrary
-	m.st.Query = "abc"
+	m.setQuery("abc")
 
-	m.handleKey("left")
-	if got, want := m.st.Query, "ab"; got != want {
-		t.Errorf("left: query = %q, want %q", got, want)
+	press(t, m, "left")
+	if got, want := m.st.QueryCursor, 2; got != want {
+		t.Errorf("left: caret = %d, want %d", got, want)
+	}
+	if got, want := m.st.Query, "abc"; got != want {
+		t.Errorf("left deleted: query = %q, want %q", got, want)
 	}
 
-	m.handleKey("z")
-	if got, want := m.st.Query, "abz"; got != want {
-		t.Errorf("typing 'z': query = %q, want %q", got, want)
+	press(t, m, "left")
+	press(t, m, "right")
+	if got, want := m.st.QueryCursor, 2; got != want {
+		t.Errorf("after left,left,right: caret = %d, want %d", got, want)
 	}
 
-	m.handleKey("backspace")
-	if got, want := m.st.Query, "ab"; got != want {
+	typeText(t, m, "z")
+	if got, want := m.st.Query, "abzc"; got != want {
+		t.Errorf("typing at the caret: query = %q, want %q", got, want)
+	}
+
+	press(t, m, "backspace")
+	if got, want := m.st.Query, "abc"; got != want {
 		t.Errorf("backspace: query = %q, want %q", got, want)
 	}
 }

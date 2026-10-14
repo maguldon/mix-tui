@@ -160,11 +160,33 @@ func (m *Model) handleKey(k string) tea.Cmd {
 // to edit an existing value, and an empty field invites them to retype a path
 // they can already see one line above.
 func (m *Model) openSettings() {
+	root := ""
 	if m.cfg != nil {
-		m.st.SettingInput = m.cfg.UI.LibraryRoot
+		root = m.cfg.UI.LibraryRoot
 	}
+	// The caret lands at the end of the seed, so LEFT walks into the part of the
+	// path most likely to be wrong. Opening at the start would make every edit a
+	// walk to the end first.
+	m.setSettingInput(root)
 	m.st.SettingNote = ""
 	m.st.Mode = ModeSettings
+}
+
+// setQuery replaces the filter and puts the caret at the end of it.
+//
+// Every writer goes through here rather than assigning Query directly. That is
+// the whole failure mode a caret adds to a view that was fine without one: some
+// code path clears the query, the caret is left pointing past the end, and the
+// field silently swallows the next few keystrokes.
+func (m *Model) setQuery(s string) {
+	m.st.Query = s
+	m.st.QueryCursor = len([]rune(s))
+}
+
+// setSettingInput replaces the library-root field and puts its caret at the end.
+func (m *Model) setSettingInput(s string) {
+	m.st.SettingInput = s
+	m.st.SettingCursor = len([]rune(s))
 }
 
 // handleSettingsKey handles the settings view's own keys. It reports whether it
@@ -204,11 +226,17 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 		m.st.ScanBusy = true
 		return m.scanCmd(root), true
 
-	case "backspace", "left":
-		m.st.SettingInput = dropLastRune(m.st.SettingInput)
+	case "backspace":
+		m.st.SettingInput, m.st.SettingCursor = deleteBefore(m.st.SettingInput, m.st.SettingCursor)
+		return nil, true
+	case "left":
+		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, -1)
+		return nil, true
+	case "right":
+		m.st.SettingCursor = moveCaret(m.st.SettingInput, m.st.SettingCursor, 1)
 		return nil, true
 	case "ctrl+u":
-		m.st.SettingInput = ""
+		m.setSettingInput("")
 		return nil, true
 	}
 
@@ -216,7 +244,7 @@ func (m *Model) handleSettingsKey(k string) (tea.Cmd, bool) {
 	// slashes, dots and tildes, and a view that accepted only alphanumerics
 	// would be unusable for the thing it exists to do.
 	if r := []rune(k); len(r) == 1 && r[0] >= ' ' {
-		m.st.SettingInput += k
+		m.st.SettingInput, m.st.SettingCursor = insertRune(m.st.SettingInput, m.st.SettingCursor, r[0])
 		return nil, true
 	}
 	return nil, false
@@ -345,10 +373,13 @@ func (m *Model) handleBrowserKey(name string) bool {
 		m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
 		return true
 	case "left":
-		// The filter has no cursor, so left cannot move one. It is the same
-		// "delete a character" intent as backspace, and it is not paired with a
-		// right arrow that does nothing: see the absent "right" case.
-		m.st.Query = dropLastRune(m.st.Query)
+		// Move the caret. LEFT deleted the last character instead, which in a
+		// field the user could not see -- the full browser never drew its filter
+		// -- destroyed something they had not asked to lose and could not check.
+		m.st.QueryCursor = moveCaret(m.st.Query, m.st.QueryCursor, -1)
+		return true
+	case "right":
+		m.st.QueryCursor = moveCaret(m.st.Query, m.st.QueryCursor, 1)
 		return true
 	case "enter":
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
@@ -365,7 +396,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 		m.loadSelected()
 		return true
 	case "backspace":
-		m.st.Query = dropLastRune(m.st.Query)
+		m.st.Query, m.st.QueryCursor = deleteBefore(m.st.Query, m.st.QueryCursor)
 		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
@@ -374,7 +405,7 @@ func (m *Model) handleBrowserKey(name string) bool {
 	// r[0] >= ' ' admits the space bar, which is what the user wants when they
 	// type a multi-word query like "beat that". Control runes fall below ' '.
 	if r := []rune(name); len(r) == 1 && r[0] >= ' ' {
-		m.st.Query += name
+		m.st.Query, m.st.QueryCursor = insertRune(m.st.Query, m.st.QueryCursor, r[0])
 		return true
 	}
 	return false
@@ -412,7 +443,7 @@ func (m *Model) loadSelectedInto(deck int) {
 	m.st.Focus = deck
 	m.st.Mode = ModeMix
 	m.st.TrackSel = 0
-	m.st.Query = ""
+	m.setQuery("")
 }
 
 // selectedTrack resolves the cursor against the filtered library.
@@ -450,17 +481,6 @@ func (m *Model) trackCount() int {
 		return 0
 	}
 	return len(library.Search(m.lib.Tracks(), m.st.Query))
-}
-
-// dropLastRune removes one rune, not one byte. Deleting a byte from a
-// multi-byte query leaves invalid UTF-8, which renders as U+FFFD at one column
-// per byte.
-func dropLastRune(s string) string {
-	r := []rune(s)
-	if len(r) == 0 {
-		return ""
-	}
-	return string(r[:len(r)-1])
 }
 
 // applyAction applies a resolved Action, updating view state for the controls
@@ -582,15 +602,15 @@ func zoomIndexOf(bars int) int {
 func modeFooter(m Mode) string {
 	switch m {
 	case ModeLibrary:
-		return "↑↓ select   ⏎ load focused deck   tab pane   s sort   esc back"
+		return "↑↓ select   ⏎ load focused deck   tab pane   ←→ filter   s sort   esc back"
 	case ModeHelp:
 		return "esc back"
 	case ModeDebug:
 		return "` close   esc back"
 	case ModeOverlay:
-		return "type to filter   tab other deck   ⏎ load   esc cancel"
+		return "type to filter   ←→ edit   tab other deck   ⏎ load   esc cancel"
 	case ModeSettings:
-		return "type a path   ⏎ scan and save   esc cancel"
+		return "type a path   ←→ edit   ⏎ scan and save   esc cancel"
 	default:
 		return "tab focus   v layout   z zoom   / library   l load   S settings   ? help"
 	}

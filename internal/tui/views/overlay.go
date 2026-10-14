@@ -18,8 +18,10 @@ const maxOverlayResults = 8
 // than erasing it: the deck staying visible is the entire point of an overlay
 // (spec §6.5), so a DJ can see what is still playing while choosing a
 // replacement.
-func RenderOverlay(w, h int, ix *library.Index, query string, sel int) string {
-	rows, _ := OverlayRows(w, h, ix, query, sel)
+//
+// cursor is the caret position within query, in runes.
+func RenderOverlay(w, h int, ix *library.Index, query string, cursor, sel int) string {
+	rows, _ := OverlayRows(w, h, ix, query, cursor, sel)
 	return strings.Join(rows, "\n")
 }
 
@@ -32,7 +34,7 @@ func RenderOverlay(w, h int, ix *library.Index, query string, sel int) string {
 //
 // The offset is a plain top-anchored row count: a mid-set box sits over the
 // waveform rather than centred, because the eye is already there.
-func OverlayRows(w, h int, ix *library.Index, query string, sel int) ([]string, int) {
+func OverlayRows(w, h int, ix *library.Index, query string, cursor, sel int) ([]string, int) {
 	if w <= 0 || h <= 0 {
 		return nil, 0
 	}
@@ -51,7 +53,7 @@ func OverlayRows(w, h int, ix *library.Index, query string, sel int) ([]string, 
 	lines := make([]string, 0, boxH)
 
 	lines = append(lines, titleStyle.Render(padTo("LOAD TRACK", inner)))
-	lines = append(lines, labelStyle.Render(padTo("> "+query+"_", inner)))
+	lines = append(lines, labelStyle.Render(padTo(caretField("> ", query, cursor), inner)))
 	lines = append(lines, dimStyle.Render(padTo(strings.Repeat("-", inner), inner)))
 
 	shown := matches
@@ -59,11 +61,11 @@ func OverlayRows(w, h int, ix *library.Index, query string, sel int) ([]string, 
 		shown = shown[:maxOverlayResults]
 	}
 	for i, t := range shown {
-		cursor := "  "
+		marker := "  "
 		if i == sel {
-			cursor = "> "
+			marker = "> "
 		}
-		line := cursor + t.Title
+		line := marker + t.Title
 		if t.Artist != "" {
 			line += "  " + t.Artist
 		}

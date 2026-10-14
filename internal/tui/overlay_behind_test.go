@@ -132,7 +132,7 @@ func TestOverlayRowsFitsInsideTheFrame(t *testing.T) {
 		ix.Add(library.Track{Path: "/x.wav", Title: "T"})
 	}
 	for _, h := range []int{10, 20, 24, 40} {
-		rows, offset := views.OverlayRows(80, h, ix, "", 0)
+		rows, offset := views.OverlayRows(80, h, ix, "", 0, 0)
 		if offset+len(rows) > h {
 			t.Errorf("h=%d: box occupies rows %d..%d, past the frame", h, offset, offset+len(rows)-1)
 		}

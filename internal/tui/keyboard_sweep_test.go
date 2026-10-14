@@ -37,6 +37,11 @@ import (
 // behind screens that do not draw it. A key that reaches a handler and does
 // nothing is invisible to a table of emittable names, which is why the mode half
 // exists at all.
+//
+// It also found a key that did something nobody would have asked for: LEFT
+// deleted the last character of the filter, in a browser that never drew the
+// filter. The filter now has a caret, which is why the editing cases below are
+// about where the caret is rather than about what the key did.
 
 // sweepEngine records the actions the interface sends, and mirrors the one
 // piece of engine state the key path reads back: a deck's hotcue slots.
@@ -699,33 +704,133 @@ func perModeCases() []modeCase {
 				}
 			}},
 
-		// ---- editing: backspace, left and ctrl+u ----
-		{name: "backspace in the browser deletes a query character", mode: ModeLibrary, key: "backspace",
-			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "beat") },
+		// ---- editing: the caret moves, and only backspace deletes ----
+		{name: "left and right move the caret and delete nothing", mode: ModeLibrary, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().Query != "bea" {
-					t.Errorf("query = %q, want %q", m.State().Query, "bea")
+				if m.st.Query != "beat" {
+					t.Errorf("query = %q, want it unchanged; LEFT used to delete the "+
+						"last character of a filter the browser never drew", m.st.Query)
+				}
+				if m.st.QueryCursor != 3 {
+					t.Errorf("caret = %d, want 3 after two LEFTs and a RIGHT", m.st.QueryCursor)
+				}
+			}},
+		{name: "typing inserts at the caret", mode: ModeLibrary, key: "z",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "beazt" {
+					t.Errorf("query = %q, want %q (typed at the caret, not the end)",
+						m.st.Query, "beazt")
+				}
+				if m.st.QueryCursor != 4 {
+					t.Errorf("caret = %d, want 4, just after what was typed", m.st.QueryCursor)
+				}
+			}},
+		{name: "backspace deletes before the caret", mode: ModeLibrary, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "bet" {
+					t.Errorf("query = %q, want %q (the rune before the caret)", m.st.Query, "bet")
+				}
+				if m.st.QueryCursor != 2 {
+					t.Errorf("caret = %d, want 2", m.st.QueryCursor)
+				}
+			}},
+		// Backspacing off the front must be a no-op, not "delete the last one
+		// instead". In the settings screen the field is seeded with the
+		// configured library root, and backspacing through a path the user never
+		// typed would destroy it a character at a time.
+		{name: "backspace at the start of the filter deletes nothing", mode: ModeLibrary, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "beat")
+				for i := 0; i < 6; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "beat" {
+					t.Errorf("query = %q, want it intact", m.st.Query)
+				}
+				if m.st.QueryCursor != 0 {
+					t.Errorf("caret = %d, want 0", m.st.QueryCursor)
+				}
+			}},
+		{name: "backspace at the start of the path field deletes nothing", mode: ModeSettings, key: "backspace",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				for i := 0; i < 10; i++ {
+					press(t, m, "left")
+				}
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "" {
+					t.Errorf("path = %q; backspacing off the front of the seeded "+
+						"library root destroys something the user never typed",
+						m.st.SettingInput)
 				}
 			}},
 		{name: "backspace in the settings field deletes a character", mode: ModeSettings, key: "backspace",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv/dj") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "/srv/d" {
-					t.Errorf("path = %q, want %q", m.State().SettingInput, "/srv/d")
+				if m.st.SettingInput != "/srv/d" {
+					t.Errorf("path = %q, want %q", m.st.SettingInput, "/srv/d")
 				}
 			}},
-		{name: "left in the settings field deletes a character", mode: ModeSettings, key: "left",
+		{name: "left in the settings field moves the caret", mode: ModeSettings, key: "left",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "/sr" {
-					t.Errorf("path = %q, want %q", m.State().SettingInput, "/sr")
+				if m.st.SettingInput != "/srv" {
+					t.Errorf("path = %q, want it unchanged; LEFT must not delete",
+						m.st.SettingInput)
+				}
+				if m.st.SettingCursor != 3 {
+					t.Errorf("caret = %d, want 3", m.st.SettingCursor)
+				}
+			}},
+		{name: "typing into the middle of the path field edits in place", mode: ModeSettings, key: "z",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "/srv")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.SettingInput != "/szrv" {
+					t.Errorf("path = %q, want %q", m.st.SettingInput, "/szrv")
 				}
 			}},
 		{name: "ctrl+u in the settings field clears it", mode: ModeSettings, key: "ctrl+u",
 			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "/srv/dj") },
 			want: func(t *testing.T, m *Model, _ *sweepEngine) {
-				if m.State().SettingInput != "" {
-					t.Errorf("path = %q, want it cleared", m.State().SettingInput)
+				if m.st.SettingInput != "" {
+					t.Errorf("path = %q, want it cleared", m.st.SettingInput)
+				}
+				if m.st.SettingCursor != 0 {
+					t.Errorf("caret = %d, want 0; a cleared field with a caret at 4 "+
+						"swallows the next four keystrokes", m.st.SettingCursor)
+				}
+			}},
+		// The caret has to survive every writer, or the field starts eating
+		// characters. Loading clears the query and puts the caret at the end.
+		{name: "loading a track resets the caret", mode: ModeLibrary, key: "enter",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) {
+				typeText(t, m, "inner")
+				press(t, m, "left")
+				press(t, m, "left")
+			},
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.st.Query != "" || m.st.QueryCursor != 0 {
+					t.Errorf("query = %q caret = %d after a load, want both cleared",
+						m.st.Query, m.st.QueryCursor)
 				}
 			}},
 
@@ -827,38 +932,139 @@ func TestErrorScreenExitsThroughTheTransport(t *testing.T) {
 	}
 }
 
-// TestRightArrowReachesAUserBindingInTheBrowser is the observable difference
-// the dead "right" case made, and the reason removing it is a fix rather than a
-// tidy-up.
+// TestFilterIsDrawnWhereItFilters guards the browser's filter field.
 //
-// The browser swallowed right-arrow before any binding lookup. Nothing in the
-// shipped keymap uses it, so the swallow was invisible -- but a user who mapped
-// "right" to a control got nothing at all. Now the key is simply not claimed,
-// and behaves like every other key the browser has no use for.
-func TestRightArrowReachesAUserBindingInTheBrowser(t *testing.T) {
-	for _, mode := range []Mode{ModeLibrary, ModeOverlay} {
-		t.Run(modeName(mode), func(t *testing.T) {
-			cfg := config.Defaults()
-			cfg.Keys = map[string]config.KeyBinding{
-				"right": {Action: "CueMix", Value: "toggle"},
-			}
-			keys, err := config.NewKeyResolver(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := &sweepEngine{snap: engine.Snapshot{Decks: []engine.DeckState{
-				{Index: 0, Loaded: true, BPM: 128, HasBeatGrid: true},
-			}}}
-			m := New(e, cfg, keys)
-			m.st.Mode = mode
+// The full browser used to filter on a query it never rendered: the user typed
+// a query, the list narrowed, and there was nowhere on screen showing what they
+// had typed -- so backspacing a typo was guesswork, and so was the caret that
+// now moves through it. The track pane's header row carries the field, which is
+// the same trade the quick-load overlay makes.
+func TestFilterIsDrawnWhereItFilters(t *testing.T) {
+	m, _ := sweepModel(t)
+	m.st.Mode = ModeLibrary
 
-			press(t, m, "right")
+	// Nothing typed and no search pane: the column titles, exactly as before.
+	if out := m.RenderAt(160, 30); !strings.Contains(out, "TITLE") {
+		t.Errorf("an unfiltered browser lost its column titles:\n%s", out)
+	}
 
-			if len(e.applied) != 1 || e.applied[0].Kind != engine.MixerCueMix {
-				t.Errorf("a user binding on %q applied %v; the browser swallowed it",
-					"right", e.applied)
-			}
-		})
+	// Tab to the filter pane -- PaneSearch exists so tabbing to it is how a user
+	// finds out they can type -- and the field appears even with nothing typed.
+	press(t, m, "tab")
+	if m.st.LibPane != views.PaneSearch {
+		t.Fatalf("one tab left the pane at %v, want PaneSearch", m.st.LibPane)
+	}
+	out := m.RenderAt(160, 30)
+	if !strings.Contains(out, views.CaretGlyph()) {
+		t.Errorf("the focused filter pane is not drawn:\n%s", out)
+	}
+
+	// And it carries the query and the caret once there is one.
+	typeText(t, m, "inner")
+	press(t, m, "left")
+	out = m.RenderAt(160, 30)
+	if want := "inne" + views.CaretGlyph() + "r"; !strings.Contains(out, want) {
+		t.Errorf("the browser does not draw its filter with the caret where it is; "+
+			"want %q in the frame:\n%s", want, out)
+	}
+}
+
+// TestCaretStaysInsideItsField is the invariant every writer depends on.
+//
+// A caret left pointing past the end of a field does not error: it silently
+// swallows the next few keystrokes, one per press, which looks exactly like a
+// keyboard that has stopped working. Every path that replaces a field goes
+// through a setter that re-clamps it, and this is the check that they do.
+func TestCaretStaysInsideItsField(t *testing.T) {
+	m, _ := sweepModel(t)
+	m.st.Mode = ModeLibrary
+
+	// Shorter and shorter, to try to leave the caret behind the text.
+	for _, key := range []string{"backspace", "backspace", "backspace", "backspace",
+		"backspace", "backspace", "backspace", "backspace"} {
+		press(t, m, key)
+		if m.st.QueryCursor != len([]rune(m.st.Query)) {
+			t.Fatalf("after %d backspaces: query = %q, caret = %d, want %d",
+				len(m.st.Query), m.st.Query, m.st.QueryCursor, len(m.st.Query))
+		}
+	}
+
+	// A load clears the filter; the caret must go with it.
+	typeText(t, m, "inner")
+	press(t, m, "left")
+	press(t, m, "enter")
+	if m.st.QueryCursor != len([]rune(m.st.Query)) {
+		t.Fatalf("after a load: query = %q, caret = %d", m.st.Query, m.st.QueryCursor)
+	}
+
+	// And so must the settings field.
+	m.st.Mode = ModeSettings
+	typeText(t, m, "/srv/dj")
+	for i := 0; i < 12; i++ {
+		press(t, m, "left")
+	}
+	press(t, m, "ctrl+u")
+	typeText(t, m, "/music")
+	if m.st.SettingCursor != len([]rune(m.st.SettingInput)) {
+		t.Fatalf("after ctrl+u and retyping: path = %q, caret = %d",
+			m.st.SettingInput, m.st.SettingCursor)
+	}
+}
+
+// TestEveryFieldIsDrawnWithItsCaretWhereItIs checks all three fields at once:
+// the browser's filter, the quick-load overlay's filter, and the settings path.
+//
+// A caret the user cannot see is the same failure as no caret, from the other
+// direction: the field exists, the keys work, and the person holding the
+// keyboard is editing text they cannot read.
+func TestEveryFieldIsDrawnWithItsCaretWhereItIs(t *testing.T) {
+	glyph := views.CaretGlyph()
+	for _, c := range []struct {
+		mode  Mode
+		setup func(t *testing.T, m *Model)
+		// lefts is how many times LEFT is pressed after the setup. It is how the
+		// caret gets to the positions a "if at > 0" implementation forgets: the
+		// start of the field, and a field walked past its own end.
+		lefts int
+		want  string
+	}{
+		{
+			mode:  ModeLibrary,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 1, want: "inne" + glyph + "r",
+		},
+		{
+			mode:  ModeOverlay,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 1, want: "inne" + glyph + "r",
+		},
+		{
+			mode:  ModeSettings,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "/srv/dj") },
+			lefts: 2, want: "/srv/" + glyph + "dj",
+		},
+		{
+			mode:  ModeLibrary,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 9, want: glyph + "inner",
+		},
+		{
+			mode:  ModeOverlay,
+			setup: func(t *testing.T, m *Model) { typeText(t, m, "inner") },
+			lefts: 0, want: "inner" + glyph,
+		},
+	} {
+		m, _ := sweepModel(t)
+		m.st.Mode = c.mode
+		c.setup(t, m)
+		for i := 0; i < c.lefts; i++ {
+			press(t, m, "left")
+		}
+		out := m.RenderAt(160, 30)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: the field is not drawn with its caret where it is; want %q:\n%s",
+				modeName(c.mode), c.want, out)
+		}
 	}
 }
 

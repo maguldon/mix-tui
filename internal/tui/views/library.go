@@ -95,8 +95,10 @@ type LibraryState struct {
 	CrateSel int
 	TrackSel int
 	Query    string
-	SortBy   library.SortKey
-	SortDesc bool
+	// QueryCursor is the caret position within Query, in runes.
+	QueryCursor int
+	SortBy      library.SortKey
+	SortDesc    bool
 	// ShowSort swaps the detail pane for the sort menu.
 	ShowSort bool
 	Width    int
@@ -156,7 +158,7 @@ func RenderLibrary(w, h int, ix *library.Index, st LibraryState) string {
 // trackRows renders the middle pane.
 func trackRows(tracks []library.Track, st LibraryState, w, rows int) []string {
 	out := make([]string, 0, rows)
-	out = append(out, pad(trackHeader(w, st.Pane == PaneTracks), w))
+	out = append(out, pad(trackHeader(st, w), w))
 	for i := 0; i < rows-1; i++ {
 		idx := i + scrollOffset(st, rows)
 		if idx < 0 || idx >= len(tracks) {
@@ -213,11 +215,29 @@ func colWidths(w int) (title, artist int) {
 // trackHeader labels the columns. The title is marked when this pane has pane
 // focus, matching the crates pane: TAB has to move something the user can see
 // it move, or the third stop in the cycle looks like a dead key.
-func trackHeader(w int, focused bool) string {
+// trackHeader is the middle pane's first row: either the column titles or the
+// filter field.
+//
+// It shows the filter as soon as there is one to show -- when the user has typed
+// something, or when they have tabbed to PaneSearch, which exists precisely so
+// that tabbing to the filter is how a user finds out they can type to it. With
+// neither, it is the column titles, exactly as before.
+//
+// The filter replaces the titles rather than taking a row of its own. A row is a
+// track, and a browser that silently loses one row of its list to draw a box the
+// user only sometimes needs is worse than a header that changes when you start
+// filtering -- which is the same trade the quick-load overlay makes, for the same
+// reason.
+func trackHeader(st LibraryState, w int) string {
+	if st.Pane == PaneSearch || st.Query != "" {
+		// Styled, so the row reads as a field rather than as a second set of
+		// column titles: it holds a caret, and a caret is what makes it a field.
+		return accentStyle.Render(caretField("  ", st.Query, st.QueryCursor))
+	}
 	tw, aw := colWidths(w - cursorW)
 	h := "  " + cell(tw, "TITLE") + " " + cell(aw, "ARTIST") + " " + right("BPM", 7) +
 		" " + right("KEY", keyColWidth) + " " + right("TIME", 6)
-	if focused {
+	if st.Pane == PaneTracks {
 		return accentStyle.Render(padRight(h, w))
 	}
 	return padRight(h, w)

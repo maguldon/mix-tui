@@ -81,8 +81,8 @@ func TestBelowThresholdKeyShowsUndetected(t *testing.T) {
 
 func TestOverlayFiltersAsYouType(t *testing.T) {
 	ix := testIndex()
-	all := RenderOverlay(120, 40, ix, "", 0)
-	few := RenderOverlay(120, 40, ix, "ware", 0)
+	all := RenderOverlay(120, 40, ix, "", 0, 0)
+	few := RenderOverlay(120, 40, ix, "ware", 5, 0)
 	if strings.Count(few, "Inner") != 0 {
 		t.Error("filter did not exclude")
 	}
@@ -104,7 +104,7 @@ func TestOverlayFiltersAsYouType(t *testing.T) {
 // The real assertion lives in TestOverlayKeepsTheDecksVisible, which renders a
 // model. This test covers the box on its own.
 func TestOverlayShowsDeckBehind(t *testing.T) {
-	out := RenderOverlay(120, 40, testIndex(), "", 0)
+	out := RenderOverlay(120, 40, testIndex(), "", 0, 0)
 	if !strings.Contains(out, "LOAD TRACK") {
 		t.Error("overlay frame missing")
 	}
@@ -120,7 +120,7 @@ func TestLibrarySurvivesEmptyIndex(t *testing.T) {
 	if out == "" {
 		t.Error("empty library rendered nothing")
 	}
-	_ = RenderOverlay(120, 40, library.NewIndex(), "zzz", 0)
+	_ = RenderOverlay(120, 40, library.NewIndex(), "zzz", 3, 0)
 }
 
 func TestMatchTrackClampsSelection(t *testing.T) {
@@ -178,7 +178,7 @@ func TestLibraryNeverPanicsAcrossSizes(t *testing.T) {
 	for w := 1; w <= 170; w += 7 {
 		for h := 1; h <= 30; h += 7 {
 			_ = RenderLibrary(w, h, ix, LibraryState{})
-			_ = RenderOverlay(w, h, ix, "q", 0)
+			_ = RenderOverlay(w, h, ix, "q", 1, 0)
 		}
 	}
 }
@@ -188,7 +188,7 @@ func TestLibraryNeverPanicsAcrossSizes(t *testing.T) {
 func TestOverlayClampsSelectionPastResults(t *testing.T) {
 	ix := testIndex()
 	// Only one result matches, but select index 5.
-	if out := RenderOverlay(120, 40, ix, "ware", 5); out == "" {
+	if out := RenderOverlay(120, 40, ix, "ware", 4, 5); out == "" {
 		t.Error("overlay rendered nothing for an out-of-range selection")
 	}
 }
