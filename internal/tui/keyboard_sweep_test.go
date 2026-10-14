@@ -31,10 +31,12 @@ import (
 //	TestEveryShippedBindingIsCovered          -- the closure check: a key that is
 //	                                         not in one of the three is an error.
 //
-// plus TestKnownInertBindings, which records the key/mode pairs the sweep found
-// that reach a handler and do nothing. Those are reported, not fixed: changing
-// what a key does is a behaviour change, and folding it into a test-only commit
-// would make the measurement and the repair indistinguishable in review.
+// It found four keys that reached a handler and did nothing, and they are now
+// assertions in their own right rather than a list: "s" and "enter" in the
+// quick-load overlay, the swallowed right arrow, and the crossfader moving
+// behind screens that do not draw it. A key that reaches a handler and does
+// nothing is invisible to a table of emittable names, which is why the mode half
+// exists at all.
 
 // sweepEngine records the actions the interface sends, and mirrors the one
 // piece of engine state the key path reads back: a deck's hotcue slots.
@@ -142,9 +144,6 @@ var defaultBindings = map[string]binding{
 	"z":      {key: "z", note: "caught by the UI switch before the keymap"},
 	"v":      {key: "v", note: "caught by the UI switch before the keymap"},
 	"/":      {key: "/", note: "caught by the UI switch before the keymap"},
-	// LibraryClose is declared, but the universal ESC exit runs first, so the
-	// binding's own action never fires. ESC still closes the browser.
-	"escape": {key: "escape", mode: ModeLibrary, note: "closed by the universal ESC exit"},
 	"r":      {key: "r", action: engine.LoopRoll},
 
 	"1": {key: "1", action: engine.DeckHotcueSet},
@@ -173,6 +172,11 @@ var defaultBindings = map[string]binding{
 
 // hardcodedUIKeys are the keys internal/tui/keys.go handles before any config
 // lookup. They cannot be rebound, so nothing else records them.
+//
+// "escape" is here and not in config.DefaultKeys(): it was bound to LibraryClose
+// there, and the UI switch below runs first, so the binding was resolved and
+// discarded on every press. A key the config claims but cannot own invites a
+// user to rebind something that will never happen.
 var hardcodedUIKeys = map[string]binding{
 	"tab":       {key: "tab", note: "deck focus in the mix view"},
 	"shift+tab": {key: "shift+tab", note: "deck focus, the other way"},
@@ -294,15 +298,14 @@ func TestEveryShippedBindingIsCovered(t *testing.T) {
 
 	// The other direction: every string a switch matches on has to be a key the
 	// sweep drives, in some mode. Layout names and the input side of bindingName
-	// are not keys. The inert findings count as driven, because
-	// TestKnownInertBindings drives them and records that they do nothing.
+	// are not keys.
 	notAKey := map[string]bool{
 		"A": true, // layout names, state.go layoutFromName
 		"B": true,
 		"C": true,
 		// The input side of bindingName: what bubbletea reports for these. The
-		// cases the translation exists for are "space" and "escape", both in
-		// config.DefaultKeys.
+		// cases the translation exists for are "space" (config.DefaultKeys) and
+		// "escape" (hardcodedUIKeys).
 		" ":   true,
 		"esc": true,
 	}
@@ -316,27 +319,12 @@ func TestEveryShippedBindingIsCovered(t *testing.T) {
 	for _, c := range perModeCases() {
 		covered[c.key] = true
 	}
-	for _, in := range inertBindings {
-		covered[in.key] = true
-	}
 	for name, pos := range matched {
 		if notAKey[name] || covered[name] {
 			continue
 		}
 		t.Errorf("%s: a switch matches %q but no table in the sweep drives it", pos, name)
 	}
-}
-
-// textFieldLeaks are the keys that reach the engine from inside a text field,
-// because a mode-relative handler does not claim them.
-//
-// nudge() guards ModeLibrary, where up/down are the list cursor, but not
-// ModeSettings -- so pressing them while typing a path moves the crossfader
-// behind a screen that does not show it. That is a behaviour decision, not a
-// typo, so it is reported rather than fixed here; TestArrowsBehindTheSettings
-// pins what it currently does so the hole is at least a measured one.
-var textFieldLeaks = map[Mode]map[string]bool{
-	ModeSettings: {"up": true, "down": true},
 }
 
 // TestNoShippedKeyReachesTheEngineFromATextField is the mode sweep applied to
@@ -359,9 +347,8 @@ func TestNoShippedKeyReachesTheEngineFromATextField(t *testing.T) {
 		shipped[name] = true
 	}
 	for _, mode := range []Mode{ModeLibrary, ModeOverlay, ModeSettings} {
-		leaks := textFieldLeaks[mode]
 		for name := range shipped {
-			if name == "ctrl+c" || leaks[name] {
+			if name == "ctrl+c" {
 				continue
 			}
 			t.Run(modeName(mode)+" "+name, func(t *testing.T) {
@@ -377,32 +364,42 @@ func TestNoShippedKeyReachesTheEngineFromATextField(t *testing.T) {
 	}
 }
 
-// TestArrowsBehindTheSettingsScreen pins the one exemption above, so it is a
-// measurement rather than a hole.
+// TestArrowsOnlyActInTheMixView pins where the arrow keys belong.
 //
-// nudge() returns early in ModeLibrary, where the arrows are the list cursor,
-// and does not in ModeSettings. Pressing up or down while typing a library path
-// therefore moves the crossfader, and nothing on the settings screen shows it.
-// Whether that should be inert is a behaviour decision; this issue measures.
-func TestArrowsBehindTheSettingsScreen(t *testing.T) {
-	for _, key := range []string{"up", "down"} {
-		t.Run(key, func(t *testing.T) {
-			m, e := sweepModel(t)
-			m.st.Mode = ModeSettings
-			typeText(t, m, "/srv/dj")
-			press(t, m, key)
+// handleBrowserKey claims them in the two browsers, where they are the list
+// cursor. The settings, help and debug screens claim nothing, so an arrow there
+// fell through to nudge() -- which guarded ModeLibrary, the one mode that cannot
+// even reach it -- and moved a crossfader none of those screens draw. The guard
+// said "the mix view" and tested for everything else.
+func TestArrowsOnlyActInTheMixView(t *testing.T) {
+	for _, mode := range []Mode{ModeSettings, ModeHelp, ModeDebug, ModeLibrary, ModeOverlay} {
+		for _, key := range []string{"up", "down"} {
+			t.Run(modeName(mode)+" "+key, func(t *testing.T) {
+				m, e := sweepModel(t)
+				m.st.Mode = mode
+				if mode == ModeSettings {
+					// A path with something to lose, so the assertion also covers
+					// the arrows not eating the field.
+					typeText(t, m, "/srv")
+				}
+				before := m.State()
+				actions := len(e.applied)
 
-			if len(e.applied) != 1 || e.applied[0].Kind != engine.MixerCrossfader {
-				t.Fatalf("%q applied %v; this test exists to pin the current "+
-					"behaviour, which is one crossfader nudge", key, e.applied)
-			}
-			if m.st.SettingInput != "/srv/dj" {
-				t.Errorf("the path field changed to %q; the arrows must not eat it",
-					m.st.SettingInput)
-			}
-			t.Logf("%q in settings moves the crossfader to %v behind a screen "+
-				"that does not draw it (keys.go:527 nudge)", key, m.st.Xfade)
-		})
+				press(t, m, key)
+
+				if !observable(before, m, e, actions) {
+					// In the browsers the arrows are the list cursor, so they do
+					// something; this is only a failure for the screens that
+					// should ignore them entirely.
+					return
+				}
+				if mode == ModeLibrary || mode == ModeOverlay {
+					return
+				}
+				t.Errorf("%q in %s moved something: crossfader %v, engine %v",
+					key, modeName(mode), m.State().Xfade, e.applied[actions:])
+			})
+		}
 	}
 }
 
@@ -620,6 +617,53 @@ func perModeCases() []modeCase {
 					t.Errorf("focus = %d; it should follow the load", m.State().Focus)
 				}
 			}},
+		// "s" in the overlay used to toggle a sort menu that views.OverlayRows
+		// never draws, and having armed that state, "enter" then picked a sort
+		// instead of loading. "s" then "enter" loaded nothing at all.
+		{name: "s then enter in the overlay still loads", mode: ModeOverlay, key: "enter",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { press(t, m, "s") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().ShowSort {
+					t.Error("s opened a sort menu in an overlay that renders none")
+				}
+				if len(e.loaded) != 1 {
+					t.Errorf("loaded %v, want one track; s then enter loads nothing", e.loaded)
+				}
+			}},
+		{name: "s in the overlay is a letter", mode: ModeOverlay, key: "s",
+			want: func(t *testing.T, m *Model, _ *sweepEngine) {
+				if m.State().Query != "s" {
+					t.Errorf("query = %q, want %q; the overlay is a filter box", m.State().Query, "s")
+				}
+				if m.State().ShowSort {
+					t.Error("s opened a sort menu that the overlay does not draw")
+				}
+			}},
+		// "right" was consumed and discarded in both browsers: no behaviour, no
+		// binding, no effect. It is now simply not claimed, so it behaves like
+		// any other unhandled key -- and, like any other, a user binding it gets
+		// what they asked for.
+		{name: "right in the browser does not reach the engine", mode: ModeLibrary, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "ab") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().Query != "ab" {
+					t.Errorf("query = %q, want it unchanged; the filter has no cursor to move",
+						m.State().Query)
+				}
+				if len(e.applied) != 0 {
+					t.Errorf("right applied %v", e.applied)
+				}
+			}},
+		{name: "right in the overlay does not reach the engine", mode: ModeOverlay, key: "right",
+			setup: func(t *testing.T, m *Model, _ *sweepEngine) { typeText(t, m, "ab") },
+			want: func(t *testing.T, m *Model, e *sweepEngine) {
+				if m.State().Query != "ab" {
+					t.Errorf("query = %q, want it unchanged", m.State().Query)
+				}
+				if len(e.applied) != 0 {
+					t.Errorf("right applied %v", e.applied)
+				}
+			}},
 		// "The other deck" is what SHIFT+ENTER used to mean. It is unreachable
 		// -- bubbletea has no Shift field, and an ordinary terminal sends
 		// ENTER's bytes for Shift+Enter -- so the reachable route is to move
@@ -783,100 +827,37 @@ func TestErrorScreenExitsThroughTheTransport(t *testing.T) {
 	}
 }
 
-// inertBinding is a key/mode pair where pressing the key reaches a handler and
-// nothing the user can see happens.
+// TestRightArrowReachesAUserBindingInTheBrowser is the observable difference
+// the dead "right" case made, and the reason removing it is a fix rather than a
+// tidy-up.
 //
-// Each entry is a finding, not an endorsement. They are recorded here so the
-// sweep can report them honestly instead of quietly passing over them, and so
-// that fixing one is a deliberate act: this issue measures, and changing what a
-// key does is a behaviour change that belongs in its own commit with its own
-// justification.
-type inertBinding struct {
-	key  string
-	mode Mode
-	// setup arranges the scene for the press. It presses no keys.
-	setup func(t *testing.T, m *Model, e *sweepEngine)
-	// why says what the key reaches and what the user sees instead.
-	why string
-	// where is the handler responsible, for the report.
-	where string
-}
-
-// inertBindings is the sweep's negative result: every key/mode pair it drove
-// that turned out to do nothing.
-var inertBindings = []inertBinding{
-	{
-		key: "s", mode: ModeOverlay,
-		where: "internal/tui/keys.go:345 (handleBrowserKey, case \"s\")",
-		why: "toggles ShowSort, but views.OverlayRows draws no sort menu -- only " +
-			"RenderLibrary does -- so nothing on screen moves. It also arms the " +
-			"sort branch above it, so a second key is swallowed: see the enter " +
-			"entry below. This is the same class as the quick-load tab bug fixed " +
-			"in f3c11a5. The key reached a handler that is wrong for the mode.",
-	},
-	{
-		key: "enter", mode: ModeOverlay,
-		setup: func(_ *testing.T, m *Model, _ *sweepEngine) {
-			m.st.ShowSort = true // what pressing "s" above leaves behind
-		},
-		where: "internal/tui/keys.go:264 (handleBrowserKey, sort branch, case \"enter\")",
-		why: "with ShowSort set, ENTER picks a sort instead of loading a track, " +
-			"and views.OverlayRows sorts nothing, so the chosen sort does not " +
-			"change the overlay either. Pressing " + "\"s\" then \"enter\" in the " +
-			"quick-load overlay loads nothing at all.",
-	},
-	{
-		key: "right", mode: ModeLibrary,
-		where: "internal/tui/keys.go:326 (handleBrowserKey, case \"right\")",
-		why: "consumed and discarded. There is no right-arrow behaviour in the " +
-			"browser and no right-arrow binding in DefaultKeys, so falling through " +
-			"would reach Resolve(\"right\") and find nothing. Swallowing it is " +
-			"harmless, and inert.",
-	},
-	{
-		key: "right", mode: ModeOverlay,
-		where: "internal/tui/keys.go:326 (handleBrowserKey, case \"right\")",
-		why:   "the same dead case as the browser: consumed and discarded.",
-	},
-}
-
-// TestKnownInertBindings pins the findings above.
-//
-// It asserts that each press really does leave the rendered frame alone and
-// sends nothing to the engine, so the sweep can report them without pretending
-// they work. A state field changing is not enough: ShowSort flips and the user
-// sees nothing, which is the whole point.
-//
-// When one of these is fixed this test fails, and that is what it is for: the
-// fix should delete the entry and add an assertion to perModeCases.
-func TestKnownInertBindings(t *testing.T) {
-	for _, in := range inertBindings {
-		t.Run(in.key+" in "+modeName(in.mode), func(t *testing.T) {
-			m, e := sweepModel(t)
-			m.st.Mode = in.mode
-			if in.setup != nil {
-				in.setup(t, m, e)
+// The browser swallowed right-arrow before any binding lookup. Nothing in the
+// shipped keymap uses it, so the swallow was invisible -- but a user who mapped
+// "right" to a control got nothing at all. Now the key is simply not claimed,
+// and behaves like every other key the browser has no use for.
+func TestRightArrowReachesAUserBindingInTheBrowser(t *testing.T) {
+	for _, mode := range []Mode{ModeLibrary, ModeOverlay} {
+		t.Run(modeName(mode), func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.Keys = map[string]config.KeyBinding{
+				"right": {Action: "CueMix", Value: "toggle"},
 			}
-			frame := m.RenderAt(160, 30)
-			actions := len(e.applied)
-			loaded := len(e.loaded)
+			keys, err := config.NewKeyResolver(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &sweepEngine{snap: engine.Snapshot{Decks: []engine.DeckState{
+				{Index: 0, Loaded: true, BPM: 128, HasBeatGrid: true},
+			}}}
+			m := New(e, cfg, keys)
+			m.st.Mode = mode
 
-			press(t, m, in.key)
+			press(t, m, "right")
 
-			if got := m.RenderAt(160, 30); got != frame {
-				t.Errorf("%q in %s changed the frame, so it is no longer inert; "+
-					"delete the entry and assert what it now does", in.key, modeName(in.mode))
+			if len(e.applied) != 1 || e.applied[0].Kind != engine.MixerCueMix {
+				t.Errorf("a user binding on %q applied %v; the browser swallowed it",
+					"right", e.applied)
 			}
-			if len(e.applied) != actions {
-				t.Errorf("%q in %s reached the engine (%v), so it is no longer inert",
-					in.key, modeName(in.mode), e.applied[actions:])
-			}
-			if len(e.loaded) != loaded {
-				t.Errorf("%q in %s loaded %v, so it is no longer inert",
-					in.key, modeName(in.mode), e.loaded[loaded:])
-			}
-			t.Logf("INERT: %q in %s does nothing visible (%s): %s",
-				in.key, modeName(in.mode), in.where, in.why)
 		})
 	}
 }

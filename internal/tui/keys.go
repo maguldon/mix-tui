@@ -253,7 +253,12 @@ func (m *Model) handleBrowserKey(name string) bool {
 	// track list. The menu replaced the detail pane, so a user choosing a sort
 	// needs the selection keys to reach it -- otherwise "s" opens a menu with no
 	// way to pick anything, which is what happened before.
-	if m.st.ShowSort {
+	//
+	// The menu is the BROWSER's, and only the browser can open one now (see
+	// "s" below). The guard is not redundant armour: it is the statement that
+	// this branch belongs to a screen that draws a menu, which is exactly the
+	// assumption that was false before.
+	if m.st.ShowSort && m.st.Mode == ModeLibrary {
 		switch name {
 		case "up":
 			m.st.SortSel = maxInt(0, m.st.SortSel-1)
@@ -272,6 +277,25 @@ func (m *Model) handleBrowserKey(name string) bool {
 			m.st.SortDesc = !m.st.SortDesc
 			return true
 		}
+	}
+
+	// "s" opens the sort menu in the browser; without a producer it was
+	// unreachable in the running application even though it rendered.
+	//
+	// In the quick-load overlay it opens nothing. views.OverlayRows draws a
+	// title, a query line and a list of results -- it renders no menu at all --
+	// so the toggle moved nothing on screen, and then armed the branch above:
+	// with ShowSort set, ENTER picked a sort instead of loading the highlighted
+	// track, so "s" then "enter" in the overlay loaded nothing whatsoever.
+	//
+	// The overlay is a filter box, so "s" there is a letter, and belongs to
+	// the filter at the bottom of this function. This is the same class of bug
+	// as the overlay TAB fixed in f3c11a5: the key reached a handler that is
+	// wrong for the mode, and a list of emittable key names cannot see it.
+	if name == "s" && m.st.Mode == ModeLibrary {
+		m.st.ShowSort = !m.st.ShowSort
+		m.st.SortSel = int(m.st.SortBy)
+		return true
 	}
 
 	switch name {
@@ -321,9 +345,10 @@ func (m *Model) handleBrowserKey(name string) bool {
 		m.st.LibPane = views.Pane(((int(m.st.LibPane)+delta)%n + n) % n)
 		return true
 	case "left":
+		// The filter has no cursor, so left cannot move one. It is the same
+		// "delete a character" intent as backspace, and it is not paired with a
+		// right arrow that does nothing: see the absent "right" case.
 		m.st.Query = dropLastRune(m.st.Query)
-		return true
-	case "right":
 		return true
 	case "enter":
 		// ENTER loads to the focused deck (spec 6.5). It consumed the key and
@@ -341,12 +366,6 @@ func (m *Model) handleBrowserKey(name string) bool {
 		return true
 	case "backspace":
 		m.st.Query = dropLastRune(m.st.Query)
-		return true
-	case "s":
-		// The sort menu replaces the detail pane; without a producer it was
-		// unreachable in the running application even though it rendered.
-		m.st.ShowSort = !m.st.ShowSort
-		m.st.SortSel = int(m.st.SortBy)
 		return true
 	}
 	// Any other single printable rune filters the list. The full-screen
@@ -523,8 +542,15 @@ func (m *Model) moveFocus(delta int) {
 // It applies the change to the engine. It previously only moved the mirrored
 // view state, so pressing the key did nothing a DJ could hear and the fader sat
 // visually wherever they last dragged it.
+//
+// The arrows belong to the mix view and nowhere else. handleBrowserKey claims
+// them in the two browsers, where they are the list cursor, but the settings
+// screen and the help and debug screens do not claim them, so an arrow pressed
+// there fell through to here and moved a crossfader that none of those screens
+// draw. The guard was ModeLibrary, which is the one mode that cannot even reach
+// this function; the screen it was written for is the mix view.
 func (m *Model) nudge(delta int) {
-	if m.st.Mode == ModeLibrary {
+	if m.st.Mode != ModeMix {
 		return
 	}
 	step := 0.02

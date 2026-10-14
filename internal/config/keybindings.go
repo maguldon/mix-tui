@@ -60,8 +60,15 @@ func DefaultKeys() map[string]KeyBinding {
 		"z":      {Action: "ZoomToggle"},
 		"v":      {Action: "ViewNext"},
 		"/":      {Action: "LibraryOpen"},
-		"escape": {Action: "LibraryClose"},
 		"r":      {Action: "LoopRoll", Value: "1"}, // toggled by the TUI; see rollActive
+
+		// ESC is deliberately NOT bound here. The TUI handles it as a universal
+		// exit before any binding lookup (internal/tui/keys.go), so a binding on
+		// it could never fire: it named LibraryClose and was resolved and
+		// discarded on every press. It lived here only to give the help screen a
+		// description, and uiKeys does that now. A key the config claims but
+		// cannot own is worse than no key at all -- it invites a user to rebind
+		// something that will never happen.
 
 		// Hotcues. Without these no cue point was reachable from the keyboard:
 		// MIDI mappings carry a slot and key bindings could not, so the whole
@@ -226,10 +233,8 @@ var keyDescriptions = map[string]string{
 	"]":      "pitch up",
 	"r":      "loop roll",
 	"z":      "zoom toggle",
-	"Z":      "zoom level",
 	"v":      "cycle layout",
 	"/":      "library",
-	"escape": "close the browser, overlay or settings",
 	"ctrl+c": "quit",
 }
 
@@ -261,7 +266,8 @@ func splitBinding(b string) (key, desc string) {
 // They are checked first and cannot be rebound (see internal/tui/keys.go), so
 // nothing else records them: a key that a user can press but that appears in
 // no binding table is a key the help screen would omit. "l" and "tab" were
-// already in this position and missing from the help listing.
+// already in this position and missing from the help listing. "escape" joined
+// them when its dead LibraryClose binding was removed.
 var uiKeys = []struct{ key, desc string }{
 	{"tab", "move deck focus"},
 	{"shift+tab", "move deck focus back"},
@@ -269,6 +275,8 @@ var uiKeys = []struct{ key, desc string }{
 	{"S", "settings: library root"},
 	{"?", "this help"},
 	{"`", "debug overlay"},
+	{"escape", "close the browser, overlay or settings"},
+	{"Z", "zoom level"},
 }
 
 // DescribeLines returns the help lines as "key  description", sorted.
