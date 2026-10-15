@@ -24,6 +24,13 @@ type DebugStats struct {
 	// this way on EVERY callback while Underruns stays at zero, so the two are
 	// reported apart rather than summed.
 	Shorts uint64
+	// MaxBufferFrames is the largest single buffer the device has asked for.
+	//
+	// Shown because it decides whether a sustained Shorts count is the user's
+	// configuration to change: the pump's target floors at this number, so a
+	// ring that cannot hold it underruns on every callback regardless of how
+	// much headroom it appears to have.
+	MaxBufferFrames int
 	// MIDIIgnored counts ignored messages per category. A nil map is fine.
 	MIDIIgnored map[string]uint64
 	// MIDIMods is the set of modifier latches currently held. Spec §5.3 says
@@ -70,6 +77,68 @@ var knownMIDICategories = []string{
 	"sysex", "program-change", "pitch-bend", "aftertouch", "clock", "transport", "unmapped",
 }
 
+// shortWarnPercent is the share of callbacks that must come up short before the
+// overlay calls it a fault rather than a startup artifact.
+const shortWarnPercent = 10
+
+// shortWarnMinCallbacks is how many callbacks must have happened before the
+// share means anything.
+//
+// Without this floor the overlay would fire during the first second of
+// playback, when one short callback out of two is 50% and says nothing.
+const shortWarnMinCallbacks = 20
+
+// formatShorts renders the short-callback count against the total, because the
+// count alone cannot be read. One short callback is the pump learning the
+// device's buffer size and is expected; one short callback out of one hundred
+// is a fault.
+func formatShorts(s DebugStats) string {
+	total := s.MainCallbacks + s.CueCallbacks
+	if total == 0 {
+		// No audio has happened yet, so there is no denominator. "0 of 0"
+		// would be a division waiting to happen and "--" reads as "not yet
+		// measured", which is what it is.
+		return "--"
+	}
+	pct := s.Shorts * 100 / total
+	return fmt.Sprintf("%d of %d (%d%%)", s.Shorts, total, pct)
+}
+
+// shortWarning reports whether the short-callback rate is a fault, and what to
+// do about it.
+//
+// A sustained rate is the bug #20 was written for: a ring that cannot hold the
+// buffers the device asks for, underrunning on every callback. It is the ONE
+// short callback at the start that is normal -- the pump converges from below,
+// starting at the configured target and raising to the device's buffer size
+// once it has seen one, so exactly one short is the price of learning it.
+//
+// Keying on "any short at all" would therefore warn permanently, and about
+// something that is working, on every host whose driver batches. That is the
+// failure mode this function exists to avoid.
+func shortWarning(s DebugStats) (string, bool) {
+	total := s.MainCallbacks + s.CueCallbacks
+	if total < shortWarnMinCallbacks {
+		return "", false
+	}
+	if s.Shorts*100/total < shortWarnPercent {
+		return "", false
+	}
+
+	// Name the number when it is known. The pump floors its target at the
+	// device's buffer size, so that is the value audio.ring_frames has to be
+	// above, and it is not derivable from anything else on this screen.
+	//
+	// Kept short deliberately. pad() does not wrap, so anything past the
+	// overlay's width is simply lost, and the tail of a warning is the part
+	// carrying the advice. The counts are already in the row above.
+	if s.MaxBufferFrames > 0 {
+		return fmt.Sprintf("! shorts are sustained: raise audio.ring_frames above %d",
+			s.MaxBufferFrames), true
+	}
+	return "! shorts are sustained: raise audio.ring_frames", true
+}
+
 // RenderDebug draws the diagnostic overlay.
 func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	if w <= 0 || h <= 0 {
@@ -88,6 +157,7 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	lines = append(lines, kv("ring overruns", fmt.Sprintf("%d", s.Overruns), w)...)
 	lines = append(lines, kv("MAIN callbacks", fmt.Sprintf("%d", stats.MainCallbacks), w)...)
 	lines = append(lines, kv("CUE callbacks", fmt.Sprintf("%d", stats.CueCallbacks), w)...)
+	lines = append(lines, kv("short callbacks", formatShorts(stats), w)...)
 
 	// The single most useful diagnostic: both streams idle means nothing is
 	// draining. It is only meaningful once playback was expected, so a headless
@@ -97,6 +167,9 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	}
 	if stats.Underruns > 0 {
 		lines = append(lines, pad(warnStyle.Render(fmt.Sprintf("! %d underrun(s)", stats.Underruns)), w))
+	}
+	if msg, ok := shortWarning(stats); ok {
+		lines = append(lines, pad(warnStyle.Render(msg), w))
 	}
 
 	// What the device is actually running at, next to what was asked for.

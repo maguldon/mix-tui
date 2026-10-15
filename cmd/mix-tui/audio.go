@@ -218,11 +218,24 @@ func (s *audioSession) Stats() views.DebugStats {
 		RateMismatch:   mainStats.RateMismatch || cueStats.RateMismatch,
 		Underruns:      mainStats.Starves + cueStats.Starves,
 		Shorts:         mainStats.Shorts + cueStats.Shorts,
-		MainCallbacks:  mainStats.Callbacks,
-		CueCallbacks:   cueStats.Callbacks,
-		BlocksRendered: ps.BlocksRendered,
-		RenderWallMax:  ps.RenderWallMax,
+		// The larger of the two: MAIN and CUE are separate streams on separate
+		// rings, and it is the greedier one that decides how deep a ring has to
+		// be.
+		MaxBufferFrames: maxStreamBuffer(mainStats.MaxBufferFrames, cueStats.MaxBufferFrames),
+		MainCallbacks:   mainStats.Callbacks,
+		CueCallbacks:    cueStats.Callbacks,
+		BlocksRendered:  ps.BlocksRendered,
+		RenderWallMax:   ps.RenderWallMax,
 	}
+}
+
+// maxStreamBuffer returns the larger of the two streams' observed device buffer
+// sizes.
+func maxStreamBuffer(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Close stops the pump and releases the device.
