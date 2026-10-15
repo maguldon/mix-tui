@@ -22,6 +22,27 @@ func buildBin(t *testing.T) string {
 	return bin
 }
 
+// hermeticEnv points the config and cache directories at throwaway locations.
+//
+// The binary resolves both from XDG_*, so without this these tests read and
+// write the developer's real ~/.config/mix-tui and ~/.cache/mix-tui -- including
+// whatever library_root and default_view they happen to have set. Nothing about
+// the assertions is supposed to depend on that, but the suite was taking over
+// ten minutes and dying on the test timeout: a screenshot run resolved the
+// developer's library_root and walked their whole collection, blocking for the
+// full 30s scanTimeout, while rendering a frame that never showed a track.
+//
+// The dependence is also why this went unnoticed. On CI and on a machine with
+// no config file there is no library_root, no scan, and no delay -- so the suite
+// was green everywhere except the desks of people who actually use the app.
+func hermeticEnv(t *testing.T) []string {
+	t.Helper()
+	return append(os.Environ(),
+		"XDG_CONFIG_HOME="+t.TempDir(),
+		"XDG_CACHE_HOME="+t.TempDir(),
+	)
+}
+
 // runShot runs the binary headlessly and returns the rendered frame.
 func runShot(t *testing.T, bin string, extra ...string) string {
 	t.Helper()
@@ -32,6 +53,7 @@ func runShot(t *testing.T, bin string, extra ...string) string {
 		"-no-audio", "-no-midi", "-screenshot", shot,
 	}, extra...)
 	cmd := exec.Command(bin, args...)
+	cmd.Env = hermeticEnv(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run: %v\n%s", err, out)
 	}
@@ -111,6 +133,7 @@ func TestAcceptanceSizesAreCoherent(t *testing.T) {
 			"-a", "../../internal/testdata/fixtures/sine440.wav",
 			"-no-audio", "-no-midi",
 			"-width", itoa(w), "-height", itoa(h), "-screenshot", shot)
+		cmd.Env = hermeticEnv(t)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%dx%d run: %v\n%s", w, h, err, out)
 		}
@@ -141,6 +164,7 @@ func TestAcceptanceRejectsBadArgs(t *testing.T) {
 		{"-a", "x.mp3", "-nonexistent-flag"}, // unknown flag
 	} {
 		cmd := exec.Command(bin, args...)
+		cmd.Env = hermeticEnv(t)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Errorf("args %v were accepted; stderr:\n%s", args, out)

@@ -131,13 +131,6 @@ func run(args appArgs) error {
 	//    a library without retyping the flag on every launch.
 	lib := library.NewIndex()
 	libRoot := config.ResolveLibraryRoot(args.libraryRoot, cfg.UI.LibraryRoot)
-	if libRoot != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
-		if err := lib.Scan(ctx, []string{libRoot}, nil, nil); err != nil {
-			fmt.Fprintf(os.Stderr, "mix-tui: library scan: %v\n", err)
-		}
-		cancel()
-	}
 
 	cache := library.OpenCache(filepath.Join(cacheDir(), "analysis"))
 
@@ -160,18 +153,21 @@ func run(args appArgs) error {
 		lib.SetAnalysis(path, analysisFrom(r))
 	})
 
-	// Fill the index from the cache so already-analysed tracks show their values
-	// immediately rather than only after a second play. Reading the cache
-	// directory once beats a lookup per track, which on a large collection was
-	// one failed file open per track to discover a mostly-empty cache.
-	if n := lib.ApplyAnalysis(cache.All()); n > 0 {
-		fmt.Fprintf(os.Stderr, "mix-tui: %d track(s) restored from the analysis cache\n", n)
-	}
-	// Drop analyses for tracks that have since been deleted (spec 8). The index
-	// is rebuilt from the filesystem each start, so without this the cache grows
-	// forever describing a collection the user no longer has.
-	if n := cache.EvictMissing(); n > 0 {
-		fmt.Fprintf(os.Stderr, "mix-tui: dropped %d cached analysis file(s) for missing tracks\n", n)
+	// Indexing runs off the startup path. It used to run inline, before the
+	// first frame, so the app sat on a blank terminal for as long as the walk
+	// took: on a 40GB collection of ~7,000 tracks it blew through the 30s cap
+	// and failed on every single launch, so the freeze was not the exception --
+	// it was the normal case for anyone with a real library.
+	//
+	// A -screenshot frame skips the walk entirely, which is safe rather than a
+	// shortcut: -view selects a deck layout and nothing on the command line sets
+	// st.Mode, so no screenshot can render ModeLibrary or ModeOverlay, and those
+	// are the only two modes that draw a track. Leaving the scan running beside
+	// the capture would instead make the frame depend on whether the walk had
+	// finished, which is how TestAcceptanceHeadlessIsStable came to require
+	// byte-identical output from a process doing 30 seconds of I/O.
+	if args.screenshot == "" {
+		go scanLibrary(ctx, lib, libRoot, cache)
 	}
 
 	for i, path := range []string{args.aPath, args.bPath} {
@@ -424,6 +420,55 @@ func writeScreenshot(m *tui.Model, path string, w, h int) error {
 	}
 	fmt.Fprintf(os.Stderr, "mix-tui: wrote %s\n", path)
 	return nil
+}
+
+// scanLibrary indexes the collection and then attaches what the cache already
+// knows about it.
+//
+// It runs on its own goroutine, and that is not a new arrangement: the package
+// it calls documents that scanning "runs in the background and never blocks the
+// caller: a DJ opening a 20,000-track library must still be able to hit play
+// while it indexes" (spec §8), and Index guards every field with an RWMutex
+// precisely so a walk can run beside the UI. The caller was the part that had
+// not caught up. Running it inline meant the splash did not appear until the
+// walk finished, and on this machine's library that walk reliably outlived
+// scanTimeout -- so every launch opened on a 30-second blank screen and then
+// printed a deadline error.
+//
+// The cache work moved in here with it because both steps need an index that is
+// already populated. ApplyAnalysis against an empty index restores nothing and
+// reports zero, which is not a harmless no-op: it is the difference between a
+// track showing its BPM on first paint and showing one after a second play.
+//
+// An empty root is a fresh install, and returns without touching anything.
+func scanLibrary(ctx context.Context, ix *library.Index, root string, cache *library.Cache) {
+	if root == "" {
+		return
+	}
+	// Derived from the app context, so an interrupt ends the walk rather than
+	// leaving a goroutine stat'ing a user's music folder after the UI is gone.
+	scanCtx, cancel := context.WithTimeout(ctx, scanTimeout)
+	defer cancel()
+
+	if err := ix.Scan(scanCtx, []string{root}, nil, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "mix-tui: library scan: %v\n", err)
+	}
+
+	// Fill the index from the cache so already-analysed tracks show their values
+	// immediately rather than only after a second play. Reading the cache
+	// directory once beats a lookup per track, which on a large collection was
+	// one failed file open per track to discover a mostly-empty cache.
+	if n := ix.ApplyAnalysis(cache.All()); n > 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: %d track(s) restored from the analysis cache\n", n)
+	}
+	// Drop analyses for tracks that have since been deleted (spec 8). The index
+	// is rebuilt from the filesystem each start, so without this the cache grows
+	// forever describing a collection the user no longer has. Only ever removes
+	// entries whose recorded path is gone, so it is safe beside a running
+	// analyzer.
+	if n := cache.EvictMissing(); n > 0 {
+		fmt.Fprintf(os.Stderr, "mix-tui: dropped %d cached analysis file(s) for missing tracks\n", n)
+	}
 }
 
 // configDir is where mix-tui keeps config and mappings.
