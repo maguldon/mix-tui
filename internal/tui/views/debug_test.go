@@ -196,3 +196,139 @@ func TestNoModRowWhenNothingIsHeld(t *testing.T) {
 		t.Errorf("nothing is held but the row is shown:\n%s", out)
 	}
 }
+
+// TestDebugShowsShortCallbacks is the regression test for #21. DebugStats.Shorts
+// was populated by the audio session and read by nothing, so a ring that came up
+// short on every callback was invisible in the app and visible only in
+// `mixplay -stats`.
+func TestDebugShowsShortCallbacks(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		MainCallbacks: 100, CueCallbacks: 100, Shorts: 40,
+	}))
+	if !strings.Contains(out, "short callbacks") {
+		t.Errorf("the short-callback count is not shown:\n%s", out)
+	}
+	if !strings.Contains(out, "40 of 200") {
+		t.Errorf("the short-callback count is not shown against its total:\n%s", out)
+	}
+}
+
+// TestDebugDoesNotWarnAboutTheLearningCallback is the other half, and the reason
+// the row is not simply a warning.
+//
+// The pump converges from below: it starts at the configured target, sees the
+// device's buffer size on the first callback, and raises. Exactly one short
+// callback is the price of learning it, and it is the steady state on any host
+// whose driver batches. Keying the warning on "any short at all" fires forever,
+// about something that is working.
+func TestDebugDoesNotWarnAboutTheLearningCallback(t *testing.T) {
+	// Measured on this machine, stable across runs.
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		MainCallbacks: 53, CueCallbacks: 0, Shorts: 1,
+	}))
+	if strings.Contains(out, "!") {
+		t.Errorf("one short callback out of 53 raised a warning:\n%s", out)
+	}
+	if !strings.Contains(out, "1 of 53") {
+		t.Errorf("the single short callback is not shown either:\n%s", out)
+	}
+}
+
+// TestDebugDoesNotWarnBeforeThereIsACallbackHistory guards the other false
+// alarm: during the first second of playback one short out of two is 50%, which
+// says nothing at all.
+func TestDebugDoesNotWarnBeforeThereIsACallbackHistory(t *testing.T) {
+	for _, total := range []uint64{0, 1, 2, 5, 19} {
+		out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+			MainCallbacks: total, Shorts: 1,
+		}))
+		if strings.Contains(out, "!") {
+			t.Errorf("%d callbacks with 1 short raised a warning:\n%s", total, out)
+		}
+	}
+}
+
+// TestDebugWarnsOnSustainedShorts is the fault itself: every callback short,
+// which is what a ring that cannot hold the device's buffers looks like.
+func TestDebugWarnsOnSustainedShorts(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		MainCallbacks: 48, Shorts: 48, MaxBufferFrames: 12200,
+	}))
+	if !strings.Contains(out, "48 of 48") {
+		t.Errorf("sustained shorts not shown:\n%s", out)
+	}
+	if !strings.Contains(out, "audio.ring_frames") {
+		t.Errorf("no advice given for sustained shorts:\n%s", out)
+	}
+	// The advice must name the number that decides it. The pump floors its
+	// target at the device's buffer size, so that is the value the setting has
+	// to be above, and nothing else on this screen carries it.
+	if !strings.Contains(out, "12200") {
+		t.Errorf("advice does not name the device buffer size:\n%s", out)
+	}
+}
+
+// TestShortWarningNeedsNoDeviceBuffer checks the fallback wording when the
+// device has not reported a buffer size yet. It must still say something
+// actionable rather than going quiet.
+func TestShortWarningNeedsNoDeviceBuffer(t *testing.T) {
+	msg, ok := shortWarning(DebugStats{MainCallbacks: 50, Shorts: 50})
+	if !ok {
+		t.Fatal("sustained shorts with no known buffer size produced no warning")
+	}
+	if !strings.Contains(msg, "audio.ring_frames") {
+		t.Errorf("fallback message is not actionable: %q", msg)
+	}
+	if strings.Contains(msg, "must exceed") {
+		t.Errorf("fallback message invents a threshold it does not have: %q", msg)
+	}
+}
+
+// TestShortsWithNoAudioReadsAsNotMeasured: "0 of 0" would be a ratio with no
+// denominator, and an empty overlay row reads as broken rather than as "no audio
+// has happened yet".
+func TestShortsWithNoAudioReadsAsNotMeasured(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{}))
+	if !strings.Contains(out, "short callbacks") {
+		t.Errorf("the row is missing entirely when there is no audio:\n%s", out)
+	}
+	if !strings.Contains(out, "--") {
+		t.Errorf("a session with no callbacks should read as not measured:\n%s", out)
+	}
+	if strings.Contains(out, "of 0") {
+		t.Errorf("divided by a zero callback count:\n%s", out)
+	}
+}
+
+// TestShortWarningFitsTheOverlay: pad() does not wrap, so a warning longer than
+// the overlay is silently cut off -- and the tail of this one is where the
+// advice is. The debug overlay is most needed at 80 columns, which is also the
+// smallest layout it is ever shown in.
+func TestShortWarningFitsTheOverlay(t *testing.T) {
+	msg, ok := shortWarning(DebugStats{
+		MainCallbacks: 48, Shorts: 48, MaxBufferFrames: 12200,
+	})
+	if !ok {
+		t.Fatal("sustained shorts produced no warning")
+	}
+	for _, w := range []int{100, 80, 70} {
+		// 70 is the narrowest the app renders at (layout B; A is 100, C is 80,
+		// D is 90), so that is the real floor rather than an arbitrary one.
+		// +2 for the leading indent the warning is padded with.
+		if len(msg)+2 > w {
+			t.Errorf("warning is %d chars and is cut off at w=%d: %q", len(msg)+2, w, msg)
+		}
+	}
+
+	// And it must survive an actual render at the narrowest width, not just
+	// the arithmetic above.
+	out := stripANSI(RenderDebug(80, 30, emptySnap(), DebugStats{
+		MainCallbacks: 48, Shorts: 48, MaxBufferFrames: 12200, AudioExpected: true,
+	}))
+	if !strings.Contains(out, "audio.ring_frames") {
+		t.Errorf("advice was truncated in a real render at 80 columns:\n%s", out)
+	}
+	if !strings.Contains(out, "12200") {
+		t.Errorf("the threshold was truncated in a real render at 80 columns:\n%s", out)
+	}
+}
