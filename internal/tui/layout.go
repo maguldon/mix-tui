@@ -20,9 +20,12 @@ type PanelRow struct {
 	Kind RowKind
 	Text string
 	Wave *WaveSpec
-	// Style is applied to the padded row. It is a pointer so nil means "no
-	// styling": a lipgloss.Style holds a func and cannot be compared, so an
-	// unset value cannot be detected after the fact.
+	// Style is applied to the padded row. It is a pointer so nil can mean
+	// "nothing special": a lipgloss.Style holds a func and cannot be compared,
+	// so an unset value cannot be detected after the fact.
+	//
+	// nil does NOT mean "unstyled". It means the row takes the default body
+	// foreground. See RenderPanel.
 	Style *lipgloss.Style
 }
 
@@ -76,6 +79,15 @@ func truncatePlain(s string, w int) string {
 // Blank rows are spaces, never empty strings: an empty line in a column layout
 // collapses that column for every row beneath it. Overflowing rows are dropped
 // rather than pushing the box past its height.
+//
+// Every glyph the panel draws is coloured. Two gaps used to leave it half that
+// way. The side borders were concatenated raw, so the frame's horizontal edges
+// were Border while its vertical edges were the terminal's default foreground --
+// usually the brightest thing on screen. And a row whose builder set no Style
+// was emitted with no SGR at all, so it inherited that same default: the BPM /
+// key / pitch row and the mixer's MASTER, GAIN and CUE/P rows rendered louder
+// than the titles above them, and whether a row came out dim or bright depended
+// on an omission at the call site rather than on what the row was.
 func RenderPanel(p Panel, height int) []string {
 	w := p.Width
 	if w <= 0 {
@@ -103,6 +115,12 @@ func RenderPanel(p Panel, height int) []string {
 	fill := maxInt(0, inner-2-lipgloss.Width(title))
 	lines := make([]string, 0, height)
 	lines = append(lines, borderBox.Render("┌─"+title+" "+strings.Repeat("─", fill)+"┐"))
+
+	// The side borders, rendered once. They are separate strings rather than
+	// one wrapped line because the body between them carries its own SGR codes;
+	// wrapping the whole line would let the body's resets eat the border
+	// colour. lipgloss.Width ignores escapes, so the line still measures w.
+	side := borderBox.Render("│")
 
 	content := height - 2
 	for i := 0; i < content; i++ {
@@ -135,11 +153,28 @@ func RenderPanel(p Panel, height int) []string {
 		padded := padRight(body, inner)
 		if style != nil {
 			padded = style.Render(padded)
+		} else if !carriesColour(body) {
+			// No style and no colour of its own, so the row would fall through
+			// to the terminal's foreground. Give it the body colour instead: a
+			// panel builder that forgets Style should get plain body text, not
+			// the one row on screen that outshouts the title.
+			padded = labelStyle.Render(padded)
 		}
-		lines = append(lines, "│"+padded+"│")
+		lines = append(lines, side+padded+side)
 	}
 	lines = append(lines, borderBox.Render("└"+strings.Repeat("─", inner)+"┘"))
 	return lines
+}
+
+// carriesColour reports whether a row body brings its own SGR codes.
+//
+// Waveform, transport, overview and dBEAT rows are assembled by helpers that
+// style each run individually, so they already have a foreground for every glyph.
+// They must not be wrapped in an outer style: lipgloss does not re-apply an
+// outer style across the reset those helpers embed, so a wrapper would recolour
+// nothing and would cost two escape sequences per row at 30fps.
+func carriesColour(body string) bool {
+	return strings.Contains(body, "\x1b[")
 }
 
 func maxInt(a, b int) int {
