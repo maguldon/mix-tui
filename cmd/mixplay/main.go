@@ -363,10 +363,10 @@ func printStats(eng *engine.Engine, out *pipewire.Output, pump *pipewire.Pumper)
 			d.Pitch, d.BPM, d.HasBeatGrid, d.Level)
 	}
 	fmt.Println("device:")
-	fmt.Printf("  MAIN        callbacks=%d frames=%d starves=%d rate=%d\n",
-		main.Callbacks, main.FramesDrained, main.Starves, main.NegotiatedRate)
-	fmt.Printf("  CUE         callbacks=%d frames=%d starves=%d\n",
-		cue.Callbacks, cue.FramesDrained, cue.Starves)
+	fmt.Printf("  MAIN        callbacks=%d frames=%d starves=%d shorts=%d rate=%d\n",
+		main.Callbacks, main.FramesDrained, main.Starves, main.Shorts, main.NegotiatedRate)
+	fmt.Printf("  CUE         callbacks=%d frames=%d starves=%d shorts=%d\n",
+		cue.Callbacks, cue.FramesDrained, cue.Starves, cue.Shorts)
 	if main.RateMismatch {
 		fmt.Printf("  RATE        MISMATCH: device granted %dHz, engine renders %dHz — "+
 			"the mix plays at the wrong speed\n", main.NegotiatedRate, out.SampleRate())

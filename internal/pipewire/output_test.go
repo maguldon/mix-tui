@@ -21,13 +21,36 @@ func TestOutputStartsBothStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer o.Close()
-	time.Sleep(300 * time.Millisecond)
-	m, c := o.Stats()
-	if m.Callbacks == 0 {
-		t.Error("MAIN never drained")
-	}
-	if c.Callbacks == 0 {
-		t.Error("CUE never drained")
+	waitForBothStreams(t, o)
+}
+
+// waitForBothStreams blocks until both streams have drained at least once, and
+// fails only if the deadline passes with one of them still silent.
+//
+// It polls rather than sleeping a fixed interval because the interval cannot be
+// chosen to be safe. This host delivers roughly five process callbacks per
+// second where a 1024-frame quantum at 48kHz implies forty-three, so a fixed
+// 300ms sleep had a comfortable chance of observing zero callbacks and failing
+// on a stream that was working — which is what this test did, roughly one run
+// in five, with MAIN usually the one that got lucky.
+//
+// The property under test is "both drains eventually fire", not "both drains
+// fire within 300ms". Only the former is something the code controls; the
+// cadence the daemon chooses is not.
+func waitForBothStreams(t *testing.T, o *Output) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m, c := o.Stats()
+		if m.Callbacks > 0 && c.Callbacks > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("streams did not both drain within the deadline: MAIN callbacks=%d, CUE callbacks=%d",
+				m.Callbacks, c.Callbacks)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

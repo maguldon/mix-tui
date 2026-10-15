@@ -53,6 +53,10 @@ type Pumper struct {
 	cfg  PumpConfig
 	main *audio.Ring
 	cue  *audio.Ring
+	// mainStream and cueStream are kept for their observed buffer sizes. The
+	// rings themselves say nothing about how much the device wants.
+	mainStream *Stream
+	cueStream  *Stream
 
 	blocks       atomic.Uint64
 	wallMax      atomic.Int64
@@ -73,11 +77,13 @@ func NewPumper(out *Output, eng *engine.Engine, cfg PumpConfig) *Pumper {
 		return &Pumper{eng: eng, cfg: cfg}
 	}
 	return &Pumper{
-		out:  out,
-		eng:  eng,
-		cfg:  cfg,
-		main: out.mainStream.ring,
-		cue:  out.cueStream.ring,
+		out:        out,
+		eng:        eng,
+		cfg:        cfg,
+		main:       out.mainStream.ring,
+		cue:        out.cueStream.ring,
+		mainStream: out.mainStream,
+		cueStream:  out.cueStream,
 	}
 }
 
@@ -145,7 +151,7 @@ func (p *Pumper) pumpOnce() {
 	if p.eng == nil || p.main == nil || p.cue == nil {
 		return
 	}
-	target := p.cfg.TargetLatencyFrames
+	target := p.target()
 	if target <= 0 {
 		return
 	}
@@ -181,6 +187,39 @@ func (p *Pumper) pumpOnce() {
 	if p.main.AvailableRead() < target || p.cue.AvailableRead() < target {
 		p.targetMisses.Add(1)
 	}
+}
+
+// target is how full the rings should be kept: the configured target latency,
+// or whatever the device has actually been asking for, whichever is larger.
+//
+// THE FLOOR EXISTS BECAUSE A FIXED TARGET CANNOT WORK. A ring held at N frames
+// can only ever serve an N-frame callback. A device that asks for more than the
+// target therefore gets short on EVERY callback, forever — measured here as 48
+// short callbacks out of 48, while the starve counter sat at zero because the
+// ring was never empty, only insufficient.
+//
+// On a driver with realtime priority the device asks for one quantum (21ms at a
+// 1024-frame quantum and 48kHz) and the configured 200ms target already covers
+// it, so the floor never binds. On a driver that cannot get realtime priority
+// and batches, the floor is what stops every callback from coming up short,
+// and the latency it costs is the batching the device was already imposing —
+// buffering to one device buffer is not the same as being late.
+//
+// It converges from below: the pump starts at the configured target, sees a
+// larger buffer on the first callback, and raises from there.
+func (p *Pumper) target() int {
+	target := p.cfg.TargetLatencyFrames
+	if p.mainStream == nil || p.cueStream == nil {
+		return target
+	}
+	main, cue := p.mainStream.Stats(), p.cueStream.Stats()
+	if main.MaxBufferFrames > target {
+		target = main.MaxBufferFrames
+	}
+	if cue.MaxBufferFrames > target {
+		target = cue.MaxBufferFrames
+	}
+	return target
 }
 
 func (p *Pumper) blockFrames() int {
