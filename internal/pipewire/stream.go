@@ -71,6 +71,23 @@ type Stats struct {
 	FramesDrained uint64
 	// Starves counts callbacks that found the ring empty.
 	Starves uint64
+	// MaxBufferFrames is the largest single buffer the device has asked for.
+	//
+	// The pump needs it: a ring kept at a fixed target can only serve a
+	// target-sized callback, so when the device asks for more than the target
+	// the pump must raise its target or every callback comes up short. That
+	// number is only obtainable by observing the device, which is what this is.
+	MaxBufferFrames int
+	// Shorts counts callbacks where the ring held SOME audio but not as much as
+	// the device asked for, so part of the buffer the device wanted went out as
+	// whatever the driver had in it.
+	//
+	// This is not a smaller version of Starves and must not be reported as one.
+	// Starves counts only the case where the ring was empty, which means a ring
+	// that is chronically too SHORT for the buffers the device asks for — the
+	// common case, and an audible one — reports zero starves forever while
+	// every single callback comes up short.
+	Shorts uint64
 	// NegotiatedRate is the rate the daemon granted, or 0 if it has not said.
 	NegotiatedRate int
 	// RateMismatch is true when the daemon granted a rate other than the one
@@ -99,6 +116,9 @@ type Stream struct {
 	callbacks atomic.Uint64
 	frames    atomic.Uint64
 	starves   atomic.Uint64
+	shorts    atomic.Uint64
+	// maxBuffer is the largest capacity the device has asked for, in frames.
+	maxBuffer atomic.Int64
 
 	// name is a C string libpipewire borrows for the stream's lifetime, so it
 	// is owned here and freed in Destroy.
@@ -333,11 +353,13 @@ func (s *Stream) Stats() Stats {
 		return Stats{}
 	}
 	return Stats{
-		Callbacks:      s.callbacks.Load(),
-		FramesDrained:  s.frames.Load(),
-		Starves:        s.starves.Load(),
-		NegotiatedRate: int(s.negotiated.Load()),
-		RateMismatch:   s.rateMismatch.Load(),
+		Callbacks:       s.callbacks.Load(),
+		FramesDrained:   s.frames.Load(),
+		Starves:         s.starves.Load(),
+		Shorts:          s.shorts.Load(),
+		MaxBufferFrames: int(s.maxBuffer.Load()),
+		NegotiatedRate:  int(s.negotiated.Load()),
+		RateMismatch:    s.rateMismatch.Load(),
 	}
 }
 
@@ -429,6 +451,19 @@ func (s *Stream) drain() {
 	data.chunk.size = C.uint32_t(n * stride)
 	data.flags |= C.SPA_DATA_FLAG_READWRITE
 
+	// Record the largest buffer this device asks for, so the pump can keep the
+	// ring deeper than it. A CAS loop rather than a load-and-store because this
+	// is the audio thread and a lost update would be silent. It is recorded
+	// before the starve check, because the first callback of a session is very
+	// often the one that runs dry, and that is precisely the callback the pump
+	// needs to learn from.
+	for {
+		cur := s.maxBuffer.Load()
+		if int64(capacity) <= cur || s.maxBuffer.CompareAndSwap(cur, int64(capacity)) {
+			break
+		}
+	}
+
 	if n == 0 {
 		// Starved. The buffer is still queued with a zero-length chunk, and
 		// this returns immediately. A device callback that waits here is the
@@ -437,6 +472,19 @@ func (s *Stream) drain() {
 		s.starves.Add(1)
 	} else {
 		s.frames.Add(uint64(n))
+		if n < capacity {
+			// PARTIAL, which is the common failure and the one that used to be
+			// invisible. The ring held something, so starves stayed at zero,
+			// but the buffer came up short and the device plays the remainder
+			// as whatever its buffer already contained.
+			//
+			// This is what a pump targeting less than one buffer produces: the
+			// pump fills the ring to target, the device asks for more than the
+			// ring can ever hold, and so every callback is short. Reported
+			// separately from starves because the fix is a deeper TARGET, not
+			// a faster pump.
+			s.shorts.Add(1)
+		}
 	}
 
 	C.pw_stream_queue_buffer((*C.struct_pw_stream)(stream), buf)

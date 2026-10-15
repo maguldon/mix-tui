@@ -108,6 +108,47 @@ const rateProbeTimeout = 250 * time.Millisecond
 // The query is deliberately uncached. A device can be plugged in mid-session
 // and change the graph's rate, and a stale answer would leave the engine
 // resampling against a rate the device no longer uses.
+//
+// WHY IT IS STILL A STUB, and what was actually tried. The obvious routes are
+// all dead ends, and rediscovering that costs an afternoon. Everything below
+// was verified against PipeWire 1.6.8 in plain C, not just from Go:
+//
+//   - The rate is published exactly once: in the daemon's "settings" metadata
+//     bag, under the key "clock.rate" on the core (subject 0). pw-cli info and
+//     pw-dump both display it, which is what makes it look reachable.
+//
+//   - The core's REGISTRY global does not carry it. The registry's `global`
+//     event delivers that global with exactly two properties, object.serial
+//     and core.name. The `default.clock.rate` those tools print is the
+//     settings bag merged over those props with a "default." prefix added by
+//     the tool — which is why "default.clock.rate" is the wrong key to listen
+//     for here.
+//
+//   - pw_core_create_object(core, "metadata", ...) returns a non-NULL object
+//     that is not usable: add_listener succeeds and is never called,
+//     set_property fails outright. Metadata objects are NOT shared by name.
+//     Asking for the bag called "settings" gets a new empty bag belonging to
+//     this client, not the daemon's.
+//
+//   - Binding the daemon's own settings global through the registry is
+//     closer and is the only route whose listener is accepted at all.
+//     pw_proxy_install_marshal has to come first, and only with
+//     implementor=false — implementor=true makes add_listener fail. With that
+//     combination installed the listener is still never invoked, and the
+//     object refuses set_property because it holds only "r" permissions,
+//     which is consistent with a read-only bind that never replays.
+//
+//   - Loading libpipewire-module-metadata into the client reaches a real
+//     implementation, but reaching its global needs pw_global_get_object,
+//     which libpipewire exports and this version's headers do not declare.
+//     pw-cli imports exactly that pair, so it is presumably the way through.
+//     It was not finished here.
+//
+// Until one of those is carried through, the fallback costs one resampler in
+// the path (PipeWire's) rather than two. The declared and granted rates are
+// both already visible at runtime — Stream.NegotiatedRate and
+// Stats.RateMismatch, surfaced in the debug overlay — and audio.sample_rate in
+// the config sets it explicitly.
 func DefaultRate() (int, bool) {
 	// Automatic negotiation is deferred, and this always reports "unknown".
 	//
@@ -119,8 +160,6 @@ func DefaultRate() (int, bool) {
 	//
 	// The contract is unchanged and the consequence is benign: the caller
 	// falls back to 44100 and PipeWire's graph resamples, which is one
-	// resampler in the path instead of ours. Making this work properly
-	// belongs with the Output type in Task 3, which owns a loop for the life
-	// of the process and can bind the listener once instead of per query.
+	// resampler in the path instead of ours.
 	return 0, false
 }

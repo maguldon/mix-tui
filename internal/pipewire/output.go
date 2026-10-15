@@ -51,6 +51,31 @@ type Output struct {
 // local named config.
 type Config = OutputConfig
 
+// defaultRingFrames is the per-stream ring depth when the caller does not
+// choose one.
+//
+// HEADROOM, NOT DEPTH. The pump keeps each ring filled to about 200ms (see
+// NewPumper), so a ring of 200ms has by construction nothing spare: the moment
+// the device asks for a buffer bigger than the target, the ring cannot possibly
+// cover it and every callback comes up short.
+//
+// That is not hypothetical. A driver that cannot get realtime priority batches
+// several quanta into one callback, and was measured handing this code
+// 12,200-frame buffers against a former 8,820-frame ring — so roughly a third of
+// every callback went out as stale buffer contents while the stats reported zero
+// starves, because the ring was never empty, only short.
+//
+// One second costs well under a megabyte across both rings. It costs no
+// latency: latency is the pump's target, not the ring's capacity, and the pump
+// still stops filling at the target — it merely raises that target to cover an
+// oversized device buffer (see Pumper.target).
+func defaultRingFrames(rate int) int {
+	if rate <= 0 {
+		rate = 44100
+	}
+	return rate
+}
+
 // NewOutput creates both streams and the context they share.
 func NewOutput(cfg OutputConfig) (*Output, error) {
 	if cfg.SampleRate <= 0 {
@@ -61,9 +86,7 @@ func NewOutput(cfg OutputConfig) (*Output, error) {
 		cfg.SampleRate = 44100
 	}
 	if cfg.RingFrames <= 0 {
-		// ~200ms at the declared rate: long enough that a scheduler hiccup in
-		// the render goroutine does not starve the drain.
-		cfg.RingFrames = cfg.SampleRate / 5
+		cfg.RingFrames = defaultRingFrames(cfg.SampleRate)
 	}
 
 	o := &Output{cfg: cfg}

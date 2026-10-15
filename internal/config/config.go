@@ -88,13 +88,21 @@ func (b KeyBinding) DeckTarget() int {
 
 // Defaults returns the built-in configuration used when no file is present.
 //
-// The buffer sizes follow spec §4.2: the render goroutine stays ~200ms ahead of
-// playback, which is 8820 frames at 44.1kHz.
+// TargetLatencyFrames follows spec §4.2: the render goroutine stays ~200ms
+// ahead of playback, which is 8820 frames at 44.1kHz.
+//
+// RingFrames is deliberately four times that. The two used to be equal, which
+// contradicted the field's own documented requirement that the ring "should
+// comfortably exceed" the target and left it with no headroom at all: a ring
+// filled to target is a ring that can only ever serve a target-sized callback,
+// so any device asking for more underruns on every single callback. The cost is
+// under a megabyte and it is not latency, because the pump still stops filling
+// at the target.
 func Defaults() *Config {
 	return &Config{
 		Audio: AudioConfig{
 			SampleRate:          0, // negotiate
-			RingFrames:          8820,
+			RingFrames:          35280,
 			TargetLatencyFrames: 8820,
 		},
 		UI:   UIConfig{DefaultView: "D"},

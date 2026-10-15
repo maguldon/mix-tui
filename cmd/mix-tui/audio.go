@@ -217,6 +217,7 @@ func (s *audioSession) Stats() views.DebugStats {
 		NegotiatedRate: mainStats.NegotiatedRate,
 		RateMismatch:   mainStats.RateMismatch || cueStats.RateMismatch,
 		Underruns:      mainStats.Starves + cueStats.Starves,
+		Shorts:         mainStats.Shorts + cueStats.Shorts,
 		MainCallbacks:  mainStats.Callbacks,
 		CueCallbacks:   cueStats.Callbacks,
 		BlocksRendered: ps.BlocksRendered,

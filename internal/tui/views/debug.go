@@ -19,6 +19,11 @@ type DebugStats struct {
 	// Underruns counts blocks where the drain found the ring empty: audible
 	// dropouts.
 	Underruns uint64
+	// Shorts counts blocks where the ring held audio but less than the device
+	// asked for. A device asking for more than the ring can ever hold underruns
+	// this way on EVERY callback while Underruns stays at zero, so the two are
+	// reported apart rather than summed.
+	Shorts uint64
 	// MIDIIgnored counts ignored messages per category. A nil map is fine.
 	MIDIIgnored map[string]uint64
 	// MIDIMods is the set of modifier latches currently held. Spec §5.3 says
