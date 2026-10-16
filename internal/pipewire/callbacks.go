@@ -53,6 +53,30 @@ func streamStateChanged(data unsafe.Pointer, old, state int32, errs unsafe.Point
 	}
 }
 
+// recordGrant stores the rate the daemon granted and brings the mismatch flag
+// in line with it.
+//
+// The flag is mirrored, not latched. It used to be stored true and never stored
+// false, so one early disagreement -- the daemon reconfiguring the stream during
+// startup, before it settles on the requested rate -- pinned RateMismatch on for
+// the life of the process. The overlay and mixplay's stats both re-read it on
+// every refresh, so from then on they warned that the mix was playing at the
+// wrong speed while the two rates on screen matched, with nothing on screen to
+// tell a stale warning from a live one.
+//
+// The comparison is the entire truth: the daemon's most recent grant either is
+// the rate we declared or it is not. NegotiatedRate beside it is what makes the
+// warning actionable, since it carries the rate that actually disagreed.
+func (s *Stream) recordGrant(rate int) {
+	// A pod stating no format is not a grant of zero, so the last known rate
+	// stands. Only a positive rate is a claim about what the device is running.
+	if rate <= 0 {
+		return
+	}
+	s.negotiated.Store(int64(rate))
+	s.rateMismatch.Store(rate != s.cfg.SampleRate)
+}
+
 // streamParamChanged is where the negotiated format is captured.
 //
 // The daemon tells us the format it granted here, which may differ from the
@@ -70,13 +94,7 @@ func streamParamChanged(data unsafe.Pointer, id uint32, param unsafe.Pointer) {
 	// device's true rate becomes visible; without it there is no way to notice
 	// that we declared 44100 and the graph gave us 48000, which plays every
 	// track at the wrong speed.
-	rate := int(C.format_rate((*C.struct_spa_pod)(param)))
-	if rate > 0 {
-		s.negotiated.Store(int64(rate))
-		if rate != s.cfg.SampleRate {
-			s.rateMismatch.Store(true)
-		}
-	}
+	s.recordGrant(int(C.format_rate((*C.struct_spa_pod)(param))))
 }
 
 // streamProcess is the realtime drain. This is spec §4.3's contract.
