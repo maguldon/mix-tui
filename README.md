@@ -20,11 +20,24 @@ class-compliant controllers — the primary target being the
 
 ## Status
 
-**Working and testable.** All four binaries build and run. Every package passes
-`go test -race` except `internal/pipewire`, whose `TestOutputStartsBothStreams`
-("CUE never drained") needs a PipeWire daemon that will actually schedule a
-second stream on this machine and fails intermittently here — on unmodified
-`master` as well, so it is not a regression in anything below.
+**Working and testable.** All four binaries build and run, and every package
+passes `go test -race` — `internal/pipewire` included.
+
+`internal/pipewire` is the one package with a host precondition rather than a
+code one. Every test in it skips when `Available()` is false, so on a machine
+with no PipeWire daemon the package reports `ok` without having exercised
+anything at all. The caveat that used to sit here — that
+`TestOutputStartsBothStreams` ("CUE never drained") fails when the daemon will
+not schedule a second concurrent output stream — described a property of the
+host, not of this code: the session manager's version and state, not a bug that
+lived in the tree. It no longer reproduces. Here the test passes five runs in a
+row with no skips, and the whole package passes under `-race`.
+
+So the claim above means green *against a daemon that schedules its streams*.
+It does not mean the package is daemon-independent, and a green run from a
+machine without one is not evidence of anything. A repeat-run flake in the same
+package is tracked in #29; it does not reproduce here either, so it is recorded
+as an open risk rather than a current failure.
 
 | Component | State |
 |---|---|
@@ -442,13 +455,18 @@ Four ideas do most of the work:
 ## Verifying
 
 ```bash
-go test $(go list ./... | grep -v internal/pipewire) -race \
+go test ./... -race \
   && go vet ./... && gofmt -l .
 ```
 
 The engine and DSP tests assert on rendered samples; the TUI tests assert on
 rendered frames. The whole suite runs with no sound card, no MIDI controller,
 and no terminal.
+
+`internal/pipewire` is the exception to that last sentence, and it is why the
+Status section is worded the way it is: it needs a live PipeWire daemon, and
+skips rather than fails without one. On a machine that has one, the command
+above covers it.
 
 ## Design documents
 
