@@ -47,6 +47,11 @@ extern int connect_params_selfcheck(int rate, int channels);
 extern struct pw_properties *make_stream_props(const char *node_name,
                                               const char *target,
                                               int rate, int channels);
+
+// stream_timing reports the graph's per-quantum size and device delay. See
+// trampoline.c; it returns through pointers so struct pw_time never crosses
+// into Go.
+extern int stream_timing(void *stream, uint64_t *quantum, int64_t *delay);
 */
 import "C"
 
@@ -77,7 +82,29 @@ type Stats struct {
 	// target-sized callback, so when the device asks for more than the target
 	// the pump must raise its target or every callback comes up short. That
 	// number is only obtainable by observing the device, which is what this is.
+	//
+	// It is derived from spa_data.maxsize, which is the CAPACITY the driver
+	// allocated, NOT the number of frames the graph asked for in a quantum.
+	// Those are different numbers and conflating them is what made #26 look
+	// unfixed for as long as it did: FramesDrained/Callbacks is bounded by this
+	// capacity, so dividing one by the other measures allocation, not latency.
+	// Use QuantumFrames and DeviceDelayFrames for latency.
 	MaxBufferFrames int
+	// QuantumFrames is the number of samples the graph requested for the
+	// current quantum -- pw_time.size -- which is the callback granularity the
+	// latency is actually built from.
+	//
+	// Zero means the daemon has not reported a quantum yet, which is the normal
+	// state before the first callback and after the stream stops.
+	QuantumFrames uint64
+	// DeviceDelayFrames is pw_time.delay: how long until the next output sample
+	// is presented by the device, in frames at the stream's rate. It covers
+	// every filter between the stream and the device and excludes delay from
+	// buffers queued in the stream itself.
+	//
+	// Signed because the daemon reports it as int64_t and documents it as
+	// possibly negative.
+	DeviceDelayFrames int64
 	// Shorts counts callbacks where the ring held SOME audio but not as much as
 	// the device asked for, so part of the buffer the device wanted went out as
 	// whatever the driver had in it.
@@ -123,6 +150,16 @@ type Stream struct {
 	shorts    atomic.Uint64
 	// maxBuffer is the largest capacity the device has asked for, in frames.
 	maxBuffer atomic.Int64
+	// quantum and delay cache the daemon's last answer about this stream's
+	// per-quantum size and its delay to the device.
+	//
+	// Cached rather than read on demand because the daemon only answers while
+	// the stream is connected, and every caller reads these AFTER Stop() — that
+	// is when there is a run worth summarising. Reading at that point returns
+	// nothing, which is how the first cut of this reported zero forever. Stop
+	// takes the last sample on its way out; see sampleTiming.
+	quantum atomic.Uint64
+	delay   atomic.Int64
 
 	// name is a C string libpipewire borrows for the stream's lifetime, so it
 	// is owned here and freed in Destroy.
@@ -306,6 +343,11 @@ func (s *Stream) Stop() error {
 	}
 	held := s.ctx.lock()
 	defer s.ctx.unlock(held)
+	// Last chance to read the timing: pw_stream_disconnect below ends the
+	// daemon's willingness to answer, and every caller reads the latency after
+	// it returns. Without this the quantum and delay are zero for exactly the
+	// runs anyone would want to look at.
+	s.sampleTimingLocked()
 	C.pw_stream_disconnect(s.stream)
 	// A disconnected pw_stream can be reconnected, so clear started to let a
 	// later Start reconnect. Without this, Stop/Start cycles - which Output
@@ -369,7 +411,7 @@ func (s *Stream) Stats() Stats {
 	if s == nil {
 		return Stats{}
 	}
-	return Stats{
+	st := Stats{
 		Callbacks:       s.callbacks.Load(),
 		FramesDrained:   s.frames.Load(),
 		Starves:         s.starves.Load(),
@@ -378,6 +420,61 @@ func (s *Stream) Stats() Stats {
 		NegotiatedRate:  int(s.negotiated.Load()),
 		RateMismatch:    s.rateMismatch.Load(),
 	}
+	// Refresh first, then read: while the stream runs this is current, and once
+	// it has stopped the sample is refused and the cached values stand.
+	s.sampleTiming()
+	st.QuantumFrames = s.quantum.Load()
+	st.DeviceDelayFrames = s.delay.Load()
+	return st
+}
+
+// sampleTiming refreshes the cached quantum size and device delay by asking the
+// daemon.
+//
+// Sampled OFF the drain, never in it. Reading them needs the loop lock, and the
+// drain runs on the realtime data-loop thread where blocking is the one thing
+// that must never happen: the daemon stops feeding the whole graph while it
+// waits.
+//
+// The values are cached rather than returned, because the daemon only answers
+// while the stream is connected and every caller reads these after Stop(). Stop
+// takes one last sample on its way out, so the numbers that describe a finished
+// run are the ones from while it was still running — which is the only moment
+// they meant anything.
+//
+// The guard is the stream pointer, NOT started: Destroy is what clears it, so
+// this cannot touch freed memory, and ctx.lock() refuses once the context is
+// gone. A failed sample leaves the previous values in place rather than
+// zeroing them, so one refused call cannot erase a good reading.
+func (s *Stream) sampleTiming() {
+	if s == nil || s.ctx == nil || s.stream == nil {
+		return
+	}
+	// lock() marshals through the loop, so it is skipped once the context is
+	// closed; unlock(held) then no-ops rather than touching a freed loop.
+	held := s.ctx.lock()
+	if !held {
+		return
+	}
+	defer s.ctx.unlock(held)
+	s.sampleTimingLocked()
+}
+
+// sampleTimingLocked is sampleTiming for a caller already holding the loop
+// lock. The lock is recursive and thread-affine so taking it twice would be
+// harmless, but Stop already holds it and re-entering to read two integers is
+// not worth the confusion.
+func (s *Stream) sampleTimingLocked() {
+	if s == nil || s.stream == nil {
+		return
+	}
+	var quantum C.uint64_t
+	var delay C.int64_t
+	if C.stream_timing(unsafe.Pointer(s.stream), &quantum, &delay) != 0 {
+		return
+	}
+	s.quantum.Store(uint64(quantum))
+	s.delay.Store(int64(delay))
 }
 
 // AsRenderTarget adapts the stream to the engine's consumer interface.

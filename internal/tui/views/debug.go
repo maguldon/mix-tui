@@ -31,6 +31,17 @@ type DebugStats struct {
 	// ring that cannot hold it underruns on every callback regardless of how
 	// much headroom it appears to have.
 	MaxBufferFrames int
+	// QuantumFrames is the per-quantum sample count the graph negotiated, and
+	// DeviceDelayFrames is its reported delay to the device in frames. Both are
+	// 0 until the daemon has reported a quantum.
+	//
+	// These, not any ratio of frames to callbacks, are the output latency. The
+	// frames a drain moves are bounded by MaxBufferFrames, so frames/callbacks
+	// measures how much room the driver allocated rather than how long the audio
+	// takes to come out — which read as a 250ms device on a host that was
+	// serving 10ms quanta.
+	QuantumFrames     uint64
+	DeviceDelayFrames int64
 	// MIDIIgnored counts ignored messages per category. A nil map is fine.
 	MIDIIgnored map[string]uint64
 	// MIDIMods is the set of modifier latches currently held. Spec §5.3 says
@@ -104,6 +115,18 @@ func formatShorts(s DebugStats) string {
 	return fmt.Sprintf("%d of %d (%d%%)", s.Shorts, total, pct)
 }
 
+// formatDeviceLatency renders the graph's delay to the device in milliseconds.
+//
+// "--" rather than "0.0ms" when the daemon has reported no quantum. A stream
+// that has not started yet has no latency, and a zero would read as an instant
+// device — a measurement where there is none, which is worse than an absence.
+func formatDeviceLatency(s DebugStats) string {
+	if s.DeviceDelayFrames <= 0 || s.NegotiatedRate <= 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%.1fms", float64(s.DeviceDelayFrames)*1000/float64(s.NegotiatedRate))
+}
+
 // shortWarning reports whether the short-callback rate is a fault, and what to
 // do about it.
 //
@@ -158,6 +181,10 @@ func RenderDebug(w, h int, s engine.Snapshot, stats DebugStats) string {
 	lines = append(lines, kv("MAIN callbacks", fmt.Sprintf("%d", stats.MainCallbacks), w)...)
 	lines = append(lines, kv("CUE callbacks", fmt.Sprintf("%d", stats.CueCallbacks), w)...)
 	lines = append(lines, kv("short callbacks", formatShorts(stats), w)...)
+	// The output latency, which is the one number that cannot be worked out
+	// from any other row here. Placed with the other audio-health figures
+	// because it is the one a user comparing two setups actually wants.
+	lines = append(lines, kv("device latency", formatDeviceLatency(stats), w)...)
 
 	// The single most useful diagnostic: both streams idle means nothing is
 	// draining. It is only meaningful once playback was expected, so a headless

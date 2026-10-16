@@ -206,6 +206,39 @@ int set_stream_active(struct pw_stream *stream, int active)
 	return pw_stream_set_active(stream, active ? true : false);
 }
 
+/* --- graph timing -------------------------------------------------------- */
+
+/* Sample the daemon's own view of this stream's per-quantum size and its delay
+ * to the device.
+ *
+ * These are the two numbers that say how much latency the graph is actually
+ * adding, and neither can be derived on the Go side: the buffer's maxsize is an
+ * ALLOCATION, not a quantum, so reading it back tells you how much room the
+ * driver offered rather than how much it asked for. Issue #26 was diagnosed for
+ * a whole thread on exactly that substitution.
+ *
+ * `size` is the number of samples the resampler requested for the current
+ * quantum, which is the callback granularity. `delay` is how long until the next
+ * output sample reaches the device, in frames at the stream's rate.
+ *
+ * Results come back through pointers so no part of struct pw_time's layout
+ * crosses the cgo boundary. Returns 0 on success. */
+int stream_timing(void *stream, uint64_t *quantum, int64_t *delay)
+{
+	struct pw_time t;
+
+	if (stream == NULL || quantum == NULL || delay == NULL)
+		return -1;
+
+	memset(&t, 0, sizeof(t));
+	if (pw_stream_get_time_n(stream, &t, sizeof(t)) < 0)
+		return -1;
+
+	*quantum = t.size;
+	*delay = t.delay;
+	return 0;
+}
+
 /* --- negotiated format --------------------------------------------------- */
 
 /* Read audio.rate out of a Format param pod. Returns 0 when the pod is absent

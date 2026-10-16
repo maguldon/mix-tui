@@ -377,10 +377,29 @@ func printStats(eng *engine.Engine, out *pipewire.Output, pump *pipewire.Pumper)
 			d.Pitch, d.BPM, d.HasBeatGrid, d.Level)
 	}
 	fmt.Println("device:")
-	fmt.Printf("  MAIN        callbacks=%d frames=%d starves=%d shorts=%d rate=%s\n",
-		main.Callbacks, main.FramesDrained, main.Starves, main.Shorts, grantedRate(main.NegotiatedRate))
-	fmt.Printf("  CUE         callbacks=%d frames=%d starves=%d shorts=%d\n",
-		cue.Callbacks, cue.FramesDrained, cue.Starves, cue.Shorts)
+	// quantum and delay are the latency numbers, and they come from the daemon.
+	//
+	// The old line led with frames and callbacks, and their ratio was read as
+	// "how many frames per callback" — which is how #26 concluded that a fixed
+	// host was still serving 12,000-frame callbacks. It never measured that:
+	// frames is bounded by the buffer's CAPACITY, not by the quantum, so the
+	// ratio reported the allocation and stayed at 12,288 while the graph had
+	// actually dropped to a 512-frame quantum.
+	fmt.Printf("  MAIN        callbacks=%d quantum=%d delay=%d frames=%d starves=%d shorts=%d rate=%s\n",
+		main.Callbacks, main.QuantumFrames, main.DeviceDelayFrames,
+		main.FramesDrained, main.Starves, main.Shorts, grantedRate(main.NegotiatedRate))
+	fmt.Printf("  CUE         callbacks=%d quantum=%d delay=%d frames=%d starves=%d shorts=%d\n",
+		cue.Callbacks, cue.QuantumFrames, cue.DeviceDelayFrames,
+		cue.FramesDrained, cue.Starves, cue.Shorts)
+	// Rendered in milliseconds because a bare frame count cannot be read at a
+	// glance, and a latency you have to divide by hand is the thing #26 was
+	// filed about.
+	if main.DeviceDelayFrames > 0 && main.NegotiatedRate > 0 {
+		ms := float64(main.DeviceDelayFrames) * 1000 / float64(main.NegotiatedRate)
+		qms := float64(main.QuantumFrames) * 1000 / float64(main.NegotiatedRate)
+		fmt.Printf("  device latency %.1fms (quantum %.1fms, buffer capacity %d)\n",
+			ms, qms, main.MaxBufferFrames)
+	}
 	if main.RateMismatch {
 		fmt.Printf("  RATE        MISMATCH: device granted %dHz, engine renders %dHz — "+
 			"the mix plays at the wrong speed\n", main.NegotiatedRate, out.SampleRate())
