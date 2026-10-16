@@ -76,15 +76,22 @@ Mapping files live in `$XDG_CONFIG_HOME/mix-tui/mappings/*.yaml`. The format is
 specified in [spec §5.3](../../docs/superpowers/specs/2026-10-10-mix-tui-design.md):
 
 ```yaml
-device: "Xone K2"
+# Must be a substring of the name the port actually reports. A Xone:K2 shows up
+# as "XONE:K2:XONE:K2 MIDI 1 24:0", so "Xone K2" matches nothing at all and
+# every binding below stays dead with no error.
+device: "XONE:K2"
 match: substring          # controllers rename themselves across reconnects
 modifiers:
-  shift: {kind: cc, chan: 1, num: 49, pressed: 127, released: 0, mode: momentary}
+  # A note modifier needs no pressed/released: note-on engages, note-off releases.
+  # `chan` is the status-byte value: MIDI channels are 1-based in docs and
+  # 0-based on the wire, and a mapping file is matched against the wire. A
+  # controller documented as channel 15 is written 14 here.
+  layer: {kind: note, chan: 14, num: 12}
 controls:
-  - midi: {kind: cc, chan: 1, num: 9}
+  - midi: {kind: cc, chan: 14, num: 16}
     action: {kind: DeckPitch, target: 0}
-  - midi: {kind: note, chan: 1, num: 40}
-    mods: [shift]
+  - midi: {kind: note, chan: 14, num: 24}
+    mods: [layer]
     action: {kind: DeckHotcueDelete, target: 0}
     slot: 1
 ```
@@ -100,9 +107,24 @@ To see what a mapping file actually defines:
 midimapdump ~/.config/mix-tui/mappings/xone-k2.yaml
 ```
 
-> **No mapping file is shipped.** None has been reconciled against real
-> hardware yet. Write your own for your controller and verify it with
-> `midimapdump` — that is what the tool is for.
+> **No mapping file is installed for you.** The one in
+> `internal/testdata/mappings/xone-k2.yaml` is a parser fixture, but it has now
+> been reconciled against a real Xone:K2: every channel and CC/note number in
+> it was captured off the hardware. Its header records which parts are fact
+> (the numbers, the channel) and which are convention (which knob does what) —
+> read that before trusting it.
+>
+> For your own controller, `midicap` is what produced those numbers. It prints
+> every message your surface sends and diffs them against a mapping file, so
+> you find out what the hardware does before deciding what you want it to do:
+>
+> ```bash
+> midicap -map ~/.config/mix-tui/mappings/my-controller.yaml
+> ```
+>
+> Type a label and press enter before touching a control to attribute what
+> follows; that is how you record a mode-dependent layer. `midimapdump` then
+> tells you what a file binds.
 
 ## Keys
 

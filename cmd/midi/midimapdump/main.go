@@ -25,6 +25,11 @@ type row struct {
 	Num    int    `json:"num"`
 	Mods   string `json:"mods"`
 	Action string `json:"action"`
+	// Target is the deck or channel an action drives. It is omitted from the
+	// JSON when zero, where most actions have a single implicit target and a
+	// field of zeroes reads as noise; the text table always prints it, because
+	// the whole point of this tool is that a wrong target must be visible.
+	Target int    `json:"target,omitempty"`
 	Slot   int    `json:"slot"`
 	Mode   string `json:"mode"`
 }
@@ -77,6 +82,7 @@ func main() {
 				Num:    int(c.Num),
 				Mods:   strings.Join(c.Mods, ","),
 				Action: actionName(c.Action),
+				Target: c.Target,
 				Slot:   c.Slot,
 				Mode:   modeName(c.Mode),
 			})
@@ -113,10 +119,15 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		fmt.Printf("%-4s %-5s %-5s %-14s %-22s %-5s %s\n", "ch", "kind", "num", "mods", "action", "slot", "mode")
+		// The target column is printed even when zero. This tool exists to make
+		// a mis-mapped controller diagnosable, and a knob bound to the wrong deck
+		// is exactly the mistake that is otherwise invisible: target 0 and
+		// target 1 used to print identically.
+		fmt.Printf("%-4s %-5s %-5s %-14s %-22s %-6s %-5s %s\n",
+			"ch", "kind", "num", "mods", "action", "target", "slot", "mode")
 		for _, r := range rows {
-			fmt.Printf("%-4d %-5s %-5d %-14s %-22s %-5d %s\n",
-				r.Chan, r.Kind, r.Num, r.Mods, r.Action, r.Slot, r.Mode)
+			fmt.Printf("%-4d %-5s %-5d %-14s %-22s %-6d %-5d %s\n",
+				r.Chan, r.Kind, r.Num, r.Mods, r.Action, r.Target, r.Slot, r.Mode)
 		}
 	}
 	if failed {

@@ -80,11 +80,12 @@ Known gaps, so nothing here is a surprise:
   real press — but a user whose terminal repeats more slowly than 25/s will find
   it unreliable. Repeat is **allowed** by default, so holding a transport key
   keeps firing; only an explicit `repeat: false` turns it off.
-- **No controller has been validated against real hardware.** Nothing is
-  installed into your config directory; the only mapping in the tree is
-  `internal/testdata/mappings/xone-k2.yaml`, a fixture for the parser tests
-  whose CC numbers are guesses. Write your own and check it with
-  `midimapdump`.
+- **Only one controller has been validated against real hardware.** Nothing is
+  installed into your config directory. The mapping in the tree,
+  `internal/testdata/mappings/xone-k2.yaml`, is a fixture for the parser tests
+  whose channel and CC/note numbers were captured off a real Xone:K2; its header
+  separates the numbers (fact) from which knob does what (convention). No other
+  controller has been checked. Use `midicap` to check yours.
 - **Meter detection is acoustic and can be wrong.** 3/4 through 7/8 is detected
   from how strongly onsets fall on a repeating cycle, with 4/4 as the prior, and
   a non-4/4 reading has to beat that prior by a clear margin across several bars.
@@ -233,15 +234,22 @@ source of loadable tracks, and `-a`/`-b` remain the one-shot path loaders.
 Mapping files live in `$XDG_CONFIG_HOME/mix-tui/mappings/*.yaml`:
 
 ```yaml
-device: "Xone K2"
+# Must be a substring of the name the port actually reports. A Xone:K2 shows up
+# as "XONE:K2:XONE:K2 MIDI 1 24:0", so "Xone K2" matches nothing and every
+# binding below stays dead with no error.
+device: "XONE:K2"
 match: substring          # controllers rename themselves across reconnects
 modifiers:
-  shift: {kind: cc, chan: 1, num: 49, pressed: 127, released: 0, mode: momentary}
+  # A note modifier needs no pressed/released: note-on engages, note-off releases.
+  # `chan` is the status-byte value: MIDI channels are 1-based in docs and
+  # 0-based on the wire, and a mapping file is matched against the wire. A
+  # controller documented as channel 15 is written 14 here.
+  layer: {kind: note, chan: 14, num: 12}
 controls:
-  - midi: {kind: cc, chan: 1, num: 9}
+  - midi: {kind: cc, chan: 14, num: 16}
     action: {kind: DeckPitch, target: 0}
-  - midi: {kind: note, chan: 1, num: 40}
-    mods: [shift]
+  - midi: {kind: note, chan: 14, num: 24}
+    mods: [layer]
     action: {kind: DeckHotcueDelete, target: 0}
     slot: 1
 ```
@@ -257,6 +265,21 @@ midimapdump ~/.config/mix-tui/mappings/xone-k2.yaml   # what does this define?
 midimapdump -all ~/.config/mix-tui/mappings/          # every mapping
 midimapdump -json xone-k2.yaml                        # machine-readable
 ```
+
+`midimapdump` reads a file; it cannot tell you whether the file is right about
+your controller. `midicap` answers that — it prints every message the surface
+sends and diffs them against a mapping file, reporting what the file promises
+but never receives and what arrived unclaimed:
+
+```bash
+midicap -map ~/.config/mix-tui/mappings/xone-k2.yaml   # reconcile against hardware
+midicap -live -device K2                                # watch the raw stream
+```
+
+Type a label and press enter before touching a control to attribute what
+follows. That is how a mode-dependent layer gets recorded: the same knob sends
+different numbers depending on which layer the surface is in, and a capture
+that does not say which layer it came from cannot be reconciled later.
 
 ## Keyboard
 

@@ -133,6 +133,15 @@ func fromWire(raw []byte) Message {
 	}
 }
 
+// Decode converts a raw MIDI wire message into the internal Message.
+//
+// It exposes the same conversion the listener applies at its edge, so a
+// verification tool reads a controller through the application's own view of
+// the wire. A tool with a second decoder could disagree with the app about
+// exactly the messages this layer has been wrong about -- which is the class of
+// bug a capture tool exists to find.
+func Decode(raw []byte) Message { return fromWire(raw) }
+
 // DeviceInfo describes one connected MIDI input port.
 type DeviceInfo struct {
 	Name  string
