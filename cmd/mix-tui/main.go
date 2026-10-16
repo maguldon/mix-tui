@@ -93,20 +93,20 @@ func run(args appArgs) error {
 			TargetLatencyFrames: cfg.Audio.TargetLatencyFrames,
 			BlockFrames:         engine.BlockFrames,
 		})
-		// Compare against what the DEVICE granted, not against what we declared.
+		// Compare what the DEVICE granted against what was asked for.
 		//
 		// session.rate() is the declared rate -- the same number audioCfg asked
-		// for -- so this condition could not fire for the disagreement it names,
-		// and the only inputs that reached it were a negative or zero config
-		// value. It would have printed "device runs at 44100 Hz, config asked
-		// for 0", which is a true statement about nothing.
+		// for -- so comparing that against `rate` was declared vs declared and
+		// could not fire for the disagreement it names; the only inputs that
+		// reached it were a negative or zero config value, and it would have
+		// printed "device runs at 44100 Hz, config asked for 0", which is a true
+		// statement about nothing.
 		//
-		// The granted rate arrives asynchronously, so at startup there may not be
-		// one yet. That is not an error: PipeWire resamples, and the debug
-		// overlay reports the granted rate once the daemon states it.
-		if r := session.negotiatedRate(); r > 0 && rate != 0 && r != rate {
-			fmt.Fprintf(os.Stderr, "mix-tui: device runs at %d Hz, config asked for %d; using the device\n",
-				r, rate)
+		// negotiatedRateWithin waits a bounded moment first, because the grant is
+		// asynchronous: read the instant the device opened it is always 0, and a
+		// check that only ever sees 0 warns about nothing either.
+		if msg := rateWarning(session.negotiatedRateWithin(rateNegotiationWait), rate); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
 		}
 		if r := session.rate(); r > 0 {
 			rate = r
@@ -409,6 +409,26 @@ func run(args appArgs) error {
 	_, runErr := p.Run()
 	stop()
 	return runErr
+}
+
+// rateWarning reports a disagreement between the rate the daemon granted and
+// the rate the config asked for, or "" when there is nothing to say.
+//
+// Both zeros are unknowns rather than answers, and neither is a disagreement: a
+// granted rate of 0 is a format the daemon has not stated yet, and a configured
+// rate of 0 is the application asking the daemon what to do. Warning about either
+// prints a true statement about nothing, which is how this check spent its life
+// before the declared rate stopped standing in for the granted one.
+//
+// The wording does not say "using the device". The engine renders at the
+// configured rate and the graph resamples; claiming to have switched would be a
+// second thing this process cannot back up.
+func rateWarning(granted, configured int) string {
+	if granted <= 0 || configured <= 0 || granted == configured {
+		return ""
+	}
+	return fmt.Sprintf("mix-tui: device granted %d Hz, config asked for %d; "+
+		"rendering at %d and letting the graph resample", granted, configured, configured)
 }
 
 func writeScreenshot(m *tui.Model, path string, w, h int) error {

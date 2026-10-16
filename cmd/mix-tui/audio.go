@@ -21,6 +21,15 @@ import (
 // a cable produces sound before the user has time to wonder why it did not.
 const audioRetryInterval = 3 * time.Second
 
+// rateNegotiationWait bounds how long startup waits for the daemon to grant a
+// format, so the granted-versus-declared check has a number to compare.
+//
+// The grant lands tens of milliseconds after the stream connects, so the wait is
+// paid in full on a healthy device and only reaches its bound when the daemon
+// never answers. Long enough to cover a loaded machine, short enough that it
+// cannot be felt as a startup stall.
+const rateNegotiationWait = 250 * time.Millisecond
+
 // audioSession owns the device, the pump, and their lifetime, and can be
 // started again after a failure.
 //
@@ -191,6 +200,36 @@ func (s *audioSession) negotiatedRate() int {
 	}
 	main, _ := out.Stats()
 	return main.NegotiatedRate
+}
+
+// negotiatedRateWithin waits up to d for the daemon to grant a format, and
+// returns the rate it granted or 0 if none arrived in time.
+//
+// The grant is asynchronous — measured at under 50ms after the stream connects,
+// and not there yet the instant Start returns. A caller that reads the rate
+// straight after opening the device therefore sees 0 and concludes "unknown"
+// about a device that is already running, which is how the startup warning in
+// main could never fire.
+//
+// The wait returns the moment the grant lands, and does not wait at all for a
+// session with no device: there is nothing to grant one, so sitting out the
+// bound would delay the startup of every run on a machine without a sound card
+// and could never have paid off. A daemon that opens a device and then never
+// answers costs d and nothing more.
+func (s *audioSession) negotiatedRateWithin(d time.Duration) int {
+	deadline := time.Now().Add(d)
+	for {
+		if r := s.negotiatedRate(); r > 0 {
+			return r
+		}
+		s.mu.Lock()
+		out := s.out
+		s.mu.Unlock()
+		if out == nil || time.Now().After(deadline) {
+			return 0
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // Reason is the last failure, empty when audio is running.

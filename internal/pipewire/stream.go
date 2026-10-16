@@ -161,7 +161,8 @@ type Stream struct {
 	started    atomic.Bool
 	stopped    atomic.Bool
 	// negotiated records the rate the daemon actually gave us, which may
-	// differ from the requested one.
+	// differ from the requested one. It stays 0 until streamParamChanged
+	// observes a grant, and nothing seeds it.
 	negotiated atomic.Int64
 }
 
@@ -220,7 +221,17 @@ func NewStream(ctx *Context, cfg StreamConfig, ring *audio.Ring) (*Stream, error
 	s.events = allocStreamEvents()
 	s.hook = allocStreamHook()
 	C.add_stream_listener(s.stream, s.hook, s.events, C.uintptr_t(s.handle))
-	s.negotiated.Store(int64(cfg.SampleRate))
+	// `negotiated` is deliberately left at 0 — "the daemon has not said". It is
+	// seeded nowhere, because the only writer that can fill it honestly is
+	// streamParamChanged, and nothing else has observed the device.
+	//
+	// It used to be seeded here with cfg.SampleRate, which made the documented
+	// zero state unreachable: NewStream has already coerced a non-positive rate
+	// to 44100 by this point, so the store could only ever write a positive
+	// number, and the overlay's "sample rate 44100 (device 44100)" was the
+	// number we asked for echoed back as a confirmation the device never gave.
+	// The declared rate is not lost by dropping this — it is cfg.SampleRate, and
+	// Output.SampleRate() is what feeds views.DebugStats.DeclaredRate.
 	return s, nil
 }
 
