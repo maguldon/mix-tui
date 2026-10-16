@@ -2,9 +2,11 @@ package tui
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/maguldon/mix-tui/internal/audio"
+	"github.com/maguldon/mix-tui/internal/engine"
 	"github.com/maguldon/mix-tui/internal/midi"
 )
 
@@ -13,6 +15,14 @@ import (
 // The question is the same one the keyboard sweep asks, asked of a different
 // input path: a physical knob that changes the audio but shows nothing is worse
 // than a dead key, because the user is holding hardware in their hand.
+//
+// The probes name the action they expect to reach rather than the channel and
+// CC number that produce it, and the message is built from the parsed mapping.
+// A previous version hardcoded "cc ch1 n9" and friends; when the K2 fixture
+// was reconciled against real hardware and its numbers changed, this test
+// failed on thirteen unmapped messages rather than on anything to do with what
+// it exists to check. Looking the control up by action keeps the assertion
+// about the behaviour and not about the wiring.
 func TestShippedMIDIMappingMovesTheScreen(t *testing.T) {
 	raw, err := os.ReadFile("../testdata/mappings/xone-k2.yaml")
 	if err != nil {
@@ -28,26 +38,35 @@ func TestShippedMIDIMappingMovesTheScreen(t *testing.T) {
 	}
 
 	type probe struct {
-		name string
-		msg  midi.Message
+		name   string
+		action engine.ActionKind
+		target int
+		slot   int
+		mods   []string
 	}
 	probes := []probe{
-		{"CC9 pitch A", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 9, Value: 100}},
-		{"CC10 pitch B", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 10, Value: 100}},
-		{"CC20 EQ low A", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 20, Value: 100}},
-		{"CC21 EQ mid A", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 21, Value: 100}},
-		{"CC22 EQ high A", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 22, Value: 100}},
-		{"CC23 EQ low B", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 23, Value: 100}},
-		{"CC24 EQ mid B", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 24, Value: 100}},
-		{"CC25 EQ high B", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 25, Value: 100}},
-		{"CC30 filter A", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 30, Value: 100}},
-		{"CC31 filter B", midi.Message{Kind: midi.KindCC, Channel: 1, Num: 31, Value: 100}},
-		{"CC ch4/9 crossfader", midi.Message{Kind: midi.KindCC, Channel: 4, Num: 9, Value: 100}},
-		{"note40 hotcue jump 1", midi.Message{Kind: midi.KindNote, Channel: 1, Num: 40, Value: 127}},
-		{"note41 hotcue jump 2", midi.Message{Kind: midi.KindNote, Channel: 1, Num: 41, Value: 127}},
+		{"pitch deck A", engine.DeckPitch, 0, 0, nil},
+		{"pitch deck B", engine.DeckPitch, 1, 0, nil},
+		{"EQ low deck A", engine.DeckEQLow, 0, 0, nil},
+		{"EQ mid deck A", engine.DeckEQMid, 0, 0, nil},
+		{"EQ high deck A", engine.DeckEQHigh, 0, 0, nil},
+		{"EQ low deck B", engine.DeckEQLow, 1, 0, nil},
+		{"EQ mid deck B", engine.DeckEQMid, 1, 0, nil},
+		{"EQ high deck B", engine.DeckEQHigh, 1, 0, nil},
+		{"filter deck A", engine.DeckFilterCutoff, 0, 0, nil},
+		{"filter deck B", engine.DeckFilterCutoff, 1, 0, nil},
+		{"crossfader", engine.MixerCrossfader, 0, 0, nil},
+		{"hotcue jump 1 deck A", engine.DeckHotcueJump, 0, 1, nil},
+		{"hotcue jump 2 deck A", engine.DeckHotcueJump, 0, 2, nil},
 	}
 
 	for _, p := range probes {
+		ctl, ok := findControl(table, p.action, p.target, p.slot, p.mods)
+		if !ok {
+			t.Errorf("%s: the shipped mapping binds no control for this action", p.name)
+			continue
+		}
+
 		m, eng, _ := overlayRig(t)
 		// Give deck A hotcues so the pads have something to hit.
 		eng.Deck(0).SetHotcue(1)
@@ -62,8 +81,8 @@ func TestShippedMIDIMappingMovesTheScreen(t *testing.T) {
 
 		h := midi.NewHandler(compiled, m.Engine().Apply)
 		before := m.RenderAt(120, 40)
-		if err := h.Handle(p.msg); err != nil {
-			t.Errorf("%s: handler rejected the message: %v", p.name, err)
+		if err := h.Handle(pressMessage(ctl)); err != nil {
+			t.Errorf("%s: handler rejected %s: %v", p.name, pressMessage(ctl), err)
 			continue
 		}
 		for i := 0; i < 4; i++ {
@@ -73,4 +92,35 @@ func TestShippedMIDIMappingMovesTheScreen(t *testing.T) {
 			t.Errorf("%s: the message was handled but nothing on screen changed", p.name)
 		}
 	}
+}
+
+// findControl locates a binding by what it does rather than by the numbers
+// that reach it.
+func findControl(m *midi.DeviceMapping, action engine.ActionKind, target, slot int, mods []string) (midi.Control, bool) {
+	for _, c := range m.Controls {
+		if c.Action != action || c.Target != target || c.Slot != slot {
+			continue
+		}
+		if !slices.Equal(c.Mods, mods) {
+			continue
+		}
+		return c, true
+	}
+	return midi.Control{}, false
+}
+
+// pressMessage builds the message a surface sends when the control is moved
+// well off its rest position. A note carries its intensity in Velocity, not
+// Value, so a note built with only Value set reads as a release.
+//
+// The value is 100 rather than 127 on purpose. Some controls already sit at
+// their extreme when a deck starts -- dsp.NewFilter opens the band at Nyquist,
+// so CC 127 asks the filter for the cutoff it is already at and the screen
+// correctly does not move. Driving every control to its maximum therefore
+// tests less than it looks like it tests.
+func pressMessage(c midi.Control) midi.Message {
+	if c.Kinds == midi.KindNote {
+		return midi.Message{Kind: midi.KindNote, Channel: c.Chan, Num: c.Num, Velocity: 100}
+	}
+	return midi.Message{Kind: midi.KindCC, Channel: c.Chan, Num: c.Num, Value: 100}
 }

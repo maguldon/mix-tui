@@ -1,59 +1,155 @@
-# Xone K2 — 2-channel DJ controller.
+# Xone:K2 — reconciled against hardware, 2026-10-15.
 #
-# CC numbers follow the K2's layout as documented in its MIDI spec. Verify
-# against the hardware before trusting them in a live set; a wrong number here
-# shows up as a control that never fires, not as an error.
-device: "Xone K2"
+# Verified by capturing a real Xone:K2 (USB 22f0:0001) over USB-MIDI with
+# cmd/midi/midicap, walking every control, and cross-checking each number
+# against the MIDI Implementation Send table in the Xone:K2 User Guide
+# (AP8509, pp.14-16). Every number below was seen on the wire.
+#
+# WHAT IS A HARDWARE FACT HERE
+#
+#   * Channel. The K2 sends everything on MIDI channel 15. User Guide p.11: "By
+#     default the MIDI Channel number is set to 15". There is no channel 1 and
+#     no channel 4.
+#
+#     Every `chan:` below is 14, not 15. MIDI channel numbers are 1-based in
+#     documentation and 0-based in the status byte, and a mapping file is
+#     compared against the status byte: the resolver looks a message up under
+#     Message.Channel, which device_linux.go fills with `status & 0x0F`. Writing
+#     15 here produces a file that parses, compiles, hot-reloads, and matches
+#     nothing -- indistinguishable from a controller that is not plugged in.
+#     `midicap` reports this as "SENT AT CHANNEL-1 ONLY".
+#
+#   * The numbers. Encoders CC0-3, pots CC4-7, knobs CC8-11 and CC12-15,
+#     faders CC16-19, setup encoders CC20-21. The 16 big buttons send notes
+#     24-39. LAYER sends note 12. Row switches send notes 40-51.
+#
+#   * Layer mode. This unit was in LATCHING LAYERS OFF (the default, which the
+#     guide also calls Open Architecture), verified by pressing LAYER and
+#     confirming the encoder still sent CC0. In that mode the numbers above are
+#     fixed and do not move.
+#
+# WHAT IS A CHOICE, NOT A FACT
+#
+#   The K2's knobs carry no printed function names and its sixteen buttons are
+#   labelled A-P by the manufacturer. Nothing on the surface says "this is the
+#   low EQ". The action names below are a convention adopted here so the file is
+#   useful as a starting point, and they are the part to edit first if you want
+#   different behaviour. The grid is treated as: column = deck, row = parameter.
+#
+#   Column 1 is mix-tui deck 0, column 2 is deck 1. Columns 3-4 are unused by
+#   the engine (it runs two decks) and carry the two app-global controls
+#   instead. Swap these around freely; only the numbers are load-bearing.
+#
+# ONE THING THIS SURFACE DOES NOT HAVE
+#
+#   A crossfader. The K2's four faders are CC16-19, one per column; there is no
+#   crossfader fader and no crossfader CC anywhere in its MIDI table. The
+#   crossfader below is therefore driven from a knob. An earlier revision of
+#   this file claimed a crossfader on channel 4, which does not exist.
+#
+# LAYERING
+#
+#   If you enable Latching Layers on the K2 (setup mode, LATCH LAYERS), the same
+#   controls renumber: CC0-3 become CC22-25 then CC44-47, and the faders become
+#   CC38-41 then CC60-63. Every binding here would then silently drive the wrong
+#   parameter. Leave the unit in LATCHING LAYERS OFF unless you have rebuilt
+#   this file for the shifted numbers.
+device: "XONE:K2"
 match: substring
 
 modifiers:
-  shift:
-    kind: cc
-    chan: 1
-    num: 49
-    pressed: 127
-    released: 0
+  # The LAYER button, bottom left. A plain momentary switch: note on when
+  # pressed, note off when released. With latching layers off it changes no CC.
+  layer:
+    kind: note
+    chan: 14
+    num: 12
     mode: momentary
 
 controls:
-  # Channel faders and pitch.
-  - midi: {kind: cc, chan: 1, num: 9}
-    action: {kind: DeckPitch, target: 0}
-  - midi: {kind: cc, chan: 1, num: 10}
-    action: {kind: DeckPitch, target: 1}
+  # ---- Row of encoders, columns 1-4. Continuous, two's-complement, end stops. --
+  - midi: {kind: cc, chan: 14, num: 0}
+    action: {kind: DeckFilterCutoff, target: 0}
+  - midi: {kind: cc, chan: 14, num: 1}
+    action: {kind: DeckFilterCutoff, target: 1}
+  # Columns 3-4 have no deck to drive, so they carry the mixer globals instead.
+  - midi: {kind: cc, chan: 14, num: 2}
+    action: {kind: MixerCrossfader}
+  - midi: {kind: cc, chan: 14, num: 3}
+    action: {kind: MixerMasterGain}
 
-  # Per-channel EQ: CC 20/21/22 on channel 1, 23/24/25 on channel 2.
-  - midi: {kind: cc, chan: 1, num: 20}
+  # ---- Row of pots, columns 1-2. 0 at bottom, 127 at top, hard end stops. -----
+  - midi: {kind: cc, chan: 14, num: 4}
     action: {kind: DeckEQLow, target: 0}
-  - midi: {kind: cc, chan: 1, num: 21}
-    action: {kind: DeckEQMid, target: 0}
-  - midi: {kind: cc, chan: 1, num: 22}
-    action: {kind: DeckEQHigh, target: 0}
-  - midi: {kind: cc, chan: 1, num: 23}
+  - midi: {kind: cc, chan: 14, num: 5}
     action: {kind: DeckEQLow, target: 1}
-  - midi: {kind: cc, chan: 1, num: 24}
+
+  # ---- Row of knobs, columns 1-2. ------------------------------------------------
+  - midi: {kind: cc, chan: 14, num: 8}
+    action: {kind: DeckEQMid, target: 0}
+  - midi: {kind: cc, chan: 14, num: 9}
     action: {kind: DeckEQMid, target: 1}
-  - midi: {kind: cc, chan: 1, num: 25}
+  - midi: {kind: cc, chan: 14, num: 12}
+    action: {kind: DeckEQHigh, target: 0}
+  - midi: {kind: cc, chan: 14, num: 13}
     action: {kind: DeckEQHigh, target: 1}
 
-  # Filter knobs.
-  - midi: {kind: cc, chan: 1, num: 30}
-    action: {kind: DeckFilterCutoff, target: 0}
-  - midi: {kind: cc, chan: 1, num: 31}
-    action: {kind: DeckFilterCutoff, target: 1}
+  # ---- The four linear faders. Long throw, which is what pitch wants. -----------
+  - midi: {kind: cc, chan: 14, num: 16}
+    action: {kind: DeckPitch, target: 0}
+  - midi: {kind: cc, chan: 14, num: 17}
+    action: {kind: DeckPitch, target: 1}
 
-  # Crossfader on channel 4.
-  - midi: {kind: cc, chan: 4, num: 9}
-    action: {kind: CrossfaderSet}
-
-  # Hotcue pads: bare = jump, shift+ = delete.
-  - midi: {kind: note, chan: 1, num: 40}
+  # ---- Button matrix, bottom two rows: hotcues. Press to jump. -----------------
+  # Buttons M-P send notes 24-27; buttons I-L send notes 28-31.
+  - midi: {kind: note, chan: 14, num: 24}
     action: {kind: DeckHotcueJump, target: 0}
     slot: 1
-  - midi: {kind: note, chan: 1, num: 41}
+  - midi: {kind: note, chan: 14, num: 25}
     action: {kind: DeckHotcueJump, target: 0}
     slot: 2
-  - midi: {kind: note, chan: 1, num: 40}
-    mods: [shift]
+  - midi: {kind: note, chan: 14, num: 26}
+    action: {kind: DeckHotcueJump, target: 0}
+    slot: 3
+  - midi: {kind: note, chan: 14, num: 27}
+    action: {kind: DeckHotcueJump, target: 0}
+    slot: 4
+  - midi: {kind: note, chan: 14, num: 28}
+    action: {kind: DeckHotcueJump, target: 1}
+    slot: 1
+  - midi: {kind: note, chan: 14, num: 29}
+    action: {kind: DeckHotcueJump, target: 1}
+    slot: 2
+  - midi: {kind: note, chan: 14, num: 30}
+    action: {kind: DeckHotcueJump, target: 1}
+    slot: 3
+  - midi: {kind: note, chan: 14, num: 31}
+    action: {kind: DeckHotcueJump, target: 1}
+    slot: 4
+
+  # ---- Same buttons with LAYER held: delete the cue instead of jumping to it. --
+  - midi: {kind: note, chan: 14, num: 24}
+    mods: [layer]
     action: {kind: DeckHotcueDelete, target: 0}
     slot: 1
+  - midi: {kind: note, chan: 14, num: 28}
+    mods: [layer]
+    action: {kind: DeckHotcueDelete, target: 1}
+    slot: 1
+
+  # ---- Upper rows of the button matrix: transport. ------------------------------
+  # Buttons E-H send notes 32-35; buttons C and D send notes 38 and 39.
+  # Buttons A and B are the setup-mode MIDI channel and latching layer
+  # switches, so they are deliberately left unbound.
+  - midi: {kind: note, chan: 14, num: 32}
+    action: {kind: DeckPlayPause, target: 0}
+  - midi: {kind: note, chan: 14, num: 33}
+    action: {kind: DeckCue, target: 0}
+  - midi: {kind: note, chan: 14, num: 34}
+    action: {kind: DeckHotcueSet, target: 0}
+  - midi: {kind: note, chan: 14, num: 35}
+    action: {kind: SyncToggle, target: 0}
+  - midi: {kind: note, chan: 14, num: 38}
+    action: {kind: DeckPlayPause, target: 1}
+  - midi: {kind: note, chan: 14, num: 39}
+    action: {kind: DeckCue, target: 1}
