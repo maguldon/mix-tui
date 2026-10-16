@@ -3,12 +3,10 @@
 package pipewire
 
 import (
-	"runtime/cgo"
-	"sync"
 	"unsafe"
 )
 
-// This file holds the state behind the C-visible callbacks.
+// This file holds the C-string readers used by the callbacks in callbacks.go.
 //
 // The callbacks receive a `void *` that libpipewire RETAINS for as long as the
 // listener is installed. That rules out passing a Go pointer directly: cgo
@@ -26,38 +24,20 @@ func cstr(p unsafe.Pointer) string {
 	return goString((*byte)(p))
 }
 
-// rateProbe collects the rate from a metadata listener.
-//
-// It is written on a libpipewire thread and read by the goroutine waiting in
-// DefaultRate, so the two fields are guarded.
-type rateProbe struct {
-	mu    sync.Mutex
-	found bool
-	rate  int
-}
-
-func (p *rateProbe) set(rate int) {
-	p.mu.Lock()
-	p.rate = rate
-	p.found = true
-	p.mu.Unlock()
-}
-
-// result returns the rate once it has arrived, and (0, false) until then.
-func (p *rateProbe) result() (int, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.rate, p.found
-}
-
-func probeFromHandle(h cgo.Handle) (*rateProbe, bool) {
-	if h == 0 {
-		return nil, false
+// goString copies a NUL-terminated C string into a Go string.
+func goString(p *byte) string {
+	if p == nil {
+		return ""
 	}
-	v := cgo.Handle(h).Value()
-	p, ok := v.(*rateProbe)
-	return p, ok
+	n := 0
+	for *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+		n++
+	}
+	if n == 0 {
+		return ""
+	}
+	buf := make([]byte, n)
+	src := unsafe.Slice((*byte)(unsafe.Pointer(p)), n)
+	copy(buf, src)
+	return string(buf)
 }
-
-// coreID is PipeWire's well-known core object id.
-const coreID = 0

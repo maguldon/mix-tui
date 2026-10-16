@@ -15,7 +15,11 @@ type Config struct {
 
 // AudioConfig holds device and buffer settings.
 type AudioConfig struct {
-	// SampleRate 0 means negotiate with the device at startup.
+	// SampleRate is the rate the engine renders at and the stream declares to
+	// PipeWire. 0 means the 44100 Hz default, not "negotiate": there is no
+	// supported way to read the graph's rate back (issue #23), so PipeWire
+	// converts to whatever the device grants and Stats.RateMismatch reports the
+	// disagreement.
 	SampleRate int    `yaml:"sample_rate"`
 	MainTarget string `yaml:"main_target"`
 	CueTarget  string `yaml:"cue_target"`

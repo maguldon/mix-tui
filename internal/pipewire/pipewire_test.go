@@ -39,19 +39,3 @@ func TestContextIsReusable(t *testing.T) {
 		ctx.Close()
 	}
 }
-
-// TestDefaultRateIsSane pins the contract DefaultRate has while it is a stub:
-// it must not return a rate, and in particular must not return a plausible one.
-//
-// An assertion of the shape "if ok, check the range" passes against ANY return
-// value, including a fabricated 44100, which is the failure this guards against
-// — the function once reported "unknown" only by accident of being unimplemented,
-// and nothing here would have noticed if it started guessing.
-func TestDefaultRateIsSane(t *testing.T) {
-	if !pipewire.Available() {
-		t.Skip("no daemon")
-	}
-	if rate, ok := pipewire.DefaultRate(); ok {
-		t.Errorf("DefaultRate() = %d, ok; it is unimplemented and must report (0, false)", rate)
-	}
-}
