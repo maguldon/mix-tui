@@ -81,7 +81,7 @@ func TestOutputNegotiatesSampleRate(t *testing.T) {
 	if !Available() {
 		t.Skip("no daemon")
 	}
-	o, err := NewOutput(OutputConfig{RingFrames: 8820}) // rate 0 = negotiate
+	o, err := NewOutput(OutputConfig{RingFrames: 8820}) // rate 0 = 44100 default
 	if err != nil {
 		t.Fatal(err)
 	}

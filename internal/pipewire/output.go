@@ -79,10 +79,12 @@ func defaultRingFrames(rate int) int {
 // NewOutput creates both streams and the context they share.
 func NewOutput(cfg OutputConfig) (*Output, error) {
 	if cfg.SampleRate <= 0 {
-		// Negotiation is deferred (DefaultRate reports unknown because the
-		// metadata listener needs a process-lifetime loop). Declaring 44100
-		// puts exactly one resampler in the path — PipeWire's — rather than
-		// two, which is what a double resample would cost.
+		// There is no supported way to read the graph's rate back (issue #23),
+		// so 0 means the 44100 default. Declaring it puts exactly one resampler
+		// in the path — PipeWire's — rather than two, which is what a double
+		// resample would cost. Removing that one resampler was measured against
+		// a wildcard-rate stream and the difference fell below the noise floor,
+		// so it does not justify rebuilding the engine when the device changes.
 		cfg.SampleRate = 44100
 	}
 	if cfg.RingFrames <= 0 {
