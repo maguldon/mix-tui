@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/maguldon/mix-tui/internal/pipewire"
 )
 
 // TestAudioSessionStatsSurvivesNoDevice is the regression test for a panic that
@@ -133,5 +135,46 @@ func TestTheRetryPathDoesNotReenterTheLock(t *testing.T) {
 	case <-done:
 	case <-time.After(20 * time.Second):
 		t.Fatal("the retry path reentered audioSession.mu")
+	}
+}
+
+// TestNegotiatedRateWithinReturnsWithoutADevice keeps the startup wait bounded
+// on the runs where nothing can ever answer it.
+//
+// run calls it on every start with audio, before the interface is drawn, to
+// decide whether to warn about a granted rate that disagrees with the config. On
+// a machine with no sound card — or with a config asking for nothing — no rate is
+// ever coming, so the call has to come back on its deadline rather than sit
+// there. The wait bounds startup; it must never be the thing that stalls it.
+func TestNegotiatedRateWithinReturnsWithoutADevice(t *testing.T) {
+	s := &audioSession{}
+	start := time.Now()
+	if got := s.negotiatedRateWithin(50 * time.Millisecond); got != 0 {
+		t.Errorf("negotiatedRateWithin with no device = %d, want 0", got)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("negotiatedRateWithin took %s on a session that can never be granted a rate", elapsed)
+	}
+}
+
+// TestTheStartupWaitIsLongEnoughToSeeAGrant keeps rateNegotiationWait honest.
+//
+// The wait exists because the daemon's grant arrives asynchronously — measured at
+// well under 50ms after the stream connects, and not yet present the instant
+// Start returns. A window shorter than the real arrival time would put the
+// startup warning back in the state #27 describes: never able to fire, because
+// the only value it can read is the zero that means "not known yet".
+//
+// Skipped without a device, since there is nothing to measure against.
+func TestTheStartupWaitIsLongEnoughToSeeAGrant(t *testing.T) {
+	s := &audioSession{cfg: pipewire.OutputConfig{SampleRate: 44100}}
+	if err := s.start(t.Context()); err != nil {
+		t.Skipf("no audio device: %v", err)
+	}
+	defer s.Close()
+
+	if got := s.negotiatedRateWithin(rateNegotiationWait); got == 0 {
+		t.Errorf("a started stream produced no granted rate within %s, so the "+
+			"startup warning can never fire", rateNegotiationWait)
 	}
 }

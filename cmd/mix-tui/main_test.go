@@ -131,3 +131,49 @@ func TestHelpTextMentionsScreenshots(t *testing.T) {
 		t.Error("help does not mention -screenshot")
 	}
 }
+
+// TestTheStartupRateWarningNamesARealDisagreement is the check this warning
+// exists for, and it is the one thing about the device the debug overlay cannot
+// make at startup.
+//
+// It compares the rate the daemon GRANTED against the rate the config asked for.
+// It used to compare the declared rate against the configured rate, which are the
+// same number by construction, so it could not fire for the disagreement it names
+// — and when the config said nothing it printed "device runs at 44100 Hz, config
+// asked for 0", a true statement about nothing.
+func TestTheStartupRateWarningNamesARealDisagreement(t *testing.T) {
+	msg := rateWarning(48000, 44100)
+	if msg == "" {
+		t.Fatal("a device granting 48000 when the config asked for 44100 produced no warning")
+	}
+	for _, want := range []string{"48000", "44100"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the warning does not name %s: %q", want, msg)
+		}
+	}
+	// It must not claim to have switched to the device's rate: the engine renders
+	// at the configured rate and the graph resamples.
+	if strings.Contains(msg, "using the device") {
+		t.Errorf("the warning claims the engine switched rate, which it does not: %q", msg)
+	}
+}
+
+// TestTheStartupRateWarningStaysQuiet covers the cases that produced noise
+// before. Both zeros are unknowns, not answers: a granted rate of 0 is a format
+// the daemon has not stated yet, and a configured rate of 0 means the config did
+// not ask for anything in particular.
+func TestTheStartupRateWarningStaysQuiet(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		granted, configured int
+	}{
+		{"no grant yet", 0, 44100},
+		{"no grant and no config", 0, 0},
+		{"config asked for nothing", 48000, 0},
+		{"granted what was asked for", 44100, 44100},
+	} {
+		if msg := rateWarning(tc.granted, tc.configured); msg != "" {
+			t.Errorf("%s: warned anyway: %q", tc.name, msg)
+		}
+	}
+}

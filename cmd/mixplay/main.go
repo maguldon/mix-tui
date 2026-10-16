@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -348,6 +349,19 @@ func applyScript(eng *engine.Engine, f flags) {
 	}
 }
 
+// grantedRate renders the rate the daemon granted, for a stats line.
+//
+// The field is 0 until PipeWire grants a format, and that 0 is its documented
+// "the daemon has not said" rather than a rate anything runs at. Printed raw,
+// "rate=0" under a device heading reads as a broken sound card, so the unknown
+// is spelled out — the same placeholder the debug overlay uses.
+func grantedRate(rate int) string {
+	if rate <= 0 {
+		return "--"
+	}
+	return strconv.Itoa(rate)
+}
+
 func printStats(eng *engine.Engine, out *pipewire.Output, pump *pipewire.Pumper) {
 	s := eng.Snapshot()
 	main, cue := out.Stats()
@@ -363,8 +377,8 @@ func printStats(eng *engine.Engine, out *pipewire.Output, pump *pipewire.Pumper)
 			d.Pitch, d.BPM, d.HasBeatGrid, d.Level)
 	}
 	fmt.Println("device:")
-	fmt.Printf("  MAIN        callbacks=%d frames=%d starves=%d shorts=%d rate=%d\n",
-		main.Callbacks, main.FramesDrained, main.Starves, main.Shorts, main.NegotiatedRate)
+	fmt.Printf("  MAIN        callbacks=%d frames=%d starves=%d shorts=%d rate=%s\n",
+		main.Callbacks, main.FramesDrained, main.Starves, main.Shorts, grantedRate(main.NegotiatedRate))
 	fmt.Printf("  CUE         callbacks=%d frames=%d starves=%d shorts=%d\n",
 		cue.Callbacks, cue.FramesDrained, cue.Starves, cue.Shorts)
 	if main.RateMismatch {

@@ -318,3 +318,78 @@ func TestConnectParamsPodIsWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// The stream must not report a rate the device has never confirmed.
+//
+// NewStream used to seed `negotiated` with cfg.SampleRate, and NewStream has
+// already coerced a non-positive rate to 44100 by that point — so the store
+// could only ever write a positive number and the documented "0 if it has not
+// said" was unreachable. Nothing else ever writes 0, so the field claimed a
+// grant for as long as the stream lived: the debug overlay rendered "sample
+// rate 44100 (device 44100)" with both halves the same stored integer, and
+// mix-tui's startup warning compared that number against the declared rate,
+// which is the same number by construction and could not fire.
+//
+// Read through the real API immediately after construction. No round trip is
+// possible yet — Start is what calls pw_stream_connect — so this is a statement
+// about the constructor alone and does not depend on the daemon's timing.
+func TestStreamDoesNotClaimADeviceRateItHasNotBeenTold(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	defer s.Destroy()
+
+	if s.cfg.SampleRate <= 0 {
+		t.Fatal("the rig declares no rate, so it cannot tell the two apart")
+	}
+	if got := s.NegotiatedRate(); got != 0 {
+		t.Errorf("NegotiatedRate() = %d immediately after NewStream, want 0 (declared %d)",
+			got, s.cfg.SampleRate)
+	}
+	if got := s.Stats().NegotiatedRate; got != 0 {
+		t.Errorf("Stats().NegotiatedRate = %d immediately after NewStream, want 0 (declared %d)",
+			got, s.cfg.SampleRate)
+	}
+	if s.Stats().RateMismatch {
+		t.Error("RateMismatch is set before the daemon has granted anything")
+	}
+}
+
+// The other half, and the reason dropping the seed is safe: once the daemon
+// grants a format, the rate IT granted has to show up. A field that is merely
+// stuck at zero would pass the test above while being useless — this is the only
+// pair of numbers that can say whether a track is playing at the right speed.
+func TestStreamReportsTheRateTheDaemonGrants(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+	defer s.Destroy()
+
+	// Polled rather than slept: the grant is asynchronous, and how long it takes
+	// is the daemon's business. Only "it eventually arrives" is a property the
+	// code controls.
+	start := time.Now()
+	deadline := start.Add(10 * time.Second)
+	for time.Now().Before(deadline) && s.NegotiatedRate() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	got := s.NegotiatedRate()
+	if got == 0 {
+		t.Fatalf("the stream started and drained but no rate was granted within %s",
+			time.Since(start).Round(time.Millisecond))
+	}
+	if got < 8000 || got > 192000 {
+		t.Errorf("granted rate %d is not a plausible sample rate", got)
+	}
+	if stats := s.Stats(); stats.NegotiatedRate != got {
+		t.Errorf("Stats().NegotiatedRate = %d, NegotiatedRate() = %d", stats.NegotiatedRate, got)
+	}
+	// The two disagreeing is the only case that sets this, so a granted rate
+	// equal to the declared one must not raise it.
+	if got != s.cfg.SampleRate && !s.Stats().RateMismatch {
+		t.Errorf("granted %d but declared %d and RateMismatch is false", got, s.cfg.SampleRate)
+	}
+}

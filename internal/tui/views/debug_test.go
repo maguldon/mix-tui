@@ -150,6 +150,29 @@ func TestTheDebugOverlayReportsTheGrantedSampleRate(t *testing.T) {
 	}
 }
 
+// TestTheOverlayDoesNotEchoTheDeclaredRate is the other half of the pair above,
+// and the reason the field is allowed to be 0 at all.
+//
+// The stream seeded Stats.NegotiatedRate with the declared rate at construction,
+// so the value could never be 0 and the guard that builds the "--" placeholder
+// was always true. The row read "sample rate 44100 (device 44100)", with both
+// halves the same stored integer: the number we asked for, echoed back as
+// though the device had confirmed it. For the window before the grant that is a
+// confirmation that never happened, on the one row whose whole job is to say
+// whether the device is doing what was asked.
+func TestTheOverlayDoesNotEchoTheDeclaredRate(t *testing.T) {
+	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{
+		AudioExpected: true, DeclaredRate: 44100, NegotiatedRate: 0,
+	}))
+	if !strings.Contains(out, "44100 (device --)") {
+		t.Errorf("the row claims a granted rate the daemon never stated:\n%s", out)
+	}
+	// An unknown rate is not a disagreement.
+	if strings.Contains(out, "right speed") {
+		t.Errorf("an unknown granted rate raises a mismatch warning:\n%s", out)
+	}
+}
+
 // TestNoRateWarningWithoutAMismatch keeps a matching rate quiet.
 func TestNoRateWarningWithoutAMismatch(t *testing.T) {
 	out := stripANSI(RenderDebug(120, 40, emptySnap(), DebugStats{

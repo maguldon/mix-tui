@@ -89,3 +89,26 @@ func TestFlagSetDefaults(t *testing.T) {
 		t.Error("stats should default off")
 	}
 }
+
+// TestGrantedRateSpellsOutTheUnknown keeps the stats dump honest about the one
+// number it cannot know until the daemon says it.
+//
+// Stats.NegotiatedRate is 0 until PipeWire grants a format, which is exactly the
+// window a reader most wants the truth in: whether the device is running at what
+// was asked. Printed raw, "rate=0" under a device heading reads as a sound card
+// running at 0Hz — a fault that does not exist — rather than as "not known yet".
+func TestGrantedRateSpellsOutTheUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		rate int
+		want string
+	}{
+		{0, "--"},
+		{-1, "--"},
+		{44100, "44100"},
+		{48000, "48000"},
+	} {
+		if got := grantedRate(tc.rate); got != tc.want {
+			t.Errorf("grantedRate(%d) = %q, want %q", tc.rate, got, tc.want)
+		}
+	}
+}
