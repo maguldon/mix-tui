@@ -90,9 +90,13 @@ type Stats struct {
 	Shorts uint64
 	// NegotiatedRate is the rate the daemon granted, or 0 if it has not said.
 	NegotiatedRate int
-	// RateMismatch is true when the daemon granted a rate other than the one
-	// declared. That plays every track at the wrong speed, so it is surfaced
-	// rather than left to be discovered by ear.
+	// RateMismatch is true when the daemon's most recent granted rate is
+	// other than the declared one. That plays every track at the wrong speed,
+	// so it is surfaced rather than left to be discovered by ear.
+	//
+	// It describes the current disagreement, not whether one ever happened:
+	// a grant that later matches the declared rate clears it, so a reader
+	// can trust that a true here means the device is mismatched now.
 	RateMismatch bool
 }
 
@@ -145,8 +149,10 @@ type Stream struct {
 	// state and stateErr record the last state the daemon reported, so a
 	// stream that connects but never processes can be diagnosed from outside
 	// rather than guessed at.
-	// rateMismatch records that the daemon granted a different rate than we
-	// declared. Surfaced in Stats so a silent pitch error is visible.
+	// rateMismatch records whether the daemon's latest granted rate differs from
+	// the one we declared. Surfaced in Stats so a silent pitch error is
+	// visible. Rewritten on every grant rather than only raised, so it
+	// reports the disagreement in force instead of the first one seen.
 	rateMismatch atomic.Bool
 	state        atomic.Int64
 	// stateErr is a C string owned by this struct. It is guarded by a mutex

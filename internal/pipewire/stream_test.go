@@ -393,3 +393,81 @@ func TestStreamReportsTheRateTheDaemonGrants(t *testing.T) {
 		t.Errorf("granted %d but declared %d and RateMismatch is false", got, s.cfg.SampleRate)
 	}
 }
+
+// grantRate pushes one synthetic format grant through the same code path the
+// daemon's listener reaches, carrying `rate`.
+//
+// This is the production path rather than a stand-in. recordGrant holds
+// everything streamParamChanged does with a granted rate, and the pod it is
+// called with has already been parsed by the time it runs; driving it directly
+// is what makes the latch observable at all, because the daemon's own grants
+// arrive on its schedule and a test cannot ask it for a second one.
+func grantRate(t *testing.T, s *Stream, rate int) {
+	t.Helper()
+	s.recordGrant(rate)
+}
+
+// A disagreement that has gone away must stop being reported.
+//
+// streamParamChanged stored true into rateMismatch and never stored false, so
+// the first grant that differed from the declared rate turned the warning on
+// for the rest of the process. PipeWire does renegotiate -- a device that
+// settles on the requested rate after an initial pass announces the second
+// rate too -- and after that the overlay kept warning that the mix was playing
+// at the wrong speed while the two rates on screen matched.
+func TestRateMismatchClearsWhenTheDaemonAgreesAgain(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	defer s.Destroy()
+
+	const declared = 44100
+	if s.cfg.SampleRate != declared {
+		t.Fatalf("the rig declares %d, the test is written against %d",
+			s.cfg.SampleRate, declared)
+	}
+
+	grantRate(t, s, 48000)
+	if !s.Stats().RateMismatch {
+		t.Fatalf("granted 48000 against a declared %d but RateMismatch is false", declared)
+	}
+	if got := s.Stats().NegotiatedRate; got != 48000 {
+		t.Fatalf("NegotiatedRate = %d, want 48000 -- the grant did not land", got)
+	}
+
+	// The half that used to be unreachable: nothing ever stored false.
+	grantRate(t, s, declared)
+	if got := s.Stats().NegotiatedRate; got != declared {
+		t.Fatalf("NegotiatedRate = %d, want %d -- the second grant did not land", got, declared)
+	}
+	if s.Stats().RateMismatch {
+		t.Error("RateMismatch is still set after the daemon granted the declared rate; " +
+			"the warning is latched and outlives the disagreement it names")
+	}
+}
+
+// Clearing must not be a one-way trip in the other direction either: the field
+// tracks the latest grant, so a fresh disagreement after an agreement is
+// reported again. A fix that stored false once and then went quiet would pass
+// the test above while going blind to the case this field exists for.
+func TestRateMismatchRisesAgainOnAFreshDisagreement(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	defer s.Destroy()
+
+	const declared = 44100
+	grantRate(t, s, declared)
+	if s.Stats().RateMismatch {
+		t.Fatal("RateMismatch is set by a grant that matches the declared rate")
+	}
+
+	grantRate(t, s, 48000)
+	if !s.Stats().RateMismatch {
+		t.Error("RateMismatch did not rise on a grant that differs from the declared rate")
+	}
+
+	// And back down again, to prove the cycle is not merely one-way.
+	grantRate(t, s, declared)
+	if s.Stats().RateMismatch {
+		t.Error("RateMismatch did not clear when the daemon agreed again")
+	}
+}
