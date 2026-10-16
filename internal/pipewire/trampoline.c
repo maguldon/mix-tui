@@ -125,9 +125,19 @@ void add_stream_listener(struct pw_stream *stream, struct spa_hook *hook,
  * fails on the half-built object. Setting "audio.format" as a property is not
  * enough: spa wants an EnumFormat pod listing the formats the stream accepts.
  *
- * The rate and channels MUST appear in the pod. An EnumFormat that describes
- * a format with no rate and no channel count gives the session manager nothing
- * to match against the sink's caps.
+ * The rate key must be present, and must carry a real rate. Note that rate=0 is
+ * NOT the same as omitting the key: with rate=0 pw_stream_connect returns 0,
+ * the stream reaches "paused", and no Format ever arrives -- a silent failure
+ * with no audio, which is the worst of the available outcomes.
+ *
+ * Omitting the rate key entirely does work, and is the one route to the graph's
+ * native rate that survived investigation: the session manager picks, grants
+ * 48000 on this machine, and the value arrives on the param callback in ~12ms.
+ * We still declare the configured rate (44100 by default) because measured
+ * daemon CPU showed no payoff for the wildcard -- interleaved 30s windows put
+ * idle at 0.70%, declaring 44100 at 0.60% and the wildcard at 0.47%, so the
+ * whole spread is the noise floor. One resampler is not worth a device rebuild
+ * to remove. See #23.
  *
  * Everything here is C-owned and C-lifetime: the pod lives in a static buffer
  * and the pointer array is static too. Handing connect a Go-allocated array
