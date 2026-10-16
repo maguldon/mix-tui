@@ -118,6 +118,54 @@ Known gaps, so nothing here is a surprise:
 sudo apt install libpipewire-0.3-dev libasound2-dev
 ```
 
+### If every output has 170–340ms of latency
+
+This is a host configuration problem, not a mix-tui one, and it is worth
+checking before blaming the application. Stock PipeWire opens every ALSA sink at
+the **largest buffer the hardware will accept** — spa's `alsa-pcm.c` takes the
+`periods = UINT_MAX` branch when a client declares no period count, then asks
+ALSA for its maximum. That becomes the sink's `node.max-latency`, and it is a
+floor no client can negotiate under. It has been measured at 16,640 frames
+(346ms) on an Apple T2 and 32,768 (341ms) on an Allen & Heath Xone K2.
+
+`pw-dump | grep max-latency` is the test. A healthy sink has no
+`node.max-latency` at all; a poisoned one reports something enormous.
+
+The fix is to declare the period explicitly, via a WirePlumber rules drop-in:
+
+```lua
+-- ~/.config/wireplumber/wireplumber.conf.d/50-low-latency.conf
+monitor.alsa.rules = [
+  {
+    matches = [ { node.name = "~alsa_output.*" } ]
+    actions = {
+      update-props = {
+        api.alsa.period-size = 1024
+        api.alsa.period-num  = 4
+      }
+    }
+  }
+]
+```
+
+Then `systemctl --user restart wireplumber` and re-check: `period-num` should be
+`4` on every `alsa_output` node and `node.max-latency` should be gone.
+
+Two dead ends, recorded so they are not retried. `LimitRTPRIO` on
+`pipewire.service` does nothing, because it is a *user* unit and the user
+manager cannot raise the hard limit. And `context.spa-libs.<lib>.props` in
+`pipewire.conf` is not a thing — `conf.c` parses that key as
+`<factory-regex> = <library-name>` and silently ignores anything else, so
+setting `api.alsa.period-size` there changes neither the node properties nor
+`hw_params`. The WirePlumber `update-props` rule is the route that reaches the
+node.
+
+Note what this number is *not*: `mixplay -stats` reports `delay`, which is
+PipeWire's own graph delay, and the ALSA sink's buffer is downstream of that
+accounting and never appears in it. `pw_time.delay` reads 42.7ms on a host
+whose sink is still pinned at the hardware maximum. Trust `node.max-latency`,
+not the client's delay, when diagnosing this.
+
 `internal/pipewire` is the only package that imports `C`. Everything above it —
 including MIDI parsing, mapping, and the entire engine — is pure Go and tests
 without a device attached.

@@ -261,10 +261,14 @@ func (s *audioSession) Stats() views.DebugStats {
 		// rings, and it is the greedier one that decides how deep a ring has to
 		// be.
 		MaxBufferFrames: maxStreamBuffer(mainStats.MaxBufferFrames, cueStats.MaxBufferFrames),
-		MainCallbacks:   mainStats.Callbacks,
-		CueCallbacks:    cueStats.Callbacks,
-		BlocksRendered:  ps.BlocksRendered,
-		RenderWallMax:   ps.RenderWallMax,
+		// MAIN drives the overlay's latency row: it is the bus the user hears,
+		// and CUE is frequently routed to headphones that are not even loaded.
+		QuantumFrames:     mainStats.QuantumFrames,
+		DeviceDelayFrames: mainStats.DeviceDelayFrames,
+		MainCallbacks:     mainStats.Callbacks,
+		CueCallbacks:      cueStats.Callbacks,
+		BlocksRendered:    ps.BlocksRendered,
+		RenderWallMax:     ps.RenderWallMax,
 	}
 }
 

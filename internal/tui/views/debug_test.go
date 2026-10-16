@@ -355,3 +355,45 @@ func TestShortWarningFitsTheOverlay(t *testing.T) {
 		t.Errorf("the threshold was truncated in a real render at 80 columns:\n%s", out)
 	}
 }
+
+// TestDebugShowsDeviceLatency covers the row #26 needed. The overlay used to
+// show callbacks and short-callback counts with nothing that said how long the
+// audio actually took to reach the device, so the one number a user comparing
+// two setups wants could not be read off the screen.
+func TestDebugShowsDeviceLatency(t *testing.T) {
+	out := RenderDebug(120, 40, emptySnap(), DebugStats{
+		DeviceDelayFrames: 2048,
+		NegotiatedRate:    48000,
+	})
+	if !strings.Contains(out, "device latency") {
+		t.Errorf("device latency row missing:\n%s", out)
+	}
+	// 2048 frames at 48000Hz is 42.7ms. Anything but a millisecond figure
+	// leaves the reader dividing by hand, which is the thing this row exists to
+	// stop them doing.
+	if !strings.Contains(out, "42.7ms") {
+		t.Errorf("latency not rendered in milliseconds:\n%s", out)
+	}
+}
+
+// TestDeviceLatencyRendersDashWhenUnmeasured pins the absent-measurement
+// rendering. Zero means either "no latency" or "nothing measured yet", and
+// printing "0.0ms" for the second claims an instant device that was never
+// observed.
+func TestDeviceLatencyRendersDashWhenUnmeasured(t *testing.T) {
+	cases := []struct {
+		name string
+		s    DebugStats
+	}{
+		{"no delay reported", DebugStats{NegotiatedRate: 48000}},
+		{"no rate yet", DebugStats{DeviceDelayFrames: 2048}},
+		{"nothing at all", DebugStats{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatDeviceLatency(tc.s); got != "--" {
+				t.Errorf("formatDeviceLatency() = %q, want %q", got, "--")
+			}
+		})
+	}
+}

@@ -46,6 +46,74 @@ func TestStreamConnectsAndStarts(t *testing.T) {
 	}
 }
 
+func TestStatsReportGraphLatency(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+	defer s.Destroy()
+
+	// Poll rather than sleeping once: the daemon reports no quantum until the
+	// graph is actually turning, and a fixed sleep would be either flaky or
+	// slower than it needs to be depending on how quickly the sink comes up.
+	deadline := time.Now().Add(4 * time.Second)
+	var st Stats
+	for time.Now().Before(deadline) {
+		st = s.Stats()
+		if st.QuantumFrames > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Both are read while the stream is RUNNING, never after Stop: every
+	// production caller reads them after Stop, where the graph has already been
+	// disconnected and the daemon may no longer answer. Sampling live proves
+	// the daemon is being asked the right question at all.
+	if st.QuantumFrames == 0 {
+		t.Fatalf("QuantumFrames stayed 0 while draining (callbacks=%d)", st.Callbacks)
+	}
+	if st.DeviceDelayFrames <= 0 {
+		t.Errorf("DeviceDelayFrames = %d, want > 0 (callbacks=%d quantum=%d)",
+			st.DeviceDelayFrames, st.Callbacks, st.QuantumFrames)
+	}
+}
+
+// TestQuantumIsNotBufferCapacity pins the distinction #26 was lost in.
+//
+// FramesDrained is bounded by spa_data.maxsize, the capacity the driver
+// allocated, so FramesDrained/Callbacks reports that capacity and calls it
+// "frames per callback". The two are independent numbers: a stream can be
+// handed a 12288-frame buffer and asked for a 512-frame quantum in it.
+func TestQuantumIsNotBufferCapacity(t *testing.T) {
+	ring := audio.NewRing(44100)
+	s := newTestStream(t, ring)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+	defer s.Destroy()
+
+	deadline := time.Now().Add(4 * time.Second)
+	var st Stats
+	for time.Now().Before(deadline) {
+		st = s.Stats()
+		if st.QuantumFrames > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st.QuantumFrames == 0 {
+		t.Skip("no quantum reported; nothing to compare against")
+	}
+	if st.MaxBufferFrames > 0 && st.QuantumFrames > uint64(st.MaxBufferFrames) {
+		t.Errorf("quantum %d exceeds buffer capacity %d, which cannot happen",
+			st.QuantumFrames, st.MaxBufferFrames)
+	}
+}
+
 func TestStreamDrainsWhatIsWritten(t *testing.T) {
 	ring := audio.NewRing(1 << 20)
 	s := newTestStream(t, ring)
