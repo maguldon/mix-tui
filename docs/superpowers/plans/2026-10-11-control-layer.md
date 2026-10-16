@@ -1661,12 +1661,25 @@ Flag `-json` for machine-readable output.
 Run: `go test ./... -race -count=1 && go vet ./... && gofmt -l .`
 Expected: all pass, `gofmt -l` silent.
 
-- [ ] **Step 5: Verify the shipped K2 mapping is loadable**
+- [x] **Step 5: Verify the shipped K2 mapping is loadable**
 
 Run: `go run ./cmd/midi/midimapdump internal/testdata/mappings/xone-k2.yaml`
 Expected: a table of bindings. **Read it against a real Xone K2 later** — the CC numbers
 in the fixture are plausible placeholders, and the first hardware session should reconcile
 them. Note that in the fixture's comments so it is not mistaken for verified truth.
+
+> **Done, 2026-10-15 (#32).** The hardware session happened. The fixture was rewritten
+> against a real Xone:K2 — every number captured off the wire with `cmd/midi/midicap` and
+> cross-checked against the User Guide — and carries the notes this step asked for. The
+> device string, the channel, and the CC/note numbers were all wrong before; see the
+> fixture's header for what is a captured fact and what is a convention adopted here.
+>
+> The numbers in *this plan* are still synthetic, and that is not an oversight. They were
+> never a claim about a K2: this milestone exists to prove the resolver works with no
+> hardware attached, so its examples are a deliberately invented surface whose values are
+> interleaved with the behaviour each snippet demonstrates — the relative encoder at
+> `num: 20`, the modifier state at `num: 49`. Substituting real K2 numbers would break
+> those examples and make a dated plan appear to know things it could not have known.
 
 - [ ] **Step 6: Commit**
 
